@@ -129,9 +129,6 @@ pub fn menu_tree() -> MenuTree {
             item(fl!("menu-view-toggle-fullscreen")).key(fkey(11)).action(ToggleFullScreen),
         ]),
         section(fl!("menu-account"), vec![
-            item(fl!("menu-account-premium"))
-                .when(Unlocked)
-                .action(OpenWebVault(Some("#/settings/subscription/premium"))),
             item(fl!("menu-account-change-password"))
                 .when(Unlocked)
                 .action(OpenWebVault(Some("#/settings/security/change-master-password"))),
@@ -171,14 +168,6 @@ pub fn menu_tree() -> MenuTree {
             sep(),
             item(fl!("menu-help-web-vault")).action(OpenWebVault(None)),
             sep(),
-            item(fl!("menu-help-mobile-app")).children(vec![
-                lit("iOS").action(OpenStaticUrl(
-                    "https://itunes.apple.com/app/bitwarden-free-password-manager/id1137397744?mt=8",
-                )),
-                lit("Android").action(OpenStaticUrl(
-                    "https://play.google.com/store/apps/details?id=com.x8bit.bitwarden",
-                )),
-            ]),
             item(fl!("menu-help-browser-extension")).children(vec![
                 lit("Chrome").action(OpenStaticUrl(
                     "https://chromewebstore.google.com/detail/bitwarden-free-password-m/nngceckbapebfimnlniiiahkandclblb",
@@ -193,10 +182,6 @@ pub fn menu_tree() -> MenuTree {
                     "https://microsoftedge.microsoft.com/addons/detail/jbkfoedolllekgbhcbcoahefnbanhhlh",
                 )),
                 lit("Safari").action(OpenStaticUrl("https://bitwarden.com/download/")),
-            ]),
-            sep(),
-            item(fl!("menu-help-troubleshooting")).children(vec![
-                item(fl!("menu-help-troubleshooting-gpu")).action(ToggleHardwareAcceleration),
             ]),
             sep(),
             item(fl!("menu-help-about")).action(About),

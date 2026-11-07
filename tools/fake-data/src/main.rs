@@ -2,7 +2,7 @@
 //! one SQLite database per user under `<workspace-root>/data/`, alongside a `mock.json`
 //! file holding per-user metadata (email, KDF, encrypted user key, unlock methods).
 //!
-//! Run with `cargo run -p fake-data` from the workspace root.
+//! Run with `cargo run -p fake-data -- --output <new-or-empty-directory>`.
 
 mod passkey;
 
@@ -183,12 +183,44 @@ const USER_SPECS: &[UserSpec] = &[
 
 // ── Main ───────────────────────────────────────────────────────────────────
 
-/// Workspace-root `data/` folder. Resolved from cwd — this tool is meant to be
-/// run from the workspace root (`cargo run -p fake-data`).
-fn data_dir() -> PathBuf {
-    std::env::current_dir()
-        .expect("cwd is readable")
-        .join("data")
+/// Never infer a destination or delete an existing vault directory.
+fn data_dir() -> Result<PathBuf, Box<dyn Error>> {
+    let mut args = std::env::args_os().skip(1);
+    if args.next().as_deref() != Some(std::ffi::OsStr::new("--output")) {
+        return Err("Usage: fake-data --output <new-or-empty-directory>".into());
+    }
+    let path = args
+        .next()
+        .filter(|p| !p.is_empty())
+        .ok_or("Missing output directory")?;
+    if args.next().is_some() {
+        return Err("Unexpected extra arguments".into());
+    }
+    Ok(PathBuf::from(path))
+}
+
+fn prepare_output(path: &Path) -> Result<(), Box<dyn Error>> {
+    if let Ok(meta) = path.symlink_metadata()
+        && (!meta.is_dir()
+            || meta.file_type().is_symlink()
+            || std::fs::read_dir(path)?.next().is_some())
+    {
+        return Err("Refusing to overwrite a nonempty directory or a symlink; choose a fresh demo destination".into());
+    }
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -204,11 +236,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         bitwarden_package_type: None,
     });
 
-    let data_dir = data_dir();
-    if data_dir.exists() {
-        std::fs::remove_dir_all(&data_dir)?;
-    }
-    std::fs::create_dir_all(&data_dir)?;
+    let data_dir = data_dir()?;
+    prepare_output(&data_dir)?;
 
     let mut users = Vec::with_capacity(USER_SPECS.len());
     for spec in USER_SPECS {
@@ -216,8 +245,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let meta_path = data_dir.join("mock.json");
-    let file = std::fs::File::create(&meta_path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&meta_path)?;
     serde_json::to_writer_pretty(file, &MockVaultMeta { users })?;
+
+    #[cfg(unix)]
+    for entry in std::fs::read_dir(&data_dir)? {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(entry?.path(), std::fs::Permissions::from_mode(0o600))?;
+    }
 
     println!(
         "Wrote {} users to {}",
@@ -248,20 +290,19 @@ async fn build_user(spec: &UserSpec, data_dir: &Path) -> Result<MockUserMeta, Bo
     // a `&StateRegistry`, so it has to run before we hand the registry to
     // `with_state` (which consumes it). The desktop loader reads these three
     // settings back via `load_from_state` to rebuild a locked client.
-    let registry = StateRegistry::new();
-    registry
-        .initialize_database(
-            DatabaseConfiguration::Sqlite {
-                db_name: sdk_user_id.to_string(),
-                folder_path: data_dir.to_path_buf(),
-            },
-            bitwarden_pm::migrations::get_sdk_managed_migrations(),
-        )
-        .await?;
+    let registry = StateRegistry::new_with_db(
+        DatabaseConfiguration::Sqlite {
+            db_name: sdk_user_id.to_string(),
+            folder_path: data_dir.to_path_buf(),
+        },
+        bitwarden_pm::migrations::get_sdk_managed_migrations(),
+    )
+    .await?;
 
     PasswordManagerClient::save_to_state(
         SaveStateData {
             user_id: sdk_user_id,
+            email: spec.email.to_string(),
             urls: BaseUrls {
                 identity_url: "http://localhost:8080/identity".to_string(),
                 api_url: "http://localhost:8080/api".to_string(),
@@ -297,6 +338,7 @@ async fn build_user(spec: &UserSpec, data_dir: &Path) -> Result<MockUserMeta, Bo
             method: InitUserCryptoMethod::MasterPasswordUnlock {
                 password: spec.password.to_string(),
                 master_password_unlock: MasterPasswordUnlockData {
+                    contained_key_id: None, // Existing demo accounts use the legacy V1 user key.
                     kdf: kdf.clone(),
                     master_key_wrapped_user_key: reg.encrypted_user_key.clone(),
                     salt: spec.email.to_string(),
@@ -319,7 +361,8 @@ async fn build_user(spec: &UserSpec, data_dir: &Path) -> Result<MockUserMeta, Bo
             ctx.get_public_key(PrivateKeySlotId::UserPrivateKey)?
         };
         for org in organizations.iter_mut() {
-            let sym_key = SymmetricCryptoKey::make_aes256_cbc_hmac_key();
+            let sym_key =
+                SymmetricCryptoKey::make(bitwarden_crypto::SymmetricKeyAlgorithm::Aes256CbcHmac);
             #[allow(deprecated)]
             let wrapped = UnsignedSharedKey::encapsulate_key_unsigned(&sym_key, &public_key)?;
             org.wrapped_key = Some(wrapped.clone());
@@ -454,6 +497,7 @@ fn build_login(name: &str, username: Option<&str>, uri: Option<&str>) -> CipherV
             }),
             totp: None,
             autofill_on_page_load: None,
+            http_authentication_enabled: None,
             fido2_credentials: None,
         })),
     )
@@ -470,6 +514,7 @@ fn cipher_with(name: &str, notes: Option<String>, kind: CipherKind) -> CipherVie
         folder_id: None,
         collection_ids: vec![],
         key: None,
+        partial: false,
         name: name.to_string(),
         notes,
         r#type: CipherType::Login,
@@ -635,7 +680,7 @@ fn ssh_key(name: &str, comment: &str) -> CipherEntry {
     // output.
     view.public_key = format!("{} {comment}", view.public_key);
     (
-        cipher_with(name, None, CipherKind::SshKey(Box::new(view))),
+        cipher_with(name, None, CipherKind::SshKey(Box::new(view.into()))),
         None,
     )
 }
@@ -690,12 +735,12 @@ fn drivers_license(
                 first_name: Some(first.to_string()),
                 middle_name: None,
                 last_name: Some(last.to_string()),
-                date_of_birth: Some("1990-05-12".to_string()),
+                date_of_birth: Some("1990-05-12".parse().expect("valid demo date")),
                 license_number: Some(license_number.to_string()),
                 issuing_country: Some(issuing_country.to_string()),
                 issuing_state: Some(issuing_state.to_string()),
-                issue_date: Some("2022-08-01".to_string()),
-                expiration_date: Some("2032-08-01".to_string()),
+                issue_date: Some("2022-08-01".parse().expect("valid demo date")),
+                expiration_date: Some("2032-08-01".parse().expect("valid demo date")),
                 issuing_authority: None,
                 license_class: license_class.map(|c| c.to_string()),
             })),
@@ -721,7 +766,7 @@ fn passport(
             CipherKind::Passport(Box::new(PassportView {
                 surname: Some(surname.to_string()),
                 given_name: Some(given.to_string()),
-                date_of_birth: Some("1990-05-12".to_string()),
+                date_of_birth: Some("1990-05-12".parse().expect("valid demo date")),
                 sex: Some("F".to_string()),
                 birth_place: Some("Springfield, IL".to_string()),
                 nationality: Some(nationality.to_string()),
@@ -730,8 +775,8 @@ fn passport(
                 passport_type: Some("P".to_string()),
                 national_identification_number: None,
                 issuing_authority: issuing_authority.map(|a| a.to_string()),
-                issue_date: Some("2021-03-15".to_string()),
-                expiration_date: Some("2031-03-15".to_string()),
+                issue_date: Some("2021-03-15".parse().expect("valid demo date")),
+                expiration_date: Some("2031-03-15".parse().expect("valid demo date")),
             })),
         ),
         None,
@@ -1452,5 +1497,21 @@ impl<T: RepositoryItem + Clone> Repository<T> for MemoryRepo<T> {
     async fn remove_all(&self) -> Result<(), RepositoryError> {
         self.data.lock().unwrap().clear();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+
+    #[test]
+    fn generation_refuses_existing_data_without_deleting_it() {
+        let root = std::env::temp_dir().join(format!("bw-seed-test-{}", uuid::Uuid::new_v4()));
+        prepare_output(&root).unwrap();
+        let sentinel = root.join("existing-vault");
+        std::fs::write(&sentinel, b"keep me").unwrap();
+        assert!(prepare_output(&root).is_err());
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"keep me");
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

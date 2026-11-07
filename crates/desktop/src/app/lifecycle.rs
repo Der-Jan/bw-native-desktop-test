@@ -13,7 +13,6 @@ use crate::{
 
 use super::{
     App, MAIN_WINDOW_SIZE, Message, SystemMessage, ThemeState, ViewCache, Views, WindowMessage,
-    handlers,
     helpers::main_window_platform_specific,
     window::{WindowInfo, WindowKind},
 };
@@ -73,26 +72,14 @@ impl App {
             // The About window keeps the default `true` (never hides).
             exit_on_close_request: false,
             platform_specific: main_window_platform_specific(),
-            icon: iced::window::icon::from_file_data(
-                crate::assets::ICON_PNG,
-                Some(image::ImageFormat::Png),
-            )
-            .ok(),
+            icon: crate::assets::window_icon(),
             ..Default::default()
         });
         let mut windows = HashMap::new();
         windows.insert(main_id, WindowInfo::new(WindowKind::Main, MAIN_WINDOW_SIZE));
 
-        // Pre-create the magnify launcher hidden so subsequent hotkey presses
-        // are a cheap show/hide instead of paying for window creation +
-        // first-paint mid-summon. The wgpu device is shared with the main
-        // window so we don't repay adapter/driver init.
-        let (magnify_id, magnify_size, magnify_open_task) =
-            handlers::magnify::open_magnify_window();
-        windows.insert(
-            magnify_id,
-            WindowInfo::new(WindowKind::Magnify, magnify_size),
-        );
+        // No native launcher surface until summoned: Wayland ignores visible:false.
+        let magnify_id = iced::window::Id::unique();
 
         // Discover users in `<workspace-root>/data/` and open one SQLite DB
         // per user. The `ClientManagerLoaded` handler `take()`s the manager
@@ -109,27 +96,35 @@ impl App {
             "https://icons.bitwarden.net".to_string()
         }));
 
-        // Construct the animation watermark and register it so `extend()` /
-        // `any_in_progress()` reach it from animation primitives without
-        // threading a reference through every constructor. The Arc is
-        // owned by `App`; when it drops, the `Weak` registry upgrade fails
-        // and the free functions become no-ops.
-        let animation = crate::services::animation::AnimationWatermark::new();
-        crate::services::animation::register(&animation);
-
-        let app = Self {
+        let sidebar = SidebarState {
+            mode: if settings.sidebar_collapsed {
+                crate::components::sidebar::SidebarMode::Collapsed
+            } else {
+                crate::components::sidebar::SidebarMode::Expanded
+            },
+            collapsed_groups: settings.collapsed_navigation_groups.clone(),
+            ..SidebarState::default()
+        };
+        let mut app = Self {
             active_user: None,
+            presentation_generation: 0,
+            storage_warning: None,
+            pending_logouts: Default::default(),
+            sync_status: Default::default(),
+            exit_after_logout: false,
             client_manager: ClientManager::empty(),
             settings,
 
             screen: Screen::Loading,
-            sidebar: SidebarState::default(),
+            sidebar,
 
             views: Views::new(),
 
             windows,
             main_window: main_id,
             main_window_focused: true,
+            main_window_hidden: start_hidden,
+            main_window_suspended: false,
             magnify: magnify::MagnifyView::new(magnify_id),
 
             theme: ThemeState::new(user_theme),
@@ -140,8 +135,11 @@ impl App {
 
             clipboard: ClipboardManager::new(),
             favicon,
-            animation,
             session_timeout,
+            ssh_agent: crate::services::ssh_agent::AgentRuntime::new(),
+            ssh_approval: None,
+            ssh_approval_window: None,
+            shutting_down: false,
 
             open_overlay: None,
             toasts: Vec::new(),
@@ -149,17 +147,7 @@ impl App {
             cache: ViewCache::default(),
         };
 
-        // Resolves only after the wgpu compositor exists (so the backend wgpu
-        // ended up using is final). Drives `Settings::wgpu_backend_verified`
-        // for the next-launch fast path. Compiled to `Task::none()` when the
-        // `gpu` feature is off so the discovery plumbing only exists in builds
-        // that can actually use a wgpu backend.
-        #[cfg(feature = "gpu")]
-        let info_task = iced::system::information().map(|info| {
-            Message::System(SystemMessage::WgpuBackendDiscovered(info.graphics_backend))
-        });
-        #[cfg(not(feature = "gpu"))]
-        let info_task = Task::none();
+        let agent_task = app.refresh_ssh_agent();
 
         // Re-apply the persisted screen-capture setting once the main
         // window is alive. Skip the work entirely when the user hasn't
@@ -175,10 +163,9 @@ impl App {
             app,
             Task::batch([
                 open_task.map(|id| Message::Window(WindowMessage::Opened(id))),
-                magnify_open_task,
                 load_task,
-                info_task,
                 screenshot_task,
+                agent_task,
             ]),
         )
     }
@@ -273,18 +260,13 @@ impl App {
         )
         .map(Into::into);
 
-        // Only subscribed while at least one transition might still be
-        // running. Reads the App-owned watermark directly; animation
-        // primitives that call `animation::extend(...)` reach the same
-        // instance via the module's `Weak` registry without any per-call
-        // wiring.
-        let anim_sub = if self.animation.any_in_progress() {
-            iced::window::frames().map(|_| Message::AnimationTick)
-        } else {
-            Subscription::none()
-        };
-
+        let ssh_sub = crate::services::broadcast_stream::subscription_from_sender(
+            "ssh-agent",
+            self.ssh_agent.events().clone(),
+        )
+        .map(Message::SshAgent);
         Subscription::batch([
+            ssh_sub,
             close_sub,
             event_sub,
             muda_sub,
@@ -294,7 +276,6 @@ impl App {
             session_sub,
             session_timeout_sub,
             favicon_sub,
-            anim_sub,
             magnify_sub,
         ])
     }

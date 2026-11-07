@@ -5,21 +5,31 @@
 //! handled by `App`: section clicks may trigger a screen switch, and
 //! per-screen filter changes are forwarded to the view that owns them.
 
+mod navigation_tree;
+
+use std::collections::HashSet;
+
 use bitwarden_vault::CipherType;
 use iced::{
     Alignment, Background, Border, Color, Element, Fill, Length, Padding,
-    widget::{Space, column, container, row, svg, text},
+    widget::{Space, column, container, row, scrollable, svg, text},
 };
 
 use crate::{
     components::{self, buttons, icons},
     fl,
-    services::sdk::Organization,
+    services::sdk::{Collection, Organization},
     theme::{AppColors, AppTheme},
     // Filter types are owned by the views whose lists they filter; sidebar
     // imports them rather than defining them so the semantics stay with the
     // view that interprets them.
-    views::{send::SendFilter, vault::VaultFilter},
+    views::{
+        send::SendFilter,
+        vault::{
+            CollectionFilter, FolderFilter, VaultFilter, VaultScope, VaultSection,
+            widgets::cipher_edit::FolderOption,
+        },
+    },
 };
 
 const RAIL_WIDTH: f32 = 50.0;
@@ -48,14 +58,15 @@ pub enum NavSection {
     Export,
 }
 
+pub use crate::services::vault_navigation::NavigationGroup as SidebarGroup;
+
 /// Sidebar chrome state that persists across screen switches.
 pub struct SidebarState {
     pub mode: SidebarMode,
     pub active_section: NavSection,
     pub active_vault_filter: VaultFilter,
     pub active_send_filter: SendFilter,
-    pub vault_tree_open: bool,
-    pub send_tree_open: bool,
+    pub collapsed_groups: HashSet<SidebarGroup>,
 }
 
 impl Default for SidebarState {
@@ -63,10 +74,50 @@ impl Default for SidebarState {
         Self {
             mode: SidebarMode::Expanded,
             active_section: NavSection::Vault,
-            active_vault_filter: VaultFilter::AllItems,
+            active_vault_filter: VaultFilter::default(),
             active_send_filter: SendFilter::AllItems,
-            vault_tree_open: true,
-            send_tree_open: true,
+            collapsed_groups: HashSet::new(),
+        }
+    }
+}
+
+impl SidebarState {
+    pub fn group_is_open(&self, group: SidebarGroup) -> bool {
+        !self.collapsed_groups.contains(&group)
+    }
+    pub fn toggle_group(&mut self, group: SidebarGroup) {
+        if !self.collapsed_groups.remove(&group) {
+            self.collapsed_groups.insert(group);
+        }
+    }
+}
+
+/// A user changes one facet; the other selections remain intact.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum VaultFilterChange {
+    Scope(VaultScope),
+    Category(Option<CipherType>),
+    Folder(FolderFilter),
+    Collection(CollectionFilter),
+    Section(VaultSection),
+}
+impl VaultFilterChange {
+    pub fn apply(self, filter: VaultFilter) -> VaultFilter {
+        match self {
+            Self::Scope(scope) => filter.with_scope(scope),
+            Self::Folder(folder) => filter.with_folder(folder),
+            Self::Collection(collection) => filter.with_collection(collection),
+            Self::Category(category) => filter.with_category(category),
+            Self::Section(section) => filter.with_section(section),
+        }
+    }
+    fn selected(self, filter: VaultFilter) -> bool {
+        match self {
+            Self::Scope(scope) => filter.scope == scope,
+            Self::Folder(folder) => filter.folder == folder,
+            Self::Collection(collection) => filter.collection == collection,
+            Self::Category(kind) => filter.category == kind,
+            Self::Section(section) => filter.section == section,
         }
     }
 }
@@ -75,9 +126,8 @@ impl Default for SidebarState {
 pub enum SidebarMessage {
     ToggleSidebarMode,
     SectionSelected(NavSection),
-    ToggleVaultTree,
-    ToggleSendTree,
-    VaultFilterSelected(VaultFilter),
+    ToggleGroup(SidebarGroup),
+    VaultFilterSelected(VaultFilterChange),
     SendFilterSelected(SendFilter),
 }
 
@@ -86,10 +136,12 @@ pub enum SidebarMessage {
 pub fn view<'a>(
     state: &SidebarState,
     organizations: &[Organization],
+    folders: &[FolderOption],
+    collections: &[Collection],
     colors: &AppColors,
 ) -> Element<'a, SidebarMessage, AppTheme> {
     if state.mode == SidebarMode::Expanded {
-        expanded_panel(state, organizations, colors)
+        expanded_panel(state, organizations, folders, collections, colors)
     } else {
         icon_rail(state.active_section, colors)
     }
@@ -173,9 +225,43 @@ fn icon_rail<'a>(
 
 // ── Expanded panel ─────────────────────────────────────────────────────────
 
+fn group_label<'a>(label: String, colors: &AppColors) -> Element<'a, SidebarMessage, AppTheme> {
+    container(text(label).size(12).color(colors.nav_text))
+        .padding([6, 12])
+        .into()
+}
+
+fn group_header<'a>(
+    label: String,
+    group: SidebarGroup,
+    state: &SidebarState,
+    colors: &AppColors,
+) -> Element<'a, SidebarMessage, AppTheme> {
+    let chevron = if state.group_is_open(group) {
+        icons::BWI_ANGLE_UP
+    } else {
+        icons::BWI_ANGLE_DOWN
+    };
+    buttons::ghost_icon(
+        row![
+            text(label).size(12).color(colors.nav_text),
+            Space::new().width(Fill),
+            chevron.render(18.0, colors.nav_text)
+        ]
+        .align_y(Alignment::Center),
+        colors.nav_item_hover,
+    )
+    .on_press(SidebarMessage::ToggleGroup(group))
+    .padding([6, 12])
+    .width(Fill)
+    .into()
+}
+
 fn expanded_panel<'a>(
     state: &SidebarState,
     organizations: &[Organization],
+    folders: &[FolderOption],
+    collections: &[Collection],
     colors: &AppColors,
 ) -> Element<'a, SidebarMessage, AppTheme> {
     let active_section = state.active_section;
@@ -199,26 +285,25 @@ fn expanded_panel<'a>(
     });
     items.push(logo.into());
 
-    items.push(parent_header_row(
-        fl!("sidebar-section-vault"),
-        icons::BWI_VAULT,
-        state.vault_tree_open,
-        on_vault && state.active_vault_filter == VaultFilter::AllItems,
-        SidebarMessage::VaultFilterSelected(VaultFilter::AllItems),
-        SidebarMessage::ToggleVaultTree,
+    let active = on_vault.then_some(state.active_vault_filter);
+    items.push(group_header(
+        fl!("sidebar-group-vaults"),
+        SidebarGroup::Vaults,
+        state,
         colors,
     ));
-
-    if state.vault_tree_open {
-        let active = if on_vault {
-            Some(state.active_vault_filter)
-        } else {
-            None
-        };
+    if state.group_is_open(SidebarGroup::Vaults) {
+        items.push(vault_nav_button(
+            fl!("sidebar-filter-all-vaults"),
+            icons::BWI_VAULT.render(17.0, colors.nav_text),
+            VaultFilterChange::Scope(VaultScope::All),
+            active,
+            colors,
+        ));
         items.push(vault_nav_button(
             fl!("sidebar-filter-my-vault"),
             icons::BWI_USER.render(17.0, colors.nav_text),
-            VaultFilter::Personal,
+            VaultFilterChange::Scope(VaultScope::Personal),
             active,
             colors,
         ));
@@ -226,80 +311,184 @@ fn expanded_panel<'a>(
             items.push(vault_nav_button(
                 org.name.clone(),
                 icons::BUILDING.render(17.0, colors.nav_text),
-                VaultFilter::Organization(org.id),
+                VaultFilterChange::Scope(VaultScope::Organization(org.id)),
                 active,
                 colors,
             ));
         }
+    }
+    items.push(group_header(
+        fl!("sidebar-group-view"),
+        SidebarGroup::View,
+        state,
+        colors,
+    ));
+    if state.group_is_open(SidebarGroup::View) {
+        items.push(vault_nav_button(
+            fl!("sidebar-filter-active-items"),
+            icons::BWI_VAULT.render(17.0, colors.nav_text),
+            VaultFilterChange::Section(VaultSection::Active),
+            active,
+            colors,
+        ));
         items.push(vault_nav_button(
             fl!("sidebar-filter-favorites"),
             icons::BWI_STAR.render(17.0, colors.nav_text),
-            VaultFilter::Favorites,
-            active,
-            colors,
-        ));
-        items.push(vault_nav_button(
-            fl!("sidebar-filter-logins"),
-            icons::BWI_LOGIN.render(17.0, colors.nav_text),
-            VaultFilter::Category(CipherType::Login),
-            active,
-            colors,
-        ));
-        items.push(vault_nav_button(
-            fl!("sidebar-filter-cards"),
-            icons::BWI_CREDIT_CARD.render(17.0, colors.nav_text),
-            VaultFilter::Category(CipherType::Card),
-            active,
-            colors,
-        ));
-        items.push(vault_nav_button(
-            fl!("sidebar-filter-identities"),
-            icons::BWI_IDENTITY.render(17.0, colors.nav_text),
-            VaultFilter::Category(CipherType::Identity),
-            active,
-            colors,
-        ));
-        items.push(vault_nav_button(
-            fl!("sidebar-filter-notes"),
-            icons::BWI_NOTE.render(17.0, colors.nav_text),
-            VaultFilter::Category(CipherType::SecureNote),
-            active,
-            colors,
-        ));
-        items.push(vault_nav_button(
-            fl!("sidebar-filter-ssh-keys"),
-            icons::BWI_KEY.render(17.0, colors.nav_text),
-            VaultFilter::Category(CipherType::SshKey),
+            VaultFilterChange::Section(VaultSection::Favorites),
             active,
             colors,
         ));
         items.push(vault_nav_button(
             fl!("sidebar-filter-archive"),
             icons::BWI_ARCHIVE.render(17.0, colors.nav_text),
-            VaultFilter::Archive,
+            VaultFilterChange::Section(VaultSection::Archive),
             active,
             colors,
         ));
         items.push(vault_nav_button(
             fl!("sidebar-filter-trash"),
             icons::BWI_TRASH.render(17.0, colors.nav_text),
-            VaultFilter::Trash,
+            VaultFilterChange::Section(VaultSection::Trash),
             active,
             colors,
         ));
+    }
+    items.push(group_header(
+        fl!("sidebar-group-types"),
+        SidebarGroup::Types,
+        state,
+        colors,
+    ));
+    if state.group_is_open(SidebarGroup::Types) {
+        items.push(vault_nav_button(
+            fl!("sidebar-filter-all-types"),
+            icons::BWI_VAULT.render(17.0, colors.nav_text),
+            VaultFilterChange::Category(None),
+            active,
+            colors,
+        ));
+        items.push(vault_nav_button(
+            fl!("sidebar-filter-logins"),
+            icons::BWI_LOGIN.render(17.0, colors.nav_text),
+            VaultFilterChange::Category(Some(CipherType::Login)),
+            active,
+            colors,
+        ));
+        items.push(vault_nav_button(
+            fl!("sidebar-filter-cards"),
+            icons::BWI_CREDIT_CARD.render(17.0, colors.nav_text),
+            VaultFilterChange::Category(Some(CipherType::Card)),
+            active,
+            colors,
+        ));
+        items.push(vault_nav_button(
+            fl!("sidebar-filter-identities"),
+            icons::BWI_IDENTITY.render(17.0, colors.nav_text),
+            VaultFilterChange::Category(Some(CipherType::Identity)),
+            active,
+            colors,
+        ));
+        items.push(vault_nav_button(
+            fl!("sidebar-filter-notes"),
+            icons::BWI_NOTE.render(17.0, colors.nav_text),
+            VaultFilterChange::Category(Some(CipherType::SecureNote)),
+            active,
+            colors,
+        ));
+        items.push(vault_nav_button(
+            fl!("sidebar-filter-ssh-keys"),
+            icons::BWI_KEY.render(17.0, colors.nav_text),
+            VaultFilterChange::Category(Some(CipherType::SshKey)),
+            active,
+            colors,
+        ));
+    }
+    items.push(group_header(
+        fl!("sidebar-group-folders"),
+        SidebarGroup::Folders,
+        state,
+        colors,
+    ));
+    if state.group_is_open(SidebarGroup::Folders) {
+        for (label, filter) in [
+            (fl!("sidebar-filter-all-folders"), FolderFilter::All),
+            (fl!("sidebar-filter-no-folder"), FolderFilter::None),
+        ] {
+            items.push(vault_nav_button(
+                label,
+                icons::BWI_FOLDER.render(17.0, colors.nav_text),
+                VaultFilterChange::Folder(filter),
+                active,
+                colors,
+            ));
+        }
+        for node in navigation_tree::rows(folders.iter().map(|f| (f.id, f.name.clone()))) {
+            let entry = if let Some(id) = node.id {
+                vault_nav_button(
+                    node.name,
+                    icons::BWI_FOLDER.render(17.0, colors.nav_text),
+                    VaultFilterChange::Folder(FolderFilter::Folder(id)),
+                    active,
+                    colors,
+                )
+            } else {
+                group_label(node.name, colors)
+            };
+            items.push(
+                container(entry)
+                    .padding(Padding {
+                        left: (node.depth.min(8) * 12) as f32,
+                        ..Padding::ZERO
+                    })
+                    .into(),
+            );
+        }
+    }
+    if !matches!(state.active_vault_filter.scope, VaultScope::Personal) {
+        items.push(group_header(
+            fl!("sidebar-group-collections"),
+            SidebarGroup::Collections,
+            state,
+            colors,
+        ));
+        if state.group_is_open(SidebarGroup::Collections) {
+            for (label, filter) in [
+                (fl!("sidebar-filter-all-collections"), CollectionFilter::All),
+                (fl!("sidebar-filter-no-collection"), CollectionFilter::None),
+            ] {
+                items.push(vault_nav_button(
+                    label,
+                    icons::BWI_FOLDER.render(17.0, colors.nav_text),
+                    VaultFilterChange::Collection(filter),
+                    active,
+                    colors,
+                ));
+            }
+            for org in organizations.iter().filter(|org| !matches!(state.active_vault_filter.scope, VaultScope::Organization(id) if id != org.id)) {
+                let org_collections: Vec<_> = collections.iter().filter(|c| c.organization_id == org.id).map(|c| (c.id, c.name.clone())).collect();
+                if org_collections.is_empty() { continue; }
+                if state.active_vault_filter.scope == VaultScope::All { items.push(group_label(org.name.clone(), colors)); }
+                for node in navigation_tree::rows(org_collections) {
+                    let entry = if let Some(id) = node.id {
+                        vault_nav_button(node.name, icons::BWI_FOLDER.render(17.0, colors.nav_text), VaultFilterChange::Collection(CollectionFilter::Collection(id)), active, colors)
+                    } else { group_label(node.name, colors) };
+                    items.push(container(entry).padding(Padding { left: (node.depth.min(8) * 12) as f32, ..Padding::ZERO }).into());
+                }
+            }
+        }
     }
 
     items.push(parent_header_row(
         fl!("sidebar-section-send"),
         icons::BWI_SEND,
-        state.send_tree_open,
+        state.group_is_open(SidebarGroup::Send),
         on_send && state.active_send_filter == SendFilter::AllItems,
         SidebarMessage::SendFilterSelected(SendFilter::AllItems),
-        SidebarMessage::ToggleSendTree,
+        SidebarMessage::ToggleGroup(SidebarGroup::Send),
         colors,
     ));
 
-    if state.send_tree_open {
+    if state.group_is_open(SidebarGroup::Send) {
         let active = if on_send {
             Some(state.active_send_filter)
         } else {
@@ -356,8 +545,7 @@ fn expanded_panel<'a>(
 
     container(
         column![
-            column(items).spacing(2).padding([0.0, SIDEBAR_H_PAD]),
-            Space::new().height(Fill),
+            scrollable(column(items).spacing(2).padding([0.0, SIDEBAR_H_PAD])).height(Fill),
             separator,
             container(collapse_btn).padding([0.0, SIDEBAR_H_PAD]),
         ]
@@ -444,14 +632,14 @@ fn parent_header_row<'a>(
 fn vault_nav_button<'a>(
     label: impl Into<String>,
     icon: Element<'a, SidebarMessage, AppTheme>,
-    filter: VaultFilter,
+    filter: VaultFilterChange,
     active: Option<VaultFilter>,
     colors: &AppColors,
 ) -> Element<'a, SidebarMessage, AppTheme> {
     nav_row(
         label,
         icon,
-        active == Some(filter),
+        active.is_some_and(|active| filter.selected(active)),
         SidebarMessage::VaultFilterSelected(filter),
         colors,
     )

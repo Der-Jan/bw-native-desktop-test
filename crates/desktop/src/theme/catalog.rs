@@ -306,11 +306,7 @@ impl iced::overlay::menu::Catalog for AppTheme {
             text_color: theme.colors.text_primary,
             selected_text_color: theme.colors.text_primary,
             selected_background: Background::Color(theme.colors.item_hover),
-            shadow: Shadow {
-                color: Color::from_rgba(0.0, 0.0, 0.0, 0.15),
-                offset: iced::Vector::new(0.0, 2.0),
-                blur_radius: 6.0,
-            },
+            shadow: Shadow::default(),
         })
     }
 

@@ -1,0 +1,82 @@
+[package]
+"name" = "bitwarden-core"
+"description" = "Internal crate for the bitwarden crate. Do not use.\n"
+"version" = "4.0.0"
+"authors" = ["Bitwarden Inc"]
+"edition" = "2024"
+"rust-version" = "1.88.0"
+"readme" = "DISCLAIMER.md"
+"homepage" = "https://bitwarden.com"
+"repository" = "https://github.com/bitwarden/sdk-internal"
+"license" = "GPL-3.0-only OR LicenseRef-Bitwarden-SDK"
+"keywords" = ["bitwarden"]
+"metadata" = { "cargo-udeps" = { "ignore" = { "normal" = ["getrandom2", "getrandom3", "getrandom4"] } } }
+
+[features]
+"internal" = ["dep:zxcvbn"]
+"debug-capabilities" = ["bitwarden-state/debug-capabilities"]
+"no-memory-hardening" = ["bitwarden-crypto/no-memory-hardening"]
+"secrets" = []
+"uniffi" = ["internal", "bitwarden-api-base/uniffi", "bitwarden-crypto/uniffi", "bitwarden-encoding/uniffi", "dep:bitwarden-uniffi-error", "dep:uniffi"]
+"wasm" = ["bitwarden-crypto/wasm", "bitwarden-encoding/wasm", "bitwarden-error/wasm", "bitwarden-ffi/wasm", "bitwarden-state/wasm", "getrandom2/js", "getrandom3/wasm_js", "getrandom4/wasm_js", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:serde-wasm-bindgen", "dep:tsify"]
+"dangerous-crypto-debug" = ["bitwarden-crypto/dangerous-crypto-debug"]
+"internal-test-utils" = []
+"test-fixtures" = ["bitwarden-test"]
+
+[dependencies]
+"async-trait" = { "version" = ">=0.1.80, <0.2" }
+"bitwarden-api-api" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+"bitwarden-api-base" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+"bitwarden-api-identity" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+"bitwarden-api-key-connector" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+"bitwarden-core-macro" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+"bitwarden-crypto" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+"bitwarden-encoding" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+"bitwarden-error" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+"bitwarden-ffi" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+"bitwarden-logging" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+"bitwarden-managed-settings-types" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+"bitwarden-random" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+"bitwarden-state" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+"bitwarden-state-bridge-macro" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+"bitwarden-test" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6", "optional" = true }
+"bitwarden-threading" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+"bitwarden-uniffi-error" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6", "optional" = true }
+"bitwarden-uuid" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+"chrono" = { "version" = ">=0.4.34, <0.5", "features" = ["clock", "serde", "std"], "default-features" = false }
+"getrandom2" = { "package" = "getrandom", "version" = "0.2", "optional" = true }
+"getrandom3" = { "package" = "getrandom", "version" = "0.3", "optional" = true }
+"getrandom4" = { "package" = "getrandom", "version" = "0.4", "optional" = true }
+"http" = { "version" = ">=1.4.0, <2.0" }
+"rand" = { "version" = ">=0.10.0, <0.11" }
+"reqwest" = { "version" = "0.13.3", "features" = ["json", "multipart", "http2", "form", "query"], "default-features" = false }
+"reqwest-middleware" = { "version" = "0.5.1", "features" = ["json", "multipart", "form", "query"] }
+"schemars" = { "version" = ">=1.0.0, <2.0", "features" = ["uuid1", "chrono04"] }
+"serde" = { "version" = ">=1.0, <2.0", "features" = ["derive"] }
+"serde-wasm-bindgen" = { "version" = ">=0.6.0, <0.7", "optional" = true }
+"serde_bytes" = { "version" = ">=0.11.17, <0.12.0" }
+"serde_json" = { "version" = ">=1.0.96, <2.0" }
+"serde_qs" = { "version" = ">=1.1.3, <2" }
+"serde_repr" = { "version" = ">=0.1.12, <0.2" }
+"thiserror" = { "version" = ">=1.0.40, <3" }
+"tracing" = { "version" = "0.1.41" }
+"tsify" = { "version" = ">=0.5.5, <0.5.7", "features" = ["js"], "default-features" = false, "optional" = true }
+"uniffi" = { "version" = "=0.32.0", "optional" = true, "features" = ["tokio"] }
+"url" = { "version" = ">=2.5.8, <3.0" }
+"uuid" = { "version" = ">=1.3.3, <2.0", "features" = ["serde", "v4", "js"] }
+"wasm-bindgen" = { "version" = "=0.2.114", "features" = ["serde-serialize"], "optional" = true }
+"wasm-bindgen-futures" = { "version" = "0.4.64", "optional" = true }
+"zeroize" = { "version" = ">=1.7.0, <2.0", "features" = ["derive", "aarch64"] }
+"zxcvbn" = { "version" = ">=3.0.1, <4.0", "optional" = true }
+
+[dev-dependencies]
+"bitwarden-crypto" = { "version" = "=4.0.0", "git" = "https://github.com/bitwarden/sdk-internal", "rev" = "a13b4c4e1fa3685280241f417920fd19d7ef24a6", "features" = ["test-utils"] }
+"mockall" = { "version" = ">=0.13.1, <0.16" }
+"rand_chacha" = { "version" = ">=0.10.0, <0.11" }
+"tokio" = { "version" = "1.36.0", "features" = ["macros", "rt"] }
+"wiremock" = { "version" = ">=0.6.0, <0.7" }
+"zeroize" = { "version" = ">=1.7.0, <2.0", "features" = ["derive", "aarch64"] }
+
+[lints]
+"clippy" = { "disallowed_macros" = "deny", "unused_async" = "warn", "unwrap_used" = "deny", "string_slice" = "warn", "print_stdout" = "warn", "print_stderr" = "warn", "result_unit_err" = "allow", "chunks_exact_to_as_chunks" = "allow" }
+"rust" = { "missing_docs" = "warn", "unexpected_cfgs" = { "level" = "warn", "check-cfg" = ["cfg(feature, values(\"uniffi\", \"wasm\"))", "cfg(dylint_lib, values(\"bitwarden_lints\"))", "cfg(bitwarden_ensure_non_commercial)"] } }

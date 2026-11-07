@@ -63,6 +63,8 @@ pub fn search_view<'a>(query: &'a str) -> Element<'a, SearchMessage, AppTheme> {
 
 // ── List view ──────────────────────────────────────────────────────────────
 
+pub const LIST_ID: iced::widget::Id = iced::widget::Id::new("send-item-list");
+
 pub fn view<'a>(
     items: &'a [Arc<SdkSendView>],
     selected_index: Option<usize>,
@@ -98,6 +100,7 @@ pub fn view<'a>(
         SendListMessage::Scrolled,
     )
     .height(Fill)
+    .id(LIST_ID)
     .style(components::rail_scroll_style);
 
     column![header, divider, list]
@@ -130,6 +133,7 @@ fn row_element<'a>(
     let type_icon = match item.r#type {
         SendType::Text => icons::FILE_TEXT,
         SendType::File => icons::FILE_EARMARK,
+        SendType::Item => icons::FILE_EARMARK,
     }
     .render(20.0, colors.text_primary);
 

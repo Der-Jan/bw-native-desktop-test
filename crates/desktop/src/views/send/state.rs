@@ -116,3 +116,17 @@ impl SendView {
         iced::widget::operation::focus(super::widgets::send_list::SEND_SEARCH_ID)
     }
 }
+
+impl SendView {
+    /// A replacement native surface has a fresh widget tree. Reapply the cached
+    /// viewport so virtualization and the scrollbar agree on the first frame.
+    pub fn restore_surface_scroll<M: Send + 'static>(&self) -> iced::Task<M> {
+        iced::widget::operation::scroll_to(
+            super::widgets::send_list::LIST_ID,
+            iced::widget::scrollable::AbsoluteOffset {
+                x: None,
+                y: Some(self.list_scroll.offset_y),
+            },
+        )
+    }
+}

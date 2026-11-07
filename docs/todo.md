@@ -9,6 +9,39 @@ entry in the same change. Reduced scope is fine — shrink the entry to what's s
 Completed work isn't tracked here; check `git log` or [docs/decisions.md](./decisions.md)
 for context.
 
+## Security and server integration prerequisites
+
+The proposed sequence and acceptance gates are in the
+[security remediation concept](security-concept.md). These tasks are open;
+the first runtime/session and demo-storage slice is implemented; remaining work is listed here.
+
+- **Production storage platform validation** `[M]` — validate Windows ACLs and
+  macOS/Windows credential-store behavior. AEAD credential persistence with OS
+  keys, private Unix paths, pending-login recovery and orphan cleanup are implemented.
+- **Server session revocation and platform durability** `[L]` — server-side token
+  revocation and Windows durability validation. Installation-local IDs, runtime
+  revocation, token-key deletion, plaintext UI purge, retained removal markers and
+  SQLite/metadata cleanup now cover production account records as well as demos.
+- **Protected action authorization parity** `[M]` — one-use account/revision/action
+  grants, detail/copy/edit/save/delete gates and fresh export authorization are wired.
+  Add policy-aware selective field display (current `view_password=false` fails closed
+  for full details), broader organization export policy and platform acceptance.
+- **Favicon privacy and secret-safe diagnostics** `[M]` — per-profile icon service,
+  anonymous transport and redaction; no silent public fallback for private profiles.
+- **Remaining login challenges and encrypted sync** `[L]` — password/TOTP/email
+  login, OS-protected tokens and full read-sync snapshots are wired; unsupported
+  challenges fail explicitly. Remaining sync work includes polling/WSS, complete
+  policies and key migrations, online CRUD, attachments and Send. Follow
+  [login and sync requirements](login-sync-requirements.md), including SDK proof,
+  challenge handling, token persistence, transactional snapshots and online writes.
+- **Native mTLS completion** `[L]` — scoped login/probe HTTP transport, import,
+  expiry checks and offline recovery settings are wired. Complete the remaining gates in [mTLS requirements](mtls-requirements.md), including
+  account-scoped bindings from the iOS work, endpoint isolation, secret storage,
+  HTTP/WSS coverage, expiry recovery and certificate replacement.
+- **Remaining iOS sorting parity** `[M]` — persistent Name / Last changed / displayed Base URL column sorting is implemented. Add locale collation and the distinct raw-URI / registrable-domain modes; follow
+  [iOS sorting requirements](vault-sorting-requirements.md), including four modes,
+  stable selection, domain fixtures and clearing derived keys on lock.
+
 ## Conventions
 
 Each entry carries two inline tags so you can size it at a glance:
@@ -24,6 +57,7 @@ Each entry carries two inline tags so you can size it at a glance:
 
 ## Contents
 
+- [Security and server integration prerequisites](#security-and-server-integration-prerequisites)
 - [Quick wins](#quick-wins)
 - [Auth & onboarding](#auth--onboarding)
 - [Vault & Send](#vault--send)
@@ -44,7 +78,6 @@ Each is small enough to land in one focused session.
   login-password screen sends a hint request to the server. One SDK call + one toast.
 - **"Always show dock" (macOS)** `[S]` — `NSApplication.setActivationPolicy`. Single API
   call; macOS-only build branch.
-- **DuckDuckGo browser integration (macOS)** `[S]` — niche; small toggle wired through.
 - **Edit menu — Undo / Redo / Cut / Copy / Paste / Select all** `[plan]` — currently
   rendered as **disabled placeholders** (`EnabledWhen::Never`) so the menu still mirrors
   the official client visually. Iced text widgets already handle all six via the keyboard;
@@ -282,27 +315,6 @@ study (under [Plan-first](#plan-first)).
 
 ## Polish & refactors
 
-### Sidebar polish `[M]`
-
-- **Expand/collapse animation.** Sidebar width snaps between `RAIL_WIDTH` and
-  `PANEL_WIDTH`. Wire `lilt::Animated<f32, Instant>` for the width; call
-  `services::animation::extend(...)` on toggle so the App's frame subscription
-  auto-picks-up (mirror the generator's segmented-pill swoosh — see
-  [decisions.md](./decisions.md) → "State-Driven Animation"). The naive form leaks:
-  rendering the expanded panel inside a narrow container makes labels wrap mid-animation.
-  Wrap the body in `container(...).clip(true)` so iced bounds-clips the overflow during
-  the transition; pick the destination panel immediately and animate the width up/down
-  beneath it.
-- **Active-row crossfade.** Three filter axes (`active_vault_filter`,
-  `active_send_filter`, `active_section`), so a single `Animated<bool>` doesn't cover
-  them. Either (a) one `Animated<f32>` per axis transitioning 0→1 on change with the row
-  functions threading per-axis progress through as accent alpha plus tracking previous
-  values so the outgoing row fades back to 0; or (b) one animator per axis and skip the
-  outgoing fade — accept the previous row snapping off (asymmetric, ~half the state).
-  Either way the row helpers (`nav_row` / `parent_header_row` / `standalone_item`) take
-  `Option<f32>` selected-progress instead of `is_selected: bool`; rows already paint via
-  style closures so the swap is contained.
-
 ### Icon audit — migrate bootstrap-icons to bwi `[M]`
 
 [`components::icons`](../crates/desktop/src/components/icons.rs) hosts two parallel fonts:
@@ -505,7 +517,8 @@ recipe).
 ([services/sdk/mod.rs](../crates/desktop/src/services/sdk/mod.rs)) returns `Ok(())`
 without doing anything — File → Sync now toasts "Vault synced" but no network round-trip
 happens. The whole vault loads from SQLite at startup (`fake-data` seeds it), so there's
-no remote to sync against today. When the SDK exposes a sync API: pull ciphers / folders /
+no remote to sync against today. SDK 4 exposes sync entry points, but full vault handler coverage needs verification.
+Integrate those APIs to pull ciphers / folders /
 collections / orgs from the server, persist into the SDK's repos, then return so the toast
 reflects reality. Subscription-side: the official client also runs sync on a timer
 (default ~5 min) and on app focus — both can layer on once the manual call works.
@@ -517,33 +530,15 @@ reflects reality. Subscription-side: the official client also runs sync on a tim
 Park; revisit when the gate lifts. Bitwarden SDK gates have their own section above; this
 bucket is everything else (iced, Bitwarden's Electron desktop_native, third-party crates).
 
-### SSH agent — waiting on upstream V2
+### SSH agent — Unix implementation available
 
-`Settings::ssh_agent` (master toggle) and per-user `SshPromptBehavior` (Always / Never /
-RememberUntilLock) are wired through
-[tabs/integrations.rs](../crates/desktop/src/views/settings/tabs/integrations.rs) and
-persisted, but the agent itself isn't started. Upstream has two implementations and
-neither is a clean target:
+The opt-in agent now uses the active unlocked SDK session and OpenSSH's Unix
+socket protocol, with bounded transport, per-signature approval, verified session
+binding and revocation on lock/account/sync transitions. It does not wait for the
+Electron V2 runtime. See [SSH agent setup, security boundary and remaining work](ssh-agent-requirements.md).
 
-- **V1**
-  ([core/src/ssh_agent/](../clients/apps/desktop/desktop_native/core/src/ssh_agent)) is
-  functional (named pipe on Windows, Unix socket elsewhere; `bitwarden-russh` for the
-  agent protocol; `mpsc` request → `broadcast` response — maps cleanly onto our
-  `Subscription::run`). But the module header flags it deprecated, security-only until V2.
-- **V2** ([ssh_agent/](../clients/apps/desktop/desktop_native/ssh_agent)) has the cleaner
-  shape (`ApprovalRequester` async trait, generic `KeyStore`, separate crate), but
-  `BitwardenSSHAgent::start_server()` is a stub (PM-30756) and
-  `InMemoryEncryptedKeyStore::sign_data()` is `todo!()` (PM-30755).
-
-Park until V2 ships in the Electron client. When unblocked: `ApprovalRequester` impl pumps
-approval prompts onto a tokio broadcast channel consumed by `iced::Subscription::run`
-(mirrors [services/instance_lock](../crates/desktop/src/services/instance_lock/mod.rs));
-the prompt opens a small confirmation window (About-window pattern in
-[app/handlers/platform.rs:225](../crates/desktop/src/app/handlers/platform.rs#L225)) when
-`SshPromptBehavior` requires it; `Settings::ssh_agent` toggles drive the listener task
-lifecycle; keystore is fed from the active user's `CipherType::SshKey` ciphers via
-`ClientManager`. The SDK's `bitwarden-ssh` crate handles key generation/import/export only
-— it is **not** the agent protocol layer (that's `bitwarden-russh`).
+Remaining: Windows named pipes, protected-item master-password reprompt, broader
+macOS validation and independently reviewed generic/Git-signing support if needed.
 
 ### Drop `ShellScope` if iced fixes `Stack`'s capture leak
 

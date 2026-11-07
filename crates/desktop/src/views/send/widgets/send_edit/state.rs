@@ -290,6 +290,7 @@ impl SendForm {
             r#type: self.send_type,
             file,
             text,
+            data: self.original.as_ref().and_then(|o| o.data.clone()),
             max_access_count,
             access_count: self.access_count,
             disabled: self.original.as_ref().map(|o| o.disabled).unwrap_or(false),
@@ -318,6 +319,7 @@ impl SendForm {
         match self.send_type {
             SendType::Text => !self.text_content.text().trim().is_empty(),
             SendType::File => !self.file_name.trim().is_empty(),
+            SendType::Item => false,
         }
     }
 
@@ -413,4 +415,18 @@ fn parse_emails(raw: &str) -> Vec<String> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect()
+}
+
+#[cfg(test)]
+mod sdk4_item_send_tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_item_sends_cannot_be_saved_as_text_or_file_sends() {
+        let mut form = SendForm::new(SendType::Item);
+        form.name = "Synthetic item".into();
+        form.file_name = "synthetic.txt".into();
+        form.text_content = iced::widget::text_editor::Content::with_text("synthetic text");
+        assert!(!form.is_valid());
+    }
 }

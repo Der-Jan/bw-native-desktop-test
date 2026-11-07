@@ -53,9 +53,7 @@ impl View for SendView {
                 }
             }
             SendMessage::CloseFormPane => {
-                // Start the outro and defer the selection clear so the
-                // sheet form stays alive while the slide animates out.
-                // Wide-mode pane closes immediately.
+                // Hide immediately, then clean up selection without a timer.
                 let task = self
                     .selection
                     .sheet_fade
@@ -64,7 +62,9 @@ impl View for SendView {
                 return Outcome::task(task);
             }
             SendMessage::FinalizeSheetClose => {
-                self.selection.clear();
+                if !self.selection.sheet_fade.is_open() {
+                    self.selection.clear();
+                }
             }
             SendMessage::PaneResized(event) => self.pane.set_ratio(event.ratio),
             SendMessage::SendEdit(m) => {
@@ -232,7 +232,7 @@ impl SendView {
         self.selection.confirm_delete.close();
         let Some(send_id) = self.selection.id else {
             // New-item form hasn't been saved yet — "delete" just dismisses
-            // the draft via the same sheet-fade outro as cancel.
+            // the draft via the same immediate sheet cleanup as cancel.
             let task = self
                 .selection
                 .sheet_fade
@@ -283,6 +283,9 @@ impl SendView {
     ) -> Outcome<Self> {
         match result {
             Ok(NoDebug(view)) => {
+                if view.r#type == SendType::Item {
+                    return Outcome::toast(Toast::warning(fl!("send-item-unsupported"), None));
+                }
                 if self.selection.id == Some(id) {
                     self.selection.form = Some(SendForm::edit(*view));
                     self.selection.sheet_fade.open();

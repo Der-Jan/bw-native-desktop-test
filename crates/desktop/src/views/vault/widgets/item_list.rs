@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use bitwarden_vault::{CipherListView, CipherListViewType};
 use iced::{
-    Alignment, Color, Element, Fill,
+    Alignment, Color, Element, Fill, Length,
     widget::{
-        Space, column, container, row, scrollable, text,
+        column, container, responsive, row, scrollable, text,
         text::{Ellipsis, Wrapping},
+        tooltip,
     },
 };
 
@@ -13,9 +14,14 @@ use crate::{
     app::RenderCtx,
     components::{self, buttons, icons, virtual_list},
     fl,
-    services::favicon,
+    services::{
+        favicon,
+        vault_sort::{SortColumn, SortDirection, VaultSort, base_url_for_display},
+    },
     theme::{AppColors, AppTheme, RADIUS_MD},
 };
+
+pub const LIST_ID: iced::widget::Id = iced::widget::Id::new("vault-item-list");
 
 /// Total pixel height of a single vault row, including its trailing separator.
 ///
@@ -25,13 +31,17 @@ use crate::{
 /// The row itself is `content_height + button padding (8+8) = 48`, plus a
 /// 1px separator rendered as part of each row to keep the unit uniform.
 const ROW_HEIGHT: f32 = 49.0;
+const TABLE_MIN_WIDTH: f32 = 720.0;
+const CHANGED_WIDTH: f32 = 128.0;
+const ACTIONS_WIDTH: f32 = 90.0;
 
 #[derive(Debug, Clone)]
 pub enum ItemListMessage {
     ItemSelected(usize),
+    SortBy(SortColumn),
     OpenExternal(#[expect(dead_code)] usize),
-    CopyUsername(#[expect(dead_code)] usize),
-    MoreOptions(#[expect(dead_code)] usize),
+    CopyUsername(bitwarden_vault::CipherId),
+    CopyPassword(bitwarden_vault::CipherId),
     /// Emitted on every scroll of the virtualized list. The vault handler
     /// forwards the viewport straight into `ScrollState::track`.
     Scrolled(scrollable::Viewport),
@@ -58,29 +68,106 @@ fn initial_color(name: &str) -> iced::Color {
     Color::from_rgb(r + m, g + m, b + m)
 }
 
+#[derive(Clone, Copy)]
+struct ListContext<'a> {
+    sort: VaultSort,
+    active_user: crate::domain::UserId,
+    colors: &'a AppColors,
+    show_favicons: bool,
+    favicon: &'a favicon::FaviconService,
+}
+
 pub fn view<'a>(
     ctx: &RenderCtx<'a>,
     items: &'a [Arc<CipherListView>],
     selected_index: Option<usize>,
     scroll: virtual_list::ScrollState,
+    sort: VaultSort,
 ) -> Element<'a, ItemListMessage, AppTheme> {
+    let ctx = ListContext {
+        sort,
+        active_user: ctx
+            .active_user
+            .copied()
+            .expect("item_list requires active_user"),
+        colors: ctx.colors,
+        show_favicons: ctx.show_favicons,
+        favicon: ctx.favicon,
+    };
+    responsive(move |size| {
+        table_view(
+            ctx,
+            items,
+            selected_index,
+            scroll,
+            size.width.max(TABLE_MIN_WIDTH),
+        )
+    })
+    .into()
+}
+
+fn table_view<'a>(
+    ctx: ListContext<'a>,
+    items: &'a [Arc<CipherListView>],
+    selected_index: Option<usize>,
+    scroll: virtual_list::ScrollState,
+    table_width: f32,
+) -> Element<'a, ItemListMessage, AppTheme> {
+    let header = |label: String, column: SortColumn| -> Element<'a, ItemListMessage, AppTheme> {
+        let selected = ctx.sort.column == column;
+        let color = if selected {
+            ctx.colors.text_primary
+        } else {
+            ctx.colors.table_header
+        };
+        let arrow = if !selected {
+            icons::ARROW_DOWN_UP
+        } else if ctx.sort.direction == SortDirection::Ascending {
+            icons::ARROW_UP
+        } else {
+            icons::ARROW_DOWN
+        };
+        buttons::ghost(
+            row![
+                text(label).size(14).color(color).font(crate::APP_FONT_BOLD),
+                arrow.render(11.0, color)
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center),
+            false,
+            ctx.colors.item_hover,
+            ctx.colors.item_hover,
+            crate::theme::RADIUS_SM,
+        )
+        .on_press(ItemListMessage::SortBy(column))
+        .padding([4, 0])
+        .width(Fill)
+        .into()
+    };
     let table_header = container(
         row![
-            text(fl!("vault-column-name"))
-                .size(14)
-                .color(ctx.colors.table_header)
-                .font(crate::APP_FONT_BOLD),
-            icons::ARROW_DOWN_UP.render(11.0, ctx.colors.table_header),
-            Space::new().width(Fill),
-            text(fl!("vault-column-options"))
-                .size(14)
-                .color(ctx.colors.table_header)
-                .font(crate::APP_FONT_BOLD),
+            container(header(fl!("vault-column-name"), SortColumn::Name))
+                .width(Length::FillPortion(3)),
+            container(header(
+                fl!("vault-column-last-changed"),
+                SortColumn::LastChanged
+            ))
+            .width(CHANGED_WIDTH),
+            container(header(fl!("vault-column-base-url"), SortColumn::BaseUrl))
+                .width(Length::FillPortion(2)),
+            container(
+                text(fl!("vault-column-options"))
+                    .size(14)
+                    .color(ctx.colors.table_header)
+                    .font(crate::APP_FONT_BOLD)
+            )
+            .width(ACTIONS_WIDTH)
+            .align_x(Alignment::End),
         ]
-        .spacing(4)
+        .spacing(12)
         .align_y(Alignment::Center),
     )
-    .padding([8, 24])
+    .padding([4, 24])
     .width(Fill);
 
     let header_divider = container(components::separator_h()).padding([0, 16]);
@@ -96,24 +183,47 @@ pub fn view<'a>(
         ItemListMessage::Scrolled,
     )
     .height(Fill)
+    .id(LIST_ID)
     .style(components::rail_scroll_style);
 
-    column![table_header, header_divider, list]
+    // Share a single horizontal viewport between header and body. The inner
+    // vertical list stays virtualized when a detail pane narrows the table.
+    container(
+        scrollable(
+            container(
+                column![table_header, header_divider, list]
+                    .width(Fill)
+                    .height(Fill),
+            )
+            .width(table_width)
+            .height(Fill),
+        )
+        .direction(scrollable::Direction::Horizontal(
+            scrollable::Scrollbar::new(),
+        ))
         .width(Fill)
         .height(Fill)
-        .into()
+        .style(components::rail_scroll_style),
+    )
+    .padding(iced::Padding {
+        bottom: 8.0,
+        ..iced::Padding::ZERO
+    })
+    .height(Fill)
+    .width(Fill)
+    .into()
 }
 
 /// Build a single row Element at the given global index. `virtual_list`
 /// wraps the returned Element in a `Length::Fixed(ROW_HEIGHT)` container
 /// itself, so no height concern leaks into here.
 fn row_element<'a>(
-    ctx: &RenderCtx<'a>,
+    ctx: ListContext<'a>,
     i: usize,
     item: &'a CipherListView,
     is_selected: bool,
 ) -> Element<'a, ItemListMessage, AppTheme> {
-    let active_user = ctx.active_user.expect("item_list requires active_user");
+    let active_user = ctx.active_user;
     let subtitle = item.subtitle.as_str();
     let (has_username, has_uri) = match &item.r#type {
         CipherListViewType::Login(login) => (
@@ -138,7 +248,7 @@ fn row_element<'a>(
                     .as_ref()
                     .and_then(|u| u.first())
                     .and_then(|u| u.uri.as_deref());
-                ctx.favicon.handle_for_login_uri(active_user, uri)
+                ctx.favicon.handle_for_login_uri(&active_user, uri)
             }
             // Non-login ciphers fall back to the generic globe; per-type
             // BWI glyphs are tracked in docs/todo.md.
@@ -170,24 +280,74 @@ fn row_element<'a>(
             ctx.colors,
         ));
     }
-    if has_username {
-        actions.push(action_icon(
-            icons::COPY,
-            ItemListMessage::CopyUsername(i),
-            ctx.colors,
-        ));
+    if has_username && let Some(id) = item.id {
+        actions.push(
+            tooltip(
+                action_icon(icons::COPY, ItemListMessage::CopyUsername(id), ctx.colors),
+                text(fl!("menu-edit-copy-username")).size(12),
+                tooltip::Position::Top,
+            )
+            .into(),
+        );
     }
-    actions.push(action_icon(
-        icons::THREE_DOTS_VERTICAL,
-        ItemListMessage::MoreOptions(i),
-        ctx.colors,
-    ));
+    if matches!(item.r#type, CipherListViewType::Login(_))
+        && let Some(id) = item.id
+    {
+        actions.push(
+            tooltip(
+                buttons::ghost_icon(
+                    icons::BWI_KEY.render(14.0, ctx.colors.text_secondary),
+                    ctx.colors.item_hover,
+                )
+                .padding([4, 6])
+                .on_press(ItemListMessage::CopyPassword(id)),
+                text(fl!("menu-edit-copy-password")).size(12),
+                tooltip::Position::Top,
+            )
+            .into(),
+        );
+    }
 
     let actions_row = row(actions).spacing(2).align_y(Alignment::Center);
 
-    let content = row![icon, info, actions_row]
-        .spacing(12)
-        .align_y(Alignment::Center);
+    let changed = item.revision_date.with_timezone(&chrono::Local);
+    let changed_cell = column![
+        text(changed.format("%Y-%m-%d").to_string())
+            .size(12)
+            .color(ctx.colors.text_primary),
+        text(changed.format("%H:%M").to_string())
+            .size(12)
+            .color(ctx.colors.text_secondary),
+    ]
+    .spacing(2)
+    .width(CHANGED_WIDTH);
+    let base_url = match &item.r#type {
+        CipherListViewType::Login(login) => login.uris.as_ref().and_then(|uris| {
+            uris.iter()
+                .filter_map(|uri| uri.uri.as_deref())
+                .find_map(base_url_for_display)
+        }),
+        _ => None,
+    };
+    let url_cell = text(base_url.unwrap_or_else(|| "—".into()))
+        .size(14)
+        .color(ctx.colors.text_secondary)
+        .wrapping(Wrapping::None)
+        .ellipsis(Ellipsis::End)
+        .width(Length::FillPortion(2));
+    let content = row![
+        row![icon, info]
+            .spacing(12)
+            .align_y(Alignment::Center)
+            .width(Length::FillPortion(3)),
+        changed_cell,
+        url_cell,
+        container(actions_row)
+            .width(ACTIONS_WIDTH)
+            .align_x(Alignment::End),
+    ]
+    .spacing(12)
+    .align_y(Alignment::Center);
 
     // The button itself is 48 tall (32 icon + 8+8 padding) and the
     // separator is 1 tall, summing to ROW_HEIGHT. `virtual_list` enforces

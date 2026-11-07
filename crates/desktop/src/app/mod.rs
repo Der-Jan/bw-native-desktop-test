@@ -47,6 +47,12 @@ pub(crate) const MAIN_WINDOW_SIZE: iced::Size = iced::Size::new(1024.0, 800.0);
 pub struct App {
     // ── Session ───────────────────────────────────────────────────────────
     pub(crate) active_user: Option<UserId>,
+    /// Invalidates queued UI completions across account switches and security transitions.
+    pub(crate) presentation_generation: u64,
+    pub(crate) storage_warning: Option<crate::services::sdk::StorageWarning>,
+    pub(crate) sync_status: std::collections::HashMap<UserId, handlers::vault_sync::SyncUi>,
+    pub(crate) pending_logouts: std::collections::HashSet<uuid::Uuid>,
+    pub(crate) exit_after_logout: bool,
     pub(crate) client_manager: ClientManager,
     /// Read once at startup. Lifecycle branches re-read `self.settings.<field>`
     /// at event time (never cached) so live changes apply without a restart.
@@ -63,8 +69,8 @@ pub struct App {
 
     // ── Windows ───────────────────────────────────────────────────────────
     pub(crate) windows: HashMap<iced::window::Id, WindowInfo>,
-    /// Always present from `App::new` until `iced::exit`. Child windows
-    /// (About) are not tracked here.
+    /// Current main surface ID; Wayland tray hiding may suspend the surface
+    /// and assign a new ID on restore. Application/vault state stays alive.
     pub(crate) main_window: iced::window::Id,
     /// Tracked from `WindowMessage::Focused`/`Unfocused` for the main window.
     /// Defaults to `true` because the process is foreground when launched
@@ -72,6 +78,8 @@ pub struct App {
     /// surface). Consumed by `SessionTimeout::expired` so an active+focused
     /// user is exempt from `lock_after`.
     pub(crate) main_window_focused: bool,
+    pub(crate) main_window_hidden: bool,
+    pub(crate) main_window_suspended: bool,
     pub(crate) magnify: magnify::MagnifyView,
 
     // ── Native chrome ─────────────────────────────────────────────────────
@@ -91,12 +99,11 @@ pub struct App {
     /// Single writer: every clipboard `set` flows through here so the 30 s
     /// auto-clear bookkeeping sees every write.
     pub(crate) clipboard: ClipboardManager,
+    pub(crate) ssh_agent: crate::services::ssh_agent::AgentRuntime,
+    pub(crate) ssh_approval: Option<std::sync::Arc<crate::services::ssh_agent::Approval>>,
+    pub(crate) ssh_approval_window: Option<(iced::window::Id, uuid::Uuid)>,
+    pub(crate) shutting_down: bool,
     pub(crate) favicon: crate::services::favicon::FaviconService,
-    /// Drives `App::subscription`'s per-frame gate. Held as `Arc` so the
-    /// `services::animation` module can hold a `Weak` and reach it from
-    /// animation primitives without threading a reference through every
-    /// constructor.
-    pub(crate) animation: std::sync::Arc<crate::services::animation::AnimationWatermark>,
     /// Per-user lock/logout timer driver. Owns the deadline watch,
     /// tick-broadcast, and the spawned tokio task (aborted on drop).
     pub(crate) session_timeout: crate::services::session_timeout::SessionTimeout,

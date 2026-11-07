@@ -90,7 +90,6 @@ pub enum MenuAction {
     ZoomIn,
     ZoomOut,
     ZoomReset,
-    ToggleHardwareAcceleration,
     Import,
     Export,
     NewFolder,

@@ -10,9 +10,7 @@ use crate::{
         App, Message, SystemMessage, WindowMessage,
         window::{WindowInfo, WindowKind},
     },
-    components::toast::Toast,
     domain::Screen,
-    fl,
     views::{settings::SettingsSnapshot, title_bar::WindowAction},
 };
 
@@ -39,7 +37,7 @@ impl App {
                 if self.settings.close_to_tray && self.ensure_tray() {
                     self.hide_main_window()
                 } else {
-                    iced::window::close(id)
+                    self.request_exit()
                 }
             }
             WindowAction::Drag => iced::window::drag(id),
@@ -50,14 +48,36 @@ impl App {
     pub(crate) fn handle_window_message(&mut self, msg: WindowMessage) -> Task<Message> {
         match msg {
             WindowMessage::Opened(id) => {
+                if self
+                    .ssh_approval_window
+                    .is_some_and(|(window, _)| window == id)
+                {
+                    return self.focus_ssh_approval(id);
+                }
+                // Cancellation can beat the asynchronous native open. Never
+                // leave an empty always-on-top prompt behind in that race.
+                if self
+                    .windows
+                    .get(&id)
+                    .is_some_and(|w| w.kind == WindowKind::SshApproval)
+                {
+                    return iced::window::close(id);
+                }
                 if id == self.main_window_id() {
-                    iced::window::raw_id::<Message>(id)
-                        .map(move |raw| Message::Window(WindowMessage::GotRawId(id, raw)))
+                    Task::batch([
+                        iced::window::raw_id::<Message>(id)
+                            .map(move |raw| Message::Window(WindowMessage::GotRawId(id, raw))),
+                        self.views.vault.restore_surface_scroll(),
+                        self.views.send.restore_surface_scroll(),
+                    ])
                 } else {
                     Task::none()
                 }
             }
-            WindowMessage::GotRawId(_id, raw_id) => {
+            WindowMessage::GotRawId(id, raw_id) => {
+                if id != self.main_window_id() || self.main_window_suspended {
+                    return Task::none();
+                }
                 self.main_window_raw_id = Some(raw_id);
                 self.native_menu = crate::services::menu::attach_menu(raw_id, &self.menu);
                 // Populate dynamic submenus immediately so File → Lock vault
@@ -69,7 +89,32 @@ impl App {
                 }
                 Task::none()
             }
+            WindowMessage::HideBackendResolved { id, wayland } => {
+                // Restore may have won the race with the native-handle query.
+                if id != self.main_window_id()
+                    || !self.main_window_hidden
+                    || self.main_window_suspended
+                {
+                    return Task::none();
+                }
+                if wayland {
+                    // winit's Wayland set_visible is a no-op. Destroy only the
+                    // surface; the daemon, SDK sessions and view models remain.
+                    self.main_window_suspended = true;
+                    self.native_menu = None;
+                    self.main_window_raw_id = None;
+                    iced::window::close(id)
+                } else {
+                    iced::window::set_mode(id, iced::window::Mode::Hidden)
+                }
+            }
             WindowMessage::CloseRequested(id) => {
+                if let Some((window, request)) = self.ssh_approval_window
+                    && window == id
+                {
+                    return self
+                        .decide_ssh_approval(request, crate::services::ssh_agent::Decision::Deny);
+                }
                 // Route OS-native close to the same handler as the custom
                 // title-bar X so close-to-tray applies uniformly. Other
                 // windows (About) close normally.
@@ -80,9 +125,24 @@ impl App {
                 }
             }
             WindowMessage::Closed(id) => {
+                if let Some((window, request)) = self.ssh_approval_window
+                    && window == id
+                {
+                    self.windows.remove(&id);
+                    return self
+                        .decide_ssh_approval(request, crate::services::ssh_agent::Decision::Deny);
+                }
                 let was_main = id == self.main_window_id();
+                if was_main && self.main_window_suspended {
+                    // Retain the main window's geometry for restoration.
+                    return Task::none();
+                }
                 self.windows.remove(&id);
-                if was_main { iced::exit() } else { Task::none() }
+                if was_main {
+                    self.request_exit()
+                } else {
+                    Task::none()
+                }
             }
             WindowMessage::Resized(id, size) => {
                 if let Some(info) = self.windows.get_mut(&id) {
@@ -115,12 +175,37 @@ impl App {
                 // Only main-window clicks count toward the active user's
                 // session timer; the Magnify launcher dismisses on
                 // focus-loss, so its clicks shouldn't extend the timer.
-                if id == self.main_window_id() {
+                if id == self.main_window_id()
+                    || self
+                        .ssh_approval_window
+                        .is_some_and(|(window, _)| window == id)
+                {
                     self.record_session_activity();
                 }
                 Task::none()
             }
             WindowMessage::KeyPressed(id, ev) => {
+                if let Some((window, request)) = self.ssh_approval_window
+                    && window == id
+                {
+                    self.record_session_activity();
+                    if matches!(
+                        &ev,
+                        iced::keyboard::Event::KeyPressed {
+                            key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                            repeat: false,
+                            ..
+                        }
+                    ) {
+                        return self.decide_ssh_approval(
+                            request,
+                            crate::services::ssh_agent::Decision::Deny,
+                        );
+                    }
+                    // Enter/Space/Tab are handled by the focused approval
+                    // button, whose message contains this request's UUID.
+                    return Task::none();
+                }
                 // Magnify gets first crack at keys for its own window.
                 if id == self.magnify.window
                     && let Some(task) = self.handle_magnify_key(ev.clone())
@@ -139,6 +224,16 @@ impl App {
                 let iced::keyboard::Event::KeyPressed { key, modifiers, .. } = ev else {
                     return Task::none();
                 };
+                if matches!(
+                    key,
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
+                ) && self.ssh_approval.is_some()
+                {
+                    return self.cancel_ssh_approval();
+                }
+                if self.ssh_approval.is_some() {
+                    return Task::none();
+                }
                 // Escape closes the settings modal before any menu shortcut
                 // lookup, otherwise it would fall through to widgets behind
                 // the modal.
@@ -198,10 +293,40 @@ impl App {
                     return Task::none();
                 };
                 self.client_manager = mgr;
+                self.storage_warning = self.client_manager.take_startup_warning();
                 self.active_user = self.client_manager.user_ids().into_iter().next();
+                self.restore_active_filter();
                 self.show_login_for_active()
             }
             SystemMessage::InstanceWakeRequested => self.show_main_window(),
+            SystemMessage::LogoutCompleted { operation, result } => {
+                if !self.pending_logouts.remove(&operation) {
+                    return Task::none();
+                }
+                if let Err(error) = result {
+                    self.storage_warning = Some(match error {
+                        crate::services::sdk::LogoutFailure::NotCommitted => {
+                            // Keep the window open so a failed durable logout cannot
+                            // silently turn into a completed-looking application exit.
+                            self.exit_after_logout = false;
+                            crate::services::sdk::StorageWarning::LogoutNotStored
+                        }
+                        crate::services::sdk::LogoutFailure::CleanupPending => {
+                            crate::services::sdk::StorageWarning::RemovalIncomplete
+                        }
+                    });
+                }
+                if self.pending_logouts.is_empty() && self.exit_after_logout {
+                    return iced::exit();
+                }
+                Task::none()
+            }
+            SystemMessage::SessionQuiesced(session) => {
+                if self.client_manager.accepts_session(&session) {
+                    self.refresh_accounts_cache();
+                }
+                Task::none()
+            }
             SystemMessage::SessionEvent(ev) => {
                 use session_events::SessionEvent;
                 match ev {
@@ -225,46 +350,11 @@ impl App {
                 }
             }
             SystemMessage::SessionTimeoutCheck => self.run_session_timeout_check(),
-            SystemMessage::SyncCompleted(res) => {
-                match res {
-                    Ok(()) => self.push_toast(Toast::success(fl!("menu-toast-sync-success"), None)),
-                    Err(err) => {
-                        tracing::warn!(%err, "vault sync failed");
-                        self.push_toast(Toast::error(
-                            fl!("menu-toast-sync-failed-body"),
-                            Some(&fl!("menu-toast-sync-failed-title")),
-                        ));
-                    }
-                }
-                Task::none()
-            }
-            #[cfg(feature = "gpu")]
-            SystemMessage::WgpuBackendDiscovered(backend) => {
-                // We've reached first paint, so whatever wgpu picked is
-                // known-good for this hardware/driver combo. Persist for
-                // next launch and clear the crash-sentinel.
-                //
-                // The backend string comes from `format!("{:?}", wgpu::Backend)`
-                // inside iced's wgpu compositor. PascalCase → lowercase here,
-                // then fed back to `WGPU_BACKEND` whose parser
-                // (`Backends::from_comma_list`) accepts only the four desktop
-                // names. Pinning that contract explicitly so we don't silently
-                // poison settings.json if a future iced/wgpu rev:
-                //   - renames a Debug variant (e.g. `Dx12` → `DirectX12`)
-                //   - exposes `Noop` or `BrowserWebGpu` as a string we'd
-                //     otherwise persist (Noop especially is a real env value
-                //     that wgpu honours, locking us into the dummy backend)
-                //   - falls back to tiny-skia, whose compositor reports
-                //     `backend: "tiny-skia"`.
-                let normalised = backend.to_lowercase();
-                if matches!(normalised.as_str(), "vulkan" | "dx12" | "metal" | "gl") {
-                    let mut s = crate::services::settings::Settings::load();
-                    s.wgpu_backend_pending = None;
-                    s.wgpu_backend_verified = Some(normalised);
-                    s.save();
-                }
-                Task::none()
-            }
+            SystemMessage::SyncCompleted {
+                uid,
+                operation,
+                result,
+            } => self.finish_vault_sync(uid, operation, result),
         }
     }
 
@@ -275,9 +365,26 @@ impl App {
         action: crate::services::menu::MenuAction,
     ) -> Task<Message> {
         use crate::services::menu::MenuAction;
+        if self
+            .active_user
+            .is_some_and(|uid| self.client_manager.is_remote(&uid))
+            && matches!(
+                action,
+                MenuAction::Import
+                    | MenuAction::Export
+                    | MenuAction::NewFolder
+                    | MenuAction::NewItem(_)
+            )
+        {
+            self.push_toast(crate::components::toast::Toast::warning(
+                "Dieser synchronisierte Tresor ist derzeit schreibgeschützt; Serveränderungen und Export folgen später.",
+                None,
+            ));
+            return Task::none();
+        }
         match action {
             MenuAction::Quit => {
-                return iced::exit();
+                return self.request_exit();
             }
             MenuAction::LockAllVaults => {
                 let uids = self.client_manager.user_ids();
@@ -313,17 +420,7 @@ impl App {
                     return self.views.vault.focus_search_task().map(Into::into);
                 }
             }
-            MenuAction::SyncNow => {
-                let Some(uid) = self.active_user else {
-                    return Task::none();
-                };
-                if self.client_manager.client_for(&uid).is_none() {
-                    return Task::none();
-                }
-                return Task::perform(crate::services::sdk::sync(), |res| {
-                    Message::System(SystemMessage::SyncCompleted(res.map_err(|e| e.to_string())))
-                });
-            }
+            MenuAction::SyncNow => return self.start_vault_sync(),
             MenuAction::HideToTray => {
                 if self.ensure_tray() {
                     return self.hide_main_window();
@@ -372,20 +469,6 @@ impl App {
                 if self.settings.zoom_factor.reset() {
                     self.settings.save();
                 }
-            }
-            MenuAction::ToggleHardwareAcceleration => {
-                // The renderer backend is selected once at startup
-                // (`main::select_backend`), so flipping the bit here only
-                // takes effect on next launch. Persist + toast so the user
-                // knows a restart is needed.
-                self.settings.hardware_acceleration = !self.settings.hardware_acceleration;
-                self.settings.save();
-                let toast_msg = if self.settings.hardware_acceleration {
-                    crate::fl!("menu-help-toast-hw-accel-on")
-                } else {
-                    crate::fl!("menu-help-toast-hw-accel-off")
-                };
-                self.push_toast(crate::components::toast::Toast::info(toast_msg, None));
             }
             MenuAction::Import => {
                 return self.open_import_modal();
@@ -457,11 +540,7 @@ impl App {
                     position: iced::window::Position::Centered,
                     resizable: false,
                     decorations: true,
-                    icon: iced::window::icon::from_file_data(
-                        crate::assets::ICON_PNG,
-                        Some(image::ImageFormat::Png),
-                    )
-                    .ok(),
+                    icon: crate::assets::window_icon(),
                     ..Default::default()
                 });
 
@@ -481,39 +560,85 @@ impl App {
             TrayAction::LockVault => {
                 self.handle_menu_action(crate::services::menu::MenuAction::LockAllVaults)
             }
-            TrayAction::Exit => iced::exit(),
+            TrayAction::Exit => self.request_exit(),
+            TrayAction::Unavailable => {
+                if self.main_window_hidden {
+                    return self.show_main_window();
+                }
+                Task::none()
+            }
         }
     }
 
     // ── Window visibility helpers (tray + IPC wake) ────────────────────────
 
-    fn hide_main_window(&mut self) -> Task<Message> {
-        iced::window::set_mode(self.main_window_id(), iced::window::Mode::Hidden)
+    pub(crate) fn hide_main_window(&mut self) -> Task<Message> {
+        self.main_window_hidden = true;
+        self.main_window_focused = false;
+        self.refresh_session_timeout_deadline();
+        let cancel = self.cancel_ssh_approval();
+        if self.main_window_suspended {
+            return cancel;
+        }
+        let id = self.main_window_id();
+        Task::batch([
+            cancel,
+            iced::window::run(id, |window| {
+                use iced::window::raw_window_handle::RawWindowHandle;
+                window
+                    .window_handle()
+                    .is_ok_and(|h| matches!(h.as_raw(), RawWindowHandle::Wayland(_)))
+            })
+            .map(move |wayland| {
+                Message::Window(WindowMessage::HideBackendResolved { id, wayland })
+            }),
+        ])
     }
 
-    fn show_main_window(&mut self) -> Task<Message> {
+    pub(crate) fn show_main_window(&mut self) -> Task<Message> {
+        self.main_window_hidden = false;
+        if self.main_window_suspended {
+            self.main_window_suspended = false;
+            let old_id = self.main_window_id();
+            let info = self
+                .windows
+                .remove(&old_id)
+                .unwrap_or_else(|| WindowInfo::new(WindowKind::Main, crate::app::MAIN_WINDOW_SIZE));
+            let (id, open) = iced::window::open(iced::window::Settings {
+                size: info.size,
+                min_size: Some(iced::Size::new(800.0, 750.0)),
+                maximized: info.maximized,
+                fullscreen: info.fullscreen,
+                level: if info.always_on_top {
+                    iced::window::Level::AlwaysOnTop
+                } else {
+                    iced::window::Level::Normal
+                },
+                decorations: crate::services::menu::should_use_native_title_bar(),
+                exit_on_close_request: false,
+                platform_specific: crate::app::helpers::main_window_platform_specific(),
+                icon: crate::assets::window_icon(),
+                ..Default::default()
+            });
+            self.main_window = id;
+            self.windows.insert(id, info);
+            return open.map(|id| Message::Window(WindowMessage::Opened(id)));
+        }
         let id = self.main_window_id();
         Task::batch([
             iced::window::set_mode(id, iced::window::Mode::Windowed),
+            iced::window::minimize(id, false),
             iced::window::gain_focus(id),
         ])
     }
 
-    /// Ask iced for the current mode and flip it. `Task::then` defers the
-    /// decision until the mode resolves — one round-trip slower than reading
-    /// a local bool, but iced stays the single source of truth so we can't
-    /// drift from the OS-level window state. `Fullscreen` counts as visible.
+    /// Restore hidden or unfocused windows; hide a focused visible window.
     fn toggle_main_window_visibility(&mut self) -> Task<Message> {
-        let id = self.main_window_id();
-        iced::window::mode(id).then(move |mode| match mode {
-            iced::window::Mode::Hidden => Task::batch([
-                iced::window::set_mode(id, iced::window::Mode::Windowed),
-                iced::window::gain_focus(id),
-            ]),
-            iced::window::Mode::Windowed | iced::window::Mode::Fullscreen => {
-                iced::window::set_mode(id, iced::window::Mode::Hidden)
-            }
-        })
+        if self.main_window_hidden || !self.main_window_focused {
+            self.show_main_window()
+        } else {
+            self.hide_main_window()
+        }
     }
 
     /// Lazily build the tray. Callers hiding the window to the tray MUST
@@ -526,6 +651,62 @@ impl App {
                 tracing::warn!("tray requested but failed to initialise; continuing without tray");
             }
         }
-        self.tray.is_some()
+        let available = self.tray.as_ref().is_some_and(|tray| tray.available());
+        if !available {
+            self.push_toast(crate::components::toast::Toast::warning(
+                "Kein erreichbarer System-Tray. Das Fenster bleibt über die Taskleiste erreichbar.",
+                None,
+            ));
+        }
+        available
+    }
+}
+
+#[cfg(test)]
+mod tray_window_tests {
+    use super::*;
+    #[tokio::test]
+    async fn wayland_hide_suspends_only_the_surface_and_restore_replaces_its_id() {
+        let mut app = App::test();
+        let old = app.main_window_id();
+        let uid = crate::domain::UserId::new_v4();
+        app.active_user = Some(uid);
+        app.windows.get_mut(&old).unwrap().size = iced::Size::new(1130.0, 810.0);
+        let _ = app.hide_main_window();
+        let _ = app.handle_window_message(WindowMessage::HideBackendResolved {
+            id: old,
+            wayland: true,
+        });
+        assert!(app.main_window_hidden && app.main_window_suspended);
+        let _ = app.handle_window_message(WindowMessage::Closed(old));
+        assert!(!app.shutting_down);
+        assert_eq!(app.active_user, Some(uid));
+        let _ = app.show_main_window();
+        let new = app.main_window_id();
+        assert_ne!(new, old);
+        assert!(!app.main_window_hidden && !app.main_window_suspended);
+        assert_eq!(app.windows[&new].size, iced::Size::new(1130.0, 810.0));
+        let _ = app.handle_window_message(WindowMessage::Closed(old));
+        assert!(!app.shutting_down);
+        assert_eq!(app.active_user, Some(uid));
+    }
+    #[tokio::test]
+    async fn restore_cancels_pending_hide_and_stale_backend_results() {
+        let mut app = App::test();
+        let id = app.main_window_id();
+        let _ = app.hide_main_window();
+        let _ = app.show_main_window();
+        let _ = app.handle_window_message(WindowMessage::HideBackendResolved { id, wayland: true });
+        assert!(!app.main_window_hidden && !app.main_window_suspended);
+        let _ = app.hide_main_window();
+        let _ = app.handle_window_message(WindowMessage::HideBackendResolved {
+            id: iced::window::Id::unique(),
+            wayland: true,
+        });
+        assert!(!app.main_window_suspended);
+        let _ =
+            app.handle_window_message(WindowMessage::HideBackendResolved { id, wayland: false });
+        assert!(app.main_window_hidden && !app.main_window_suspended);
+        assert_eq!(app.main_window_id(), id);
     }
 }

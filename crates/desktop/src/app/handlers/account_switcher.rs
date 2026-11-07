@@ -18,9 +18,17 @@ impl App {
         match event {
             AccountSwitcherEvent::SwitchUser { uid } => self.handle_user_switch(uid),
             AccountSwitcherEvent::AddAccount => {
-                self.views.login.reset_to_email_entry();
+                let cleanup = self
+                    .active_user
+                    .filter(|old| self.client_manager.is_unlocking(old))
+                    .and_then(|old| self.client_manager.lock(&old));
+                self.clear_sensitive_ui();
+                self.views.login.reset_to_email_entry(&self.client_manager);
                 self.set_screen(Screen::Login);
-                self.views.login.auto_focus_task().map(Into::into)
+                Task::batch([
+                    Self::finish_session_cleanup(cleanup),
+                    self.views.login.auto_focus_task().map(Into::into),
+                ])
             }
             AccountSwitcherEvent::LockAll => self.handle_menu_action(MenuAction::LockAllVaults),
             AccountSwitcherEvent::Settings => self.handle_menu_action(MenuAction::Settings),
@@ -36,9 +44,13 @@ impl App {
         // Magnify holds Arc clones of the previous user's decrypted ciphers
         // in `results`; drop them before flipping the active user so the
         // next summon doesn't restore them.
-        self.magnify_reset_sticky();
+        let cleanup = self
+            .active_user
+            .filter(|old| self.client_manager.is_unlocking(old))
+            .and_then(|old| self.client_manager.lock(&old));
+        self.clear_sensitive_ui();
         self.active_user = Some(uid);
-        self.sidebar.active_vault_filter = crate::views::vault::VaultFilter::AllItems;
+        self.restore_active_filter();
         self.sidebar.active_send_filter = crate::views::send::SendFilter::AllItems;
         self.views
             .vault
@@ -56,11 +68,22 @@ impl App {
         }
         self.refresh_session_timeout_deadline();
 
-        if !self.client_manager.is_unlocked(&uid) {
+        let route = if !self.client_manager.is_unlocked(&uid) {
             self.show_login_for_active()
+        } else if self.client_manager.is_remote(&uid)
+            && self.client_manager.last_sync(&uid).is_none()
+        {
+            self.views.login.show_ready();
+            self.set_screen(Screen::Login);
+            Task::none()
         } else {
             self.set_screen(Screen::Vault);
-            self.switch_to_vault_task(uid)
-        }
+            if self.client_manager.is_remote(&uid) {
+                self.load_vault_list_task(uid)
+            } else {
+                self.switch_to_vault_task(uid)
+            }
+        };
+        Task::batch([Self::finish_session_cleanup(cleanup), route])
     }
 }

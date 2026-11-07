@@ -322,7 +322,6 @@ menu-view-reset-zoom = Zoom zurücksetzen
 menu-view-toggle-fullscreen = Vollbild umschalten
 
 ## Menu — Account
-menu-account-premium = Premium-Mitgliedschaft
 menu-account-change-password = Master-Passwort ändern
 menu-account-two-step = Zwei-Faktor-Authentifizierung
 menu-account-fingerprint = Fingerabdruck-Phrase
@@ -342,12 +341,7 @@ menu-help-legal-tos = Nutzungsbedingungen
 menu-help-legal-privacy = Datenschutzerklärung
 menu-help-follow = Folge uns
 menu-help-web-vault = Zum Web-Tresor
-menu-help-mobile-app = Mobile App holen
 menu-help-browser-extension = Browser-Erweiterung holen
-menu-help-troubleshooting = Fehlerbehebung
-menu-help-troubleshooting-gpu = Hardwarebeschleunigung umschalten
-menu-help-toast-hw-accel-on = Hardwarebeschleunigung aktiviert. Starte Bitwarden neu, um die Änderung anzuwenden.
-menu-help-toast-hw-accel-off = Hardwarebeschleunigung deaktiviert. Starte Bitwarden neu, um die Änderung anzuwenden.
 menu-help-about = Über Bitwarden
 
 menu-toast-sync-success = Tresor synchronisiert
@@ -432,11 +426,9 @@ settings-integrations-browser-fingerprint = Bestätigungs-Fingerabdruck verlange
 settings-integrations-ssh = SSH-Agent
 settings-integrations-ssh-enable = SSH-Agent aktivieren
 settings-integrations-ssh-prompt = Verhalten bei Anfrage
-settings-ssh-prompt-always = Immer
+settings-ssh-prompt-always = Nachfragen (Standard: einmal erlauben)
 settings-ssh-prompt-never = Niemals
-settings-ssh-prompt-remember = Bis zum Sperren merken
-settings-integrations-other = Sonstiges
-settings-integrations-duckduckgo = DuckDuckGo-Browser-Integration aktivieren
+settings-ssh-prompt-remember = Nachfragen (Standard: bis zur Sperre)
 
 # Autotype and copy tab
 settings-autotype-heading = Auto-Eingabe
@@ -463,7 +455,6 @@ settings-advanced-minimize-to-tray = In Taskleiste minimieren
 settings-advanced-close-to-tray = In Taskleiste schließen
 settings-advanced-platform = Plattform
 settings-advanced-always-show-dock = Dock-Symbol immer anzeigen
-settings-advanced-hardware-acceleration = Hardwarebeschleunigung aktivieren
 settings-advanced-allow-screenshots = Screenshots erlauben
 
 ## Send list
@@ -629,3 +620,55 @@ export-confirm-error = Ungültiges Master-Passwort.
 export-toast-success = Tresor exportiert nach { $path }
 export-toast-failed-title = Export fehlgeschlagen
 export-toast-failed-body = Tresor konnte nicht exportiert werden. Versuche es erneut.
+
+# Local account storage and logout recovery
+storage-accounts-unavailable = Der lokale Kontospeicher ist nicht verfügbar. Aus Sicherheitsgründen wurden keine Konten geladen.
+storage-logout-incomplete = Das Konto ist abgemeldet. Lokale Kontodaten konnten noch nicht vollständig entfernt werden. Die Bereinigung wird beim nächsten Start erneut versucht.
+storage-logout-not-stored = Das Abmelden konnte nicht gespeichert werden. Das Konto ist jetzt gesperrt, kann aber nach einem Neustart wieder erscheinen. Bitte prüfe den Speicherzugriff.
+storage-logout-pending = Abmeldung wird abgeschlossen …
+
+send-item-unsupported = Das Teilen von Tresoreinträgen per Send wird noch nicht unterstützt.
+
+# Composable vault filters
+sidebar-group-vaults = Tresore
+sidebar-group-view = Ansicht
+sidebar-group-types = Eintragstypen
+sidebar-filter-all-vaults = Alle Tresore
+sidebar-filter-active-items = Aktive Einträge
+sidebar-filter-all-types = Alle Eintragstypen
+
+sidebar-group-folders = Ordner
+sidebar-filter-all-folders = Alle Ordner
+sidebar-filter-no-folder = Ohne Ordner
+sidebar-group-collections = Sammlungen
+sidebar-filter-all-collections = Alle Sammlungen
+sidebar-filter-no-collection = Ohne Sammlung
+
+vault-column-last-changed = Zuletzt geändert
+vault-column-base-url = Basis-URL
+vault-filter-folder = Ordner: { $name }
+vault-filter-collection = Sammlung: { $name }
+vault-filter-search = Suche: „{ $query }“
+
+ssh-approval-title = SSH-Anmeldung erlauben?
+ssh-approval-key = Schlüssel: { $name }
+ssh-approval-user = SSH-Benutzer: { $name }
+ssh-approval-process = Lokaler Prozess: { $name }
+ssh-approval-process-note = Der Prozessname ist ein Hinweis und bestätigt weder die Anwendung noch den Ziel-Hostnamen.
+ssh-approval-unbound = Keine verifizierte Hostschlüssel-Bindung. Diese Anfrage kann nur einmal erlaubt werden.
+ssh-approval-hosts = Verifizierte Hostschlüssel (Weiterleitungspfad → Ziel):
+ssh-approval-deny = Ablehnen
+ssh-approval-once = Einmal erlauben
+ssh-approval-remember = Bis zum Sperren erlauben
+ssh-approval-timeout = Ohne Antwort innerhalb von 45 Sekunden wird die Anfrage abgelehnt.
+ssh-agent-copy-socket = Socket-Pfad kopieren
+ssh-agent-socket-copied = SSH-Socketpfad kopiert
+ssh-agent-help = SSH_AUTH_SOCK oder die SSH-Option IdentityAgent auf diesen Pfad setzen. Nur das aktive entsperrte Konto stellt Schlüssel bereit.
+ssh-agent-unattended = Ohne Rückfragen kann jeder lokale Prozess deines Benutzers erlaubte SSH-Schlüssel verwenden, solange der aktive Tresor entsperrt ist.
+ssh-agent-protected = Gelöschte, archivierte, verborgene und durch Master-Passwort-Abfrage geschützte Schlüssel werden nicht angeboten. Freigaben bis zur Sperre benötigen eine verifizierte Sitzungsbindung und eine hostgebundene Signatur.
+
+ssh-agent-copy-setup = SSH_AUTH_SOCK-Befehl kopieren
+ssh-agent-setup-copied = SSH_AUTH_SOCK-Befehl kopiert
+ssh-approval-bound-once = Der Host-Schlüssel ist verifiziert, diese Signaturanfrage ist aber nicht hostgebunden. Nur einmalige Freigabe möglich.
+
+ssh-approval-window-open = SSH-Freigabe wartet im Bestätigungsfenster. Esc bricht die Anfrage ab.

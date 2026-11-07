@@ -18,9 +18,9 @@ use iced::{Element, Task};
 
 use crate::{
     app::{Outcome, Overlay, RenderCtx, UpdateCtx, View},
-    debug_fmt::Summary,
+    debug_fmt::{NoDebug, Summary},
     domain::UserId,
-    services::sdk::{ClientExt, ClientManager},
+    services::sdk::ClientManager,
     theme::AppTheme,
 };
 
@@ -47,12 +47,21 @@ impl VaultView {
         };
         Task::perform(
             async move {
-                client
-                    .list_ciphers()
-                    .await
-                    .map(|items| items.into_iter().map(Arc::new).collect::<Vec<_>>())
+                client.list_vault().await.map(|(items, folders)| {
+                    (
+                        Summary(items.into_iter().map(Arc::new).collect::<Vec<_>>()),
+                        NoDebug(
+                            folders
+                                .into_iter()
+                                .filter_map(|f| {
+                                    super::widgets::cipher_edit::FolderOption::try_from(f).ok()
+                                })
+                                .collect(),
+                        ),
+                    )
+                })
             },
-            move |result| VaultMessage::ListLoaded(uid, result.map(Summary)),
+            move |result| VaultMessage::ListLoaded(uid, result),
         )
     }
 }
@@ -70,7 +79,39 @@ impl View for VaultView {
     /// `App::update` call so the view can construct `Task::perform` calls
     /// without owning shared state.
     fn update(&mut self, msg: VaultMessage, mut ctx: UpdateCtx<'_>) -> Outcome<Self> {
+        self.sort = ctx.vault_sort;
+        // Detail buttons share the SDK copy path with list/menu actions. Never
+        // copy from an older detail view while a new selection is loading.
+        let msg = match (&msg, self.selection.id) {
+            (
+                VaultMessage::CipherDetail(cipher_detail::CipherDetailMessage::CopyUsername),
+                Some(id),
+            ) => {
+                VaultMessage::ItemList(super::widgets::item_list::ItemListMessage::CopyUsername(id))
+            }
+            (
+                VaultMessage::CipherDetail(cipher_detail::CipherDetailMessage::CopyPassword),
+                Some(id),
+            ) => {
+                VaultMessage::ItemList(super::widgets::item_list::ItemListMessage::CopyPassword(id))
+            }
+            (
+                VaultMessage::CipherDetail(
+                    cipher_detail::CipherDetailMessage::CopyUsername
+                    | cipher_detail::CipherDetailMessage::CopyPassword,
+                ),
+                None,
+            ) => return Outcome::None,
+            _ => msg,
+        };
+        if let Some(outcome) = self.authorize_action(&msg, &ctx) {
+            return outcome;
+        }
         match msg {
+            VaultMessage::MagnifyCopy(id, field) => {
+                return Outcome::event(VaultEvent::MagnifyCopyAuthorized(id, field));
+            }
+            VaultMessage::Authorization(message) => return self.update_authorization(message, ctx),
             VaultMessage::ItemList(m) => {
                 return self.handle_item_list(&ctx, m);
             }
@@ -81,10 +122,7 @@ impl View for VaultView {
                 }
             }
             VaultMessage::CloseCipherDetail => {
-                // Start the outro and defer the selection clear so the
-                // sheet content stays alive while the slide animates out.
-                // The wide-mode pane closes immediately — it has no
-                // animation to wait on.
+                // Hide immediately, then clean up selection without a timer.
                 let task = self
                     .selection
                     .sheet_fade
@@ -93,7 +131,9 @@ impl View for VaultView {
                 return Outcome::task(task);
             }
             VaultMessage::FinalizeSheetClose => {
-                self.selection.clear();
+                if !self.selection.sheet_fade.is_open() {
+                    self.selection.clear();
+                }
             }
             VaultMessage::PaneResized(event) => self.pane.set_ratio(event.ratio),
             VaultMessage::CipherDetail(m) => {
@@ -126,6 +166,25 @@ impl View for VaultView {
                     return Outcome::None;
                 }
                 return match inner {
+                    ForUserMessage::LoginCopied { password, result } => match result {
+                        Ok(NoDebug(value)) => list::clipboard_outcome(
+                            value,
+                            if password {
+                                crate::services::clipboard::Sensitivity::Sensitive
+                            } else {
+                                crate::services::clipboard::Sensitivity::Normal
+                            },
+                            if password {
+                                crate::fl!("vault-toast-copied-password")
+                            } else {
+                                crate::fl!("vault-toast-copied-username")
+                            },
+                        ),
+                        Err(_) => Outcome::toast(crate::components::toast::Toast::error(
+                            crate::fl!("vault-toast-decrypt-failed-body"),
+                            None,
+                        )),
+                    },
                     ForUserMessage::DetailLoaded(id, res) => {
                         self.handle_detail_loaded(&ctx, msg_uid, id, res)
                     }
@@ -154,7 +213,14 @@ impl View for VaultView {
     /// Bottom-sheet (narrow-mode cipher detail) and the delete-confirm
     /// sub-modal, in z-order: sheet first (lower), confirm on top.
     fn overlays<'a>(&'a self, ctx: &RenderCtx<'a>) -> Vec<Element<'a, VaultMessage, AppTheme>> {
-        crate::components::list_pane::overlays(self.render_sheet(ctx), self.render_overlay(ctx))
+        let mut overlays = crate::components::list_pane::overlays(
+            self.render_sheet(ctx),
+            self.render_overlay(ctx),
+        );
+        if let Some(prompt) = self.authorization_overlay(ctx) {
+            overlays.push(prompt);
+        }
+        overlays
     }
 }
 
@@ -196,62 +262,20 @@ impl VaultView {
 #[cfg(test)]
 mod tests_sheet_close {
     use super::*;
+    use crate::test_support::fixtures::make_cipher_view;
     use crate::test_support::{OutcomeExt, ViewTestExt};
-    use bitwarden_vault::{CipherRepromptType, CipherType, CipherView};
-    use chrono::Utc;
-
-    fn dummy_cipher_view() -> CipherView {
-        let now = Utc::now();
-        CipherView {
-            id: None,
-            organization_id: None,
-            folder_id: None,
-            collection_ids: Vec::new(),
-            key: None,
-            name: "test".to_string(),
-            notes: None,
-            r#type: CipherType::SecureNote,
-            login: None,
-            identity: None,
-            card: None,
-            secure_note: None,
-            ssh_key: None,
-            bank_account: None,
-            drivers_license: None,
-            passport: None,
-            favorite: false,
-            reprompt: CipherRepromptType::None,
-            organization_use_totp: false,
-            edit: true,
-            permissions: None,
-            view_password: true,
-            local_data: None,
-            attachments: None,
-            attachment_decryption_failures: None,
-            fields: None,
-            password_history: None,
-            creation_date: now,
-            deleted_date: None,
-            revision_date: now,
-            archived_date: None,
-        }
-    }
 
     fn view_with_open_sheet() -> VaultView {
         let mut view = VaultView::new();
-        view.selection.detail = Some(dummy_cipher_view());
+        view.selection.detail = Some(make_cipher_view());
         view.selection.item = Some(0);
         view.selection.sheet_fade.open();
         view
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn close_cipher_detail_starts_sheet_outro_but_keeps_selection() {
-        // The two-message close exists so the bottom-sheet animation has
-        // content to render during its slide-down. Asserting that
-        // `selection` survives `CloseCipherDetail` pins this contract —
-        // a refactor that cleared selection here would leave the
-        // animation playing against an empty sheet.
+    async fn close_cipher_detail_hides_sheet_before_immediate_cleanup() {
+        // Visibility changes immediately; the completion task owns cleanup.
         let mut view = view_with_open_sheet();
         assert!(view.selection.detail.is_some());
         assert!(view.selection.sheet_fade.is_open());
@@ -260,21 +284,20 @@ mod tests_sheet_close {
 
         // sheet_fade.is_open() flips false the moment close starts.
         assert!(!view.selection.sheet_fade.is_open());
-        // Selection is still populated — outro hasn't finalized yet.
+        // Cleanup has not been dispatched by this update-only test.
         assert!(
             view.selection.detail.is_some(),
-            "detail kept alive for the outro frame"
+            "cleanup waits for its completion message"
         );
         assert_eq!(view.selection.item, Some(0));
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn finalize_sheet_close_clears_selection() {
-        // The second half of the two-message close: this is what the
-        // delayed Task dispatches once the outro duration elapses.
+        // Cleanup completion has no sleep or animation dependency.
         let mut view = view_with_open_sheet();
         view.run(VaultMessage::CloseCipherDetail).await;
-        // After the outro:
+        // Apply the immediate completion:
         view.run(VaultMessage::FinalizeSheetClose)
             .await
             .expect_none();
@@ -282,5 +305,16 @@ mod tests_sheet_close {
         assert!(view.selection.detail.is_none());
         assert!(view.selection.item.is_none());
         assert!(view.selection.id.is_none());
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn old_sheet_cleanup_does_not_clear_reopened_selection() {
+        let mut view = view_with_open_sheet();
+        view.run(VaultMessage::CloseCipherDetail).await;
+        view.selection.sheet_fade.open();
+        view.run(VaultMessage::FinalizeSheetClose)
+            .await
+            .expect_none();
+        assert!(view.selection.detail.is_some());
+        assert!(view.selection.sheet_fade.is_visible());
     }
 }

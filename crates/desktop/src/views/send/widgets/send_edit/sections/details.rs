@@ -43,6 +43,9 @@ pub(in super::super) fn details_card<'a>(
         SendType::File => {
             items.push(file_section(form, colors));
         }
+        SendType::Item => {
+            items.push(text(fl!("send-item-unsupported")).into());
+        }
     }
 
     items.push(deletion_date_field(form, colors));

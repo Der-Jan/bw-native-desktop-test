@@ -5,7 +5,7 @@ use bitwarden_core::OrganizationId;
 use bitwarden_vault::{FieldType, FolderId};
 use iced::widget::text_editor;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum CipherEditMessage {
     // Item details (universal)
     NameChanged(String),
@@ -119,4 +119,10 @@ pub enum FormEvent {
     None,
     Save,
     Cancel,
+}
+
+impl std::fmt::Debug for CipherEditMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CipherEditMessage(<redacted>)")
+    }
 }

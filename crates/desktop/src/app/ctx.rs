@@ -18,7 +18,7 @@
 
 use std::future::Future;
 
-use bitwarden_pm::PasswordManagerClient;
+use crate::services::sdk::SessionClient;
 use iced::Task;
 
 use crate::{
@@ -26,7 +26,7 @@ use crate::{
     domain::UserId,
     services::{
         favicon::FaviconService,
-        sdk::{AccountEntry, ClientManager},
+        sdk::{AccountEntry, ClientManager, SessionToken},
     },
     theme::AppColors,
     views::{send::SendFilter, vault::VaultFilter},
@@ -51,6 +51,7 @@ pub enum Overlay {
 /// Services + session passed to each view's `update()`. Rebuilt per call;
 /// moved in by value because it holds `&mut` to App state (`open_overlay`).
 pub struct UpdateCtx<'a> {
+    pub vault_sort: crate::services::vault_sort::VaultSort,
     /// `&mut` so views can call sync mutating methods (`save_send`,
     /// `push_history`, …). Async SDK work runs on a `client_for(uid)` handle
     /// captured at the start of the task; the manager itself is never
@@ -74,7 +75,7 @@ impl UpdateCtx<'_> {
     }
 
     /// View-side mirror of `App::perform_with_active_client`. Extracts the
-    /// active user's `PasswordManagerClient`, runs an async call against it,
+    /// active user's revocable `SessionClient`, runs an async call against it,
     /// and wraps the result `Task` in `Outcome::Task` for direct return from
     /// a view's `update` arm. `Outcome::None` if no active user or the user
     /// isn't loaded.
@@ -86,7 +87,7 @@ impl UpdateCtx<'_> {
     where
         V: View,
         V::Message: Send + 'static,
-        Spawn: FnOnce(PasswordManagerClient) -> Fut,
+        Spawn: FnOnce(SessionClient) -> Fut,
         Fut: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
@@ -109,7 +110,7 @@ impl UpdateCtx<'_> {
     where
         V: View,
         V::Message: Send + 'static,
-        Spawn: FnOnce(PasswordManagerClient) -> Fut,
+        Spawn: FnOnce(SessionClient) -> Fut,
         Fut: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
@@ -123,9 +124,15 @@ impl UpdateCtx<'_> {
 /// Render-time context passed to each view's `view()` and view-internal render
 /// helpers. Also the only bundle a component may accept as a parameter.
 pub struct RenderCtx<'a> {
+    pub ssh_agent: &'a crate::services::ssh_agent::AgentRuntime,
+    pub active_vault_filter: VaultFilter,
     pub colors: &'a AppColors,
     pub favicon: &'a FaviconService,
     pub show_favicons: bool,
+    pub remote_vault: bool,
+    pub last_sync: Option<chrono::DateTime<chrono::Utc>>,
+    pub syncing: bool,
+    pub sync_error: Option<&'a str>,
     pub window_width: f32,
     pub active_user: Option<&'a UserId>,
     pub active_email: Option<&'a str>,
@@ -325,12 +332,23 @@ where
     pub fn dispatch<S, TopMsg, F>(self, state: &mut S, handle_event: F) -> Task<TopMsg>
     where
         S: PushToast,
-        TopMsg: From<V::Message> + Send + 'static,
+        TopMsg: From<V::Message> + SessionScoped + Send + 'static,
         F: FnOnce(&mut S, V::Event) -> Task<TopMsg>,
     {
         match self {
             Self::None => Task::none(),
-            Self::Task(t) => t.map(Into::into),
+            Self::Task(t) => {
+                let scope = state.task_scope();
+                t.map(move |message| {
+                    let top: TopMsg = message.into();
+                    match &scope {
+                        Some((session, presentation)) => {
+                            top.for_session(session.clone(), *presentation)
+                        }
+                        None => top,
+                    }
+                })
+            }
             Self::Event(e) => handle_event(state, e),
             Self::Toast(t) => {
                 state.push_toast(t);
@@ -345,6 +363,14 @@ where
 /// decoupled from concrete app state.
 pub trait PushToast {
     fn push_toast(&mut self, toast: Toast);
+    fn task_scope(&self) -> Option<(SessionToken, u64)> {
+        None
+    }
+}
+
+/// Converts a task result into a message with revocable UI authority.
+pub trait SessionScoped {
+    fn for_session(self, session: SessionToken, presentation: u64) -> Self;
 }
 
 #[cfg(test)]
@@ -402,6 +428,12 @@ mod tests {
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum TopMsg {
         View(FakeMsg),
+    }
+
+    impl SessionScoped for TopMsg {
+        fn for_session(self, _session: SessionToken, _presentation: u64) -> Self {
+            self
+        }
     }
 
     impl From<FakeMsg> for TopMsg {

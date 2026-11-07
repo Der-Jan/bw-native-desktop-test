@@ -214,21 +214,49 @@ impl CipherForm {
             DlFirstNameChanged(s) => dl_set(&mut self.modified, |d| &mut d.first_name, s),
             DlMiddleNameChanged(s) => dl_set(&mut self.modified, |d| &mut d.middle_name, s),
             DlLastNameChanged(s) => dl_set(&mut self.modified, |d| &mut d.last_name, s),
-            DlDateOfBirthChanged(s) => dl_set(&mut self.modified, |d| &mut d.date_of_birth, s),
+            DlDateOfBirthChanged(s) => {
+                self.dates.birth = s;
+                if let Some(value) = self.modified.drivers_license.as_mut()
+                    && let Ok(date) = parse_date(&self.dates.birth)
+                {
+                    value.date_of_birth = date;
+                }
+            }
             DlLicenseNumberChanged(s) => dl_set(&mut self.modified, |d| &mut d.license_number, s),
             DlIssuingCountryChanged(s) => dl_set(&mut self.modified, |d| &mut d.issuing_country, s),
             DlIssuingStateChanged(s) => dl_set(&mut self.modified, |d| &mut d.issuing_state, s),
             DlIssuingAuthorityChanged(s) => {
                 dl_set(&mut self.modified, |d| &mut d.issuing_authority, s)
             }
-            DlIssueDateChanged(s) => dl_set(&mut self.modified, |d| &mut d.issue_date, s),
-            DlExpirationDateChanged(s) => dl_set(&mut self.modified, |d| &mut d.expiration_date, s),
+            DlIssueDateChanged(s) => {
+                self.dates.issued = s;
+                if let Some(value) = self.modified.drivers_license.as_mut()
+                    && let Ok(date) = parse_date(&self.dates.issued)
+                {
+                    value.issue_date = date;
+                }
+            }
+            DlExpirationDateChanged(s) => {
+                self.dates.expires = s;
+                if let Some(value) = self.modified.drivers_license.as_mut()
+                    && let Ok(date) = parse_date(&self.dates.expires)
+                {
+                    value.expiration_date = date;
+                }
+            }
             DlLicenseClassChanged(s) => dl_set(&mut self.modified, |d| &mut d.license_class, s),
 
             // Passport
             PpGivenNameChanged(s) => pp_set(&mut self.modified, |p| &mut p.given_name, s),
             PpSurnameChanged(s) => pp_set(&mut self.modified, |p| &mut p.surname, s),
-            PpDateOfBirthChanged(s) => pp_set(&mut self.modified, |p| &mut p.date_of_birth, s),
+            PpDateOfBirthChanged(s) => {
+                self.dates.birth = s;
+                if let Some(value) = self.modified.passport.as_mut()
+                    && let Ok(date) = parse_date(&self.dates.birth)
+                {
+                    value.date_of_birth = date;
+                }
+            }
             PpSexChanged(s) => pp_set(&mut self.modified, |p| &mut p.sex, s),
             PpBirthPlaceChanged(s) => pp_set(&mut self.modified, |p| &mut p.birth_place, s),
             PpNationalityChanged(s) => pp_set(&mut self.modified, |p| &mut p.nationality, s),
@@ -243,8 +271,22 @@ impl CipherForm {
             PpIssuingAuthorityChanged(s) => {
                 pp_set(&mut self.modified, |p| &mut p.issuing_authority, s)
             }
-            PpIssueDateChanged(s) => pp_set(&mut self.modified, |p| &mut p.issue_date, s),
-            PpExpirationDateChanged(s) => pp_set(&mut self.modified, |p| &mut p.expiration_date, s),
+            PpIssueDateChanged(s) => {
+                self.dates.issued = s;
+                if let Some(value) = self.modified.passport.as_mut()
+                    && let Ok(date) = parse_date(&self.dates.issued)
+                {
+                    value.issue_date = date;
+                }
+            }
+            PpExpirationDateChanged(s) => {
+                self.dates.expires = s;
+                if let Some(value) = self.modified.passport.as_mut()
+                    && let Ok(date) = parse_date(&self.dates.expires)
+                {
+                    value.expiration_date = date;
+                }
+            }
 
             // Custom fields
             CustomFieldAdded => {
@@ -346,6 +388,14 @@ fn dl_set(
 fn pp_set(cv: &mut CipherView, pick: impl Fn(&mut PassportView) -> &mut Option<String>, s: String) {
     if let Some(p) = cv.passport.as_mut() {
         *pick(p) = opt_string(s);
+    }
+}
+
+fn parse_date(value: &str) -> Result<Option<chrono::NaiveDate>, chrono::ParseError> {
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        value.parse().map(Some)
     }
 }
 

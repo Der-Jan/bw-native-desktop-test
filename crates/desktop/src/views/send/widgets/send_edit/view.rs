@@ -31,6 +31,7 @@ pub fn view<'a>(
         (true, SendType::File) => fl!("send-form-title-new-file"),
         (false, SendType::Text) => fl!("send-form-title-edit-text"),
         (false, SendType::File) => fl!("send-form-title-edit-file"),
+        (_, SendType::Item) => fl!("send-item-unsupported"),
     };
 
     let header = components::pane_header(title, SendEditMessage::CancelPressed, colors);

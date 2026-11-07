@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use bitwarden_pm::PasswordManagerClient;
+use crate::services::sdk::SessionClient;
 use iced::Task;
 
 use crate::{
@@ -9,7 +9,7 @@ use crate::{
     services::{clipboard::Sensitivity, sdk::AccountEntry},
 };
 
-use super::{App, Message, window::WindowKind};
+use super::{App, Message, ctx::SessionScoped, window::WindowKind};
 
 impl App {
     pub(crate) fn main_window_id(&self) -> iced::window::Id {
@@ -69,7 +69,7 @@ impl App {
     }
 
     /// Bundle the most common SDK call shape: extract the active user's
-    /// `PasswordManagerClient`, run an async call against it, and route the
+    /// `SessionClient`, run an async call against it, and route the
     /// result through `on_complete`. `Task::none()` if no active user or the
     /// user isn't loaded — the same defensive bail every handler used to
     /// open with by hand.
@@ -84,7 +84,7 @@ impl App {
         on_complete: impl Fn(UserId, T) -> Message + Send + 'static,
     ) -> Task<Message>
     where
-        Spawn: FnOnce(PasswordManagerClient) -> Fut,
+        Spawn: FnOnce(SessionClient) -> Fut,
         Fut: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
@@ -105,14 +105,18 @@ impl App {
         on_complete: impl Fn(T) -> Message + Send + 'static,
     ) -> Task<Message>
     where
-        Spawn: FnOnce(PasswordManagerClient) -> Fut,
+        Spawn: FnOnce(SessionClient) -> Fut,
         Fut: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
         let Some(client) = self.client_manager.client_for(&uid) else {
             return Task::none();
         };
-        Task::perform(spawn(client), on_complete)
+        let session = client.session();
+        let presentation = self.presentation_generation;
+        Task::perform(spawn(client), move |result| {
+            on_complete(result).for_session(session.clone(), presentation)
+        })
     }
 
     pub(crate) fn active_account_entry(&self) -> Option<&AccountEntry> {
@@ -153,13 +157,18 @@ impl App {
     /// ticking while the user is locked. The deadline is recomputed because
     /// `lock_after` is no longer relevant for this user.
     pub(crate) fn lock_user(&mut self, uid: &UserId) -> Task<Message> {
-        self.client_manager.lock(uid);
+        let cleanup = self.client_manager.lock(uid);
+        self.views.vault.remove_user_items(uid);
+        self.views.send.remove_user_items(uid);
+        self.favicon.evict_user(uid);
         self.refresh_session_timeout_deadline();
-        if self.active_user.as_ref() == Some(uid) {
+        let route = if self.active_user.as_ref() == Some(uid) {
+            self.clear_sensitive_ui();
             self.show_login_for_active()
         } else {
             Task::none()
-        }
+        };
+        Task::batch([Self::finish_session_cleanup(cleanup), route])
     }
 
     /// Modal-open preamble shared across the four `open_*_modal` helpers:
@@ -167,6 +176,9 @@ impl App {
     /// overlay so a stale dropdown doesn't sit behind the new modal.
     pub(crate) fn require_active_user_and_close_overlay(&mut self) -> Option<UserId> {
         let uid = self.active_user?;
+        if !self.client_manager.is_unlocked(&uid) {
+            return None;
+        }
         self.open_overlay = None;
         Some(uid)
     }
@@ -231,12 +243,84 @@ impl App {
     /// [`Self::handle_log_out`] but without the active-user-transition
     /// step, so callers that want to log out a non-active user (or batch
     /// multiple) don't trip the screen swap.
-    pub(crate) fn log_out_user(&mut self, uid: &UserId) {
+    pub(crate) fn log_out_user(&mut self, uid: &UserId) -> Task<Message> {
+        self.sync_status.remove(uid);
+        let cleanup = self.client_manager.log_out(uid);
+        let removed_preferences = self.settings.user_preferences.remove(uid).is_some();
+        let removed_filter = self.settings.vault_filters.remove(uid).is_some();
+        if removed_preferences || removed_filter {
+            self.settings.save();
+        }
         self.views.vault.remove_user_items(uid);
         self.views.send.remove_user_items(uid);
         self.favicon.evict_user(uid);
-        self.client_manager.log_out(uid);
         self.session_timeout.unenroll(uid);
+        if self.active_user.as_ref() == Some(uid) {
+            self.clear_sensitive_ui();
+        }
+        match cleanup {
+            Some(cleanup) => {
+                let operation = uuid::Uuid::new_v4();
+                self.pending_logouts.insert(operation);
+                Task::perform(cleanup.finish(), move |result| {
+                    Message::System(super::SystemMessage::LogoutCompleted { operation, result })
+                })
+            }
+            None => Task::none(),
+        }
+    }
+
+    /// Let durable removals finish before normal application shutdown.
+    pub(crate) fn request_exit(&mut self) -> Task<Message> {
+        self.shutting_down = true;
+        self.ssh_agent.stop();
+        let cancel = self.cancel_ssh_approval();
+        if !self.pending_logouts.is_empty() {
+            self.exit_after_logout = true;
+            cancel
+        } else {
+            Task::batch([cancel, iced::exit()])
+        }
+    }
+
+    pub(crate) fn finish_session_cleanup(
+        cleanup: Option<crate::services::sdk::LockOperation>,
+    ) -> Task<Message> {
+        match cleanup {
+            Some(cleanup) => Task::perform(cleanup.finish(), |session| {
+                Message::System(super::SystemMessage::SessionQuiesced(session))
+            }),
+            None => Task::none(),
+        }
+    }
+
+    /// Discard secret-bearing UI immediately, without retaining an outro frame.
+    pub(crate) fn clear_sensitive_ui(&mut self) {
+        self.client_manager.clear_grants();
+        self.views.login.cancel_login();
+        self.presentation_generation = self
+            .presentation_generation
+            .checked_add(1)
+            .expect("presentation generation exhausted");
+        self.open_overlay = None;
+        self.toasts.clear();
+        self.clipboard.clear_owned();
+        self.magnify_reset_sticky();
+        self.magnify.mode = crate::views::magnify::Mode::Locked;
+        if let Some(uid) = self.active_user {
+            self.views
+                .vault
+                .reset(&uid, self.sidebar.active_vault_filter);
+            self.views.send.reset(&uid, self.sidebar.active_send_filter);
+        }
+        self.views.login = crate::views::login::LoginView::new();
+        self.views.generator = crate::views::generator::GeneratorView::new();
+        self.views.export = crate::views::export::ExportView::new();
+        self.views.import = crate::views::import::ImportView::new();
+        self.views.new_folder = crate::views::new_folder::NewFolderView::new();
+        self.views.new_item_picker = Default::default();
+        self.views.fingerprint = Default::default();
+        self.views.screenshot_confirm = Default::default();
     }
 
     /// Log out a specific user from the File → Log out per-account submenu.
@@ -246,10 +330,10 @@ impl App {
         if self.active_user.as_ref() == Some(&uid) {
             self.handle_log_out()
         } else {
-            self.log_out_user(&uid);
+            let cleanup = self.log_out_user(&uid);
             self.refresh_accounts_cache();
             self.refresh_session_timeout_deadline();
-            Task::none()
+            cleanup
         }
     }
 
@@ -266,10 +350,11 @@ impl App {
 
         // Inline logouts run first so `handle_log_out`'s next-active-user
         // hand-off only sees the post-cleanup `client_manager`.
-        for uid in &plan.inline_logouts {
-            self.log_out_user(uid);
-        }
-        let mut tasks: Vec<Task<Message>> = Vec::new();
+        let mut tasks: Vec<Task<Message>> = plan
+            .inline_logouts
+            .iter()
+            .map(|uid| self.log_out_user(uid))
+            .collect();
         if plan.handle_active_logout {
             tasks.push(self.handle_log_out());
         }
@@ -312,15 +397,25 @@ impl App {
     /// Lift `VaultView::load_list_task` into a top-level `Task<Message>`,
     /// hiding the per-call-site `.map(Into::into)`.
     pub(crate) fn load_vault_list_task(&self, uid: UserId) -> Task<Message> {
-        crate::views::vault::VaultView::load_list_task(uid, &self.client_manager).map(Into::into)
+        let Some(session) = self.client_manager.session_for(&uid) else {
+            return Task::none();
+        };
+        let presentation = self.presentation_generation;
+        crate::views::vault::VaultView::load_list_task(uid, &self.client_manager)
+            .map(move |m| Message::from(m).for_session(session.clone(), presentation))
     }
 
     pub(crate) fn load_send_list_task(&self, uid: UserId) -> Task<Message> {
-        crate::views::send::SendView::load_list_task(uid, &self.client_manager).map(Into::into)
+        let Some(session) = self.client_manager.session_for(&uid) else {
+            return Task::none();
+        };
+        let presentation = self.presentation_generation;
+        crate::views::send::SendView::load_list_task(uid, &self.client_manager)
+            .map(move |m| Message::from(m).for_session(session.clone(), presentation))
     }
 
-    /// Synthesize a `VaultMessage::CipherDetail(...)` so the Edit-menu copy
-    /// shortcuts route through the same handler as the in-app copy buttons.
+    /// Route Edit-menu copying through the same ID-bound SDK operation as
+    /// the list buttons; TOTP continues through the detail handler.
     /// No-op when the user isn't on the Vault screen or no cipher is selected
     /// (matches the official client — the menu fires regardless and the
     /// vault decides whether there's anything to copy).
@@ -331,7 +426,22 @@ impl App {
         if self.screen != Screen::Vault {
             return Task::none();
         }
-        Task::done(crate::views::vault::VaultMessage::CipherDetail(msg).into())
+        use crate::views::vault::widgets::{
+            cipher_detail::CipherDetailMessage, item_list::ItemListMessage,
+        };
+        let Some(id) = self.views.vault.selected_id() else {
+            return Task::none();
+        };
+        let message = match msg {
+            CipherDetailMessage::CopyUsername => {
+                crate::views::vault::VaultMessage::ItemList(ItemListMessage::CopyUsername(id))
+            }
+            CipherDetailMessage::CopyPassword => {
+                crate::views::vault::VaultMessage::ItemList(ItemListMessage::CopyPassword(id))
+            }
+            other => crate::views::vault::VaultMessage::CipherDetail(other),
+        };
+        Task::done(message.into())
     }
 
     /// Rebuild the cached menu tree and re-attach the native menu so all
@@ -376,6 +486,14 @@ impl App {
 impl crate::app::PushToast for App {
     fn push_toast(&mut self, toast: crate::components::toast::Toast) {
         App::push_toast(self, toast);
+    }
+
+    fn task_scope(&self) -> Option<(crate::services::sdk::SessionToken, u64)> {
+        Some((
+            self.client_manager
+                .session_for(self.active_user.as_ref()?)?,
+            self.presentation_generation,
+        ))
     }
 }
 

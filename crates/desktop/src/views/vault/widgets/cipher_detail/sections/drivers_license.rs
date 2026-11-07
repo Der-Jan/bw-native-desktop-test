@@ -52,7 +52,7 @@ pub(in super::super) fn drivers_license_card<'a>(
     push_optional_field(
         &mut fields,
         fl!("detail-field-dl-date-of-birth"),
-        dl.date_of_birth.as_deref(),
+        dl.date_of_birth.map(|date| date.to_string()),
         colors,
     );
     push_optional_field(
@@ -76,13 +76,13 @@ pub(in super::super) fn drivers_license_card<'a>(
     push_optional_field(
         &mut fields,
         fl!("detail-field-dl-issue-date"),
-        dl.issue_date.as_deref(),
+        dl.issue_date.map(|date| date.to_string()),
         colors,
     );
     push_optional_field(
         &mut fields,
         fl!("detail-field-dl-expiration-date"),
-        dl.expiration_date.as_deref(),
+        dl.expiration_date.map(|date| date.to_string()),
         colors,
     );
     push_optional_field(

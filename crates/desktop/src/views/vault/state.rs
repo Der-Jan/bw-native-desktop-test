@@ -8,32 +8,22 @@ use std::{collections::HashMap, sync::Arc};
 use bitwarden_vault::{CipherId, CipherListView, CipherView};
 use iced::Task;
 
-use bitwarden_core::OrganizationId;
-
 use crate::{
     components::{FadeInOut, collapsible_pane::CollapsiblePane, virtual_list},
     domain::UserId,
-    services::sdk::Organization,
+    services::sdk::{Collection, Organization},
 };
 
-use super::{VaultMessage, widgets::cipher_edit::CipherForm};
+use super::{
+    VaultMessage,
+    widgets::cipher_edit::{CipherForm, FolderOption},
+};
 
 // ── View-local domain ──────────────────────────────────────────────────────
 
-/// Filter applied to the cipher list. Selected from the sidebar; the sidebar
-/// imports this type from here so the filter shape stays owned by the vault
-/// view that defines its semantics.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum VaultFilter {
-    /// "Vault" parent — every cipher the user can see.
-    AllItems,
-    Personal,
-    Organization(OrganizationId),
-    Favorites,
-    Category(bitwarden_vault::CipherType),
-    Archive,
-    Trash,
-}
+pub use crate::services::vault_navigation::{
+    CollectionFilter, FolderFilter, VaultFilter, VaultScope, VaultSection,
+};
 
 /// Ratio the detail/form pane opens to the first time (list 60% / detail 40%).
 const INITIAL_DETAIL_PANE_RATIO: f32 = 0.4;
@@ -52,10 +42,7 @@ pub(super) struct Selection {
     /// when selection changes, the user cancels, or any non-delete
     /// detail-pane message arrives.
     pub(super) confirm_delete: FadeInOut,
-    /// Bottom-sheet (narrow-mode) in/out animation. Driven alongside
-    /// `detail`: setters call `.open()`, `CloseCipherDetail` calls `.close()`
-    /// and schedules a delayed `clear()` per the FadeInOut delayed-cleanup
-    /// pattern.
+    /// Immediate visibility gate for the narrow-mode bottom sheet.
     pub(super) sheet_fade: FadeInOut,
 }
 
@@ -75,11 +62,17 @@ pub(super) struct ItemCache {
     pub(super) all: Vec<Arc<CipherListView>>,
     pub(super) cached: Vec<Arc<CipherListView>>,
     pub(super) organizations: Vec<Organization>,
+    pub(super) sort_keys: HashMap<CipherId, crate::services::vault_sort::SortKey>,
+    pub(super) folders: Vec<FolderOption>,
+    pub(super) collections: Vec<Collection>,
 }
 
 // ── VaultView ──────────────────────────────────────────────────────────────
 
 pub struct VaultView {
+    pub(super) sort: crate::services::vault_sort::VaultSort,
+    pub(super) restore_selection: Option<CipherId>,
+    pub(super) reauthorize: Option<super::authorization::Prompt>,
     pub(super) search_query: String,
     /// Persistent list/detail split. Mounted from construction so iced's
     /// `pane_grid::diff` never drops the right pane's child tree state
@@ -102,6 +95,9 @@ pub struct VaultView {
 impl VaultView {
     pub fn new() -> Self {
         Self {
+            reauthorize: None,
+            restore_selection: None,
+            sort: Default::default(),
             search_query: String::new(),
             pane: CollapsiblePane::new(INITIAL_DETAIL_PANE_RATIO),
             selection: Selection::default(),
@@ -110,10 +106,18 @@ impl VaultView {
         }
     }
 
+    pub fn selected_id(&self) -> Option<CipherId> {
+        self.selection.id
+    }
+    pub fn restore_selection_after_sync(&mut self, id: Option<CipherId>) {
+        self.restore_selection = id;
+    }
     /// Reset transient view state when switching users. Item caches are
     /// preserved in the map — keyed by user so they can't mix. Callers are
     /// expected to reset the sidebar filter separately (it lives on App).
     pub fn reset(&mut self, uid: &UserId, filter: VaultFilter) {
+        self.reauthorize = None;
+        self.restore_selection = None;
         self.search_query.clear();
         self.selection.clear();
         self.pane.close();
@@ -133,6 +137,19 @@ impl VaultView {
         self.items.get(uid).map(|ic| ic.organizations.as_slice())
     }
 
+    pub fn folders_for(&self, uid: &UserId) -> &[FolderOption] {
+        self.items
+            .get(uid)
+            .map(|ic| ic.folders.as_slice())
+            .unwrap_or(&[])
+    }
+    pub fn collections_for(&self, uid: &UserId) -> &[Collection] {
+        self.items
+            .get(uid)
+            .map(|ic| ic.collections.as_slice())
+            .unwrap_or(&[])
+    }
+
     /// Raw decrypted item list for a user — the unfiltered backing store.
     /// Includes archived and deleted ciphers; consumers (e.g. the Magnify
     /// launcher) are responsible for excluding `archived_date` / `deleted_date`
@@ -145,6 +162,7 @@ impl VaultView {
     /// focus. Called by the `File → Search vault` menu action; encapsulated
     /// here so `app/` doesn't need to reach into `widgets::search_bar`.
     pub(crate) fn focus_search_task(&mut self) -> Task<VaultMessage> {
+        self.reauthorize = None;
         self.search_query.clear();
         iced::widget::operation::focus(super::widgets::search_bar::SEARCH_ID)
     }
@@ -173,6 +191,20 @@ impl VaultView {
         Task::perform(
             tokio::time::sleep(std::time::Duration::from_millis(50)),
             |_| VaultMessage::AutoFocusSearchDelayed,
+        )
+    }
+}
+
+impl VaultView {
+    /// A replacement native surface has a fresh widget tree. Reapply the cached
+    /// viewport so virtualization and the scrollbar agree on the first frame.
+    pub fn restore_surface_scroll<M: Send + 'static>(&self) -> iced::Task<M> {
+        iced::widget::operation::scroll_to(
+            super::widgets::item_list::LIST_ID,
+            iced::widget::scrollable::AbsoluteOffset {
+                x: None,
+                y: Some(self.list_scroll.offset_y),
+            },
         )
     }
 }

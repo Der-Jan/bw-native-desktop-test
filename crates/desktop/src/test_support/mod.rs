@@ -12,7 +12,7 @@
 //! ```ignore
 //! let mut app = App::test();
 //! app.active_user = Some(uid);
-//! app.sidebar.active_vault_filter = VaultFilter::Trash;
+//! app.sidebar.active_vault_filter = VaultFilter::default().with_section(VaultSection::Trash);
 //! let out = view.update(msg, app.update_ctx());
 //! ```
 //!
@@ -77,7 +77,7 @@
 
 pub mod fixtures;
 
-use std::{path::Path, sync::OnceLock, thread, time::Duration};
+use std::{path::Path, sync::OnceLock};
 
 use iced::{Element, Settings};
 use iced_test::simulator::Simulator;
@@ -90,9 +90,8 @@ use crate::{
     theme::AppTheme,
 };
 
-/// Force the headless renderer backend to `tiny-skia` so snapshot bytes are
-/// reproducible across machines (wgpu output drifts by GPU driver / mesa
-/// version). Idempotent and parallel-safe via `OnceLock`.
+/// Select the same `tiny-skia` backend as the application for headless
+/// snapshots. Idempotent and parallel-safe via `OnceLock`.
 pub fn init() {
     static INIT: OnceLock<()> = OnceLock::new();
     INIT.get_or_init(|| {
@@ -106,12 +105,8 @@ pub fn init() {
     });
 }
 
-/// Sleep past the default `FadeInOut` duration + jitter buffer so any
-/// overlay-style view captures its fully-opened frame instead of a
-/// mid-animation one.
-pub fn settle_animations() {
-    thread::sleep(Duration::from_millis(300));
-}
+/// Compatibility hook for snapshots; dialogs now open immediately.
+pub fn settle_animations() {}
 
 /// Build a [`Simulator`] with the app's production fonts loaded so text and
 /// icon glyphs render identically to the running binary.
@@ -354,11 +349,13 @@ impl App {
             WindowInfo::new(WindowKind::Main, crate::app::MAIN_WINDOW_SIZE),
         );
 
-        let animation = crate::services::animation::AnimationWatermark::new();
-        crate::services::animation::register(&animation);
-
         Self {
             active_user: None,
+            presentation_generation: 0,
+            storage_warning: None,
+            pending_logouts: Default::default(),
+            sync_status: Default::default(),
+            exit_after_logout: false,
             client_manager: ClientManager::empty(),
             settings: Settings::default(),
 
@@ -370,17 +367,28 @@ impl App {
             windows,
             main_window,
             main_window_focused: true,
+            main_window_hidden: false,
+            main_window_suspended: false,
             magnify: crate::views::magnify::MagnifyView::new(magnify_id),
 
-            theme: crate::app::ThemeState::new(ThemePreference::Light),
+            // Tests use a fixed theme and must not start the OS observer's
+            // blocking D-Bus runtime from inside their Tokio runtime.
+            theme: crate::app::ThemeState {
+                preference: ThemePreference::Light,
+                current: AppTheme::light(),
+                system: None,
+            },
             menu: crate::services::menu::menu_tree(),
             native_menu: None,
             main_window_raw_id: None,
             tray: None,
 
+            ssh_agent: crate::services::ssh_agent::AgentRuntime::new(),
+            ssh_approval: None,
+            ssh_approval_window: None,
+            shutting_down: false,
             clipboard: crate::services::clipboard::ClipboardManager::new(),
             favicon: crate::services::favicon::FaviconService::new(Arc::new(|_uid| String::new())),
-            animation,
             session_timeout: crate::services::session_timeout::SessionTimeout::new(),
 
             open_overlay: None,
@@ -399,6 +407,7 @@ impl App {
         let active_vault_filter = self.sidebar.active_vault_filter;
         let active_send_filter = self.sidebar.active_send_filter;
         crate::app::UpdateCtx {
+            vault_sort: self.settings.vault_sort,
             client_manager: &mut self.client_manager,
             active_user: self.active_user.as_ref(),
             active_vault_filter,

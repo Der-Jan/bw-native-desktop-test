@@ -322,7 +322,6 @@ menu-view-reset-zoom = Zoom resetten
 menu-view-toggle-fullscreen = Volledig scherm aan/uit
 
 ## Menu — Account
-menu-account-premium = Premium-lidmaatschap
 menu-account-change-password = Hoofdwachtwoord wijzigen
 menu-account-two-step = Tweestapsaanmelding
 menu-account-fingerprint = Vingerafdrukzin
@@ -342,12 +341,7 @@ menu-help-legal-tos = Servicevoorwaarden
 menu-help-legal-privacy = Privacybeleid
 menu-help-follow = Volg ons
 menu-help-web-vault = Naar webkluis
-menu-help-mobile-app = Mobiele app downloaden
 menu-help-browser-extension = Browser-extensie downloaden
-menu-help-troubleshooting = Probleemoplossing
-menu-help-troubleshooting-gpu = Hardwareversnelling aan/uit
-menu-help-toast-hw-accel-on = Hardwareversnelling ingeschakeld. Start Bitwarden opnieuw om toe te passen.
-menu-help-toast-hw-accel-off = Hardwareversnelling uitgeschakeld. Start Bitwarden opnieuw om toe te passen.
 menu-help-about = Over Bitwarden
 
 menu-toast-sync-success = Kluis gesynchroniseerd
@@ -432,11 +426,9 @@ settings-integrations-browser-fingerprint = Verificatie-vingerafdruk vereisen
 settings-integrations-ssh = SSH-agent
 settings-integrations-ssh-enable = SSH-agent inschakelen
 settings-integrations-ssh-prompt = Promptgedrag
-settings-ssh-prompt-always = Altijd
+settings-ssh-prompt-always = Ask (default: allow once)
 settings-ssh-prompt-never = Nooit
-settings-ssh-prompt-remember = Onthouden tot vergrendelen
-settings-integrations-other = Overig
-settings-integrations-duckduckgo = DuckDuckGo-browser-integratie inschakelen
+settings-ssh-prompt-remember = Ask (default: allow until lock)
 
 # Autotype and copy tab
 settings-autotype-heading = Auto-typen
@@ -463,7 +455,6 @@ settings-advanced-minimize-to-tray = Minimaliseren naar systeemvak
 settings-advanced-close-to-tray = Sluiten naar systeemvak
 settings-advanced-platform = Platform
 settings-advanced-always-show-dock = Dock-pictogram altijd tonen
-settings-advanced-hardware-acceleration = Hardwareversnelling inschakelen
 settings-advanced-allow-screenshots = Schermafbeeldingen toestaan
 
 ## Send list
@@ -629,3 +620,47 @@ export-confirm-error = Ongeldig hoofdwachtwoord.
 export-toast-success = Kluis geëxporteerd naar { $path }
 export-toast-failed-title = Export mislukt
 export-toast-failed-body = De kluis kon niet worden geëxporteerd. Probeer het opnieuw.
+
+# Composable vault filters
+sidebar-group-vaults = Kluizen
+sidebar-group-view = Weergave
+sidebar-group-types = Itemtypen
+sidebar-filter-all-vaults = Alle kluizen
+sidebar-filter-active-items = Actieve items
+sidebar-filter-all-types = Alle itemtypen
+
+sidebar-group-folders = Mappen
+sidebar-filter-all-folders = Alle mappen
+sidebar-filter-no-folder = Geen map
+sidebar-group-collections = Collecties
+sidebar-filter-all-collections = Alle collecties
+sidebar-filter-no-collection = Geen collectie
+
+vault-column-last-changed = Laatst gewijzigd
+vault-column-base-url = Basis-URL
+vault-filter-folder = Map: { $name }
+vault-filter-collection = Collectie: { $name }
+vault-filter-search = Zoeken: “{ $query }”
+
+ssh-approval-title = Allow SSH authentication?
+ssh-approval-key = Key: { $name }
+ssh-approval-user = SSH user: { $name }
+ssh-approval-process = Local process: { $name }
+ssh-approval-process-note = The process name is informational and does not verify an application or destination hostname.
+ssh-approval-unbound = No verified host-key binding. This request can only be approved once.
+ssh-approval-hosts = Verified host keys (forwarding path → destination):
+ssh-approval-deny = Deny
+ssh-approval-once = Allow once
+ssh-approval-remember = Allow until lock
+ssh-approval-timeout = No response within 45 seconds denies the request.
+ssh-agent-copy-socket = Copy socket path
+ssh-agent-socket-copied = SSH socket path copied
+ssh-agent-help = Set SSH_AUTH_SOCK or the SSH IdentityAgent option to this path. Only the active unlocked account provides keys.
+ssh-agent-unattended = Without prompts, any local process of your user can use permitted SSH keys while the active vault is unlocked.
+ssh-agent-protected = Deleted, archived, hidden-password and master-password-reprompt keys are not offered. Remembered approvals require a verified session binding and a host-bound signature.
+
+ssh-agent-copy-setup = Copy SSH_AUTH_SOCK command
+ssh-agent-setup-copied = SSH_AUTH_SOCK command copied
+ssh-approval-bound-once = The host key is verified, but this signing request is not host-bound. Only one-use approval is available.
+
+ssh-approval-window-open = SSH approval is waiting in its confirmation window. Press Esc to cancel.

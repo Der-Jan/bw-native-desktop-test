@@ -322,7 +322,6 @@ menu-view-reset-zoom = 重置缩放
 menu-view-toggle-fullscreen = 切换全屏
 
 ## Menu — Account
-menu-account-premium = 高级版成员
 menu-account-change-password = 更改主密码
 menu-account-two-step = 两步登录
 menu-account-fingerprint = 指纹短语
@@ -342,12 +341,7 @@ menu-help-legal-tos = 服务条款
 menu-help-legal-privacy = 隐私政策
 menu-help-follow = 关注我们
 menu-help-web-vault = 转到网页密码库
-menu-help-mobile-app = 获取移动应用
 menu-help-browser-extension = 获取浏览器扩展
-menu-help-troubleshooting = 故障排除
-menu-help-troubleshooting-gpu = 切换硬件加速
-menu-help-toast-hw-accel-on = 已启用硬件加速。请重启 Bitwarden 以应用更改。
-menu-help-toast-hw-accel-off = 已禁用硬件加速。请重启 Bitwarden 以应用更改。
 menu-help-about = 关于 Bitwarden
 
 menu-toast-sync-success = 密码库已同步
@@ -432,11 +426,9 @@ settings-integrations-browser-fingerprint = 要求验证指纹
 settings-integrations-ssh = SSH 代理
 settings-integrations-ssh-enable = 启用 SSH 代理
 settings-integrations-ssh-prompt = 提示行为
-settings-ssh-prompt-always = 始终
+settings-ssh-prompt-always = Ask (default: allow once)
 settings-ssh-prompt-never = 从不
-settings-ssh-prompt-remember = 记住直至锁定
-settings-integrations-other = 其他
-settings-integrations-duckduckgo = 启用 DuckDuckGo 浏览器集成
+settings-ssh-prompt-remember = Ask (default: allow until lock)
 
 # Autotype and copy tab
 settings-autotype-heading = 自动输入
@@ -463,7 +455,6 @@ settings-advanced-minimize-to-tray = 最小化到托盘
 settings-advanced-close-to-tray = 关闭到托盘
 settings-advanced-platform = 平台
 settings-advanced-always-show-dock = 始终显示 Dock 图标
-settings-advanced-hardware-acceleration = 启用硬件加速
 settings-advanced-allow-screenshots = 允许截图
 
 ## Send list
@@ -629,3 +620,47 @@ export-confirm-error = 主密码无效。
 export-toast-success = 密码库已导出至 { $path }
 export-toast-failed-title = 导出失败
 export-toast-failed-body = 无法导出密码库。请重试。
+
+# Composable vault filters
+sidebar-group-vaults = 密码库
+sidebar-group-view = 视图
+sidebar-group-types = 项目类型
+sidebar-filter-all-vaults = 所有密码库
+sidebar-filter-active-items = 有效项目
+sidebar-filter-all-types = 所有项目类型
+
+sidebar-group-folders = 文件夹
+sidebar-filter-all-folders = 所有文件夹
+sidebar-filter-no-folder = 无文件夹
+sidebar-group-collections = 集合
+sidebar-filter-all-collections = 所有集合
+sidebar-filter-no-collection = 无集合
+
+vault-column-last-changed = 最后修改
+vault-column-base-url = 基础 URL
+vault-filter-folder = 文件夹：{ $name }
+vault-filter-collection = 集合：{ $name }
+vault-filter-search = 搜索：“{ $query }”
+
+ssh-approval-title = Allow SSH authentication?
+ssh-approval-key = Key: { $name }
+ssh-approval-user = SSH user: { $name }
+ssh-approval-process = Local process: { $name }
+ssh-approval-process-note = The process name is informational and does not verify an application or destination hostname.
+ssh-approval-unbound = No verified host-key binding. This request can only be approved once.
+ssh-approval-hosts = Verified host keys (forwarding path → destination):
+ssh-approval-deny = Deny
+ssh-approval-once = Allow once
+ssh-approval-remember = Allow until lock
+ssh-approval-timeout = No response within 45 seconds denies the request.
+ssh-agent-copy-socket = Copy socket path
+ssh-agent-socket-copied = SSH socket path copied
+ssh-agent-help = Set SSH_AUTH_SOCK or the SSH IdentityAgent option to this path. Only the active unlocked account provides keys.
+ssh-agent-unattended = Without prompts, any local process of your user can use permitted SSH keys while the active vault is unlocked.
+ssh-agent-protected = Deleted, archived, hidden-password and master-password-reprompt keys are not offered. Remembered approvals require a verified session binding and a host-bound signature.
+
+ssh-agent-copy-setup = Copy SSH_AUTH_SOCK command
+ssh-agent-setup-copied = SSH_AUTH_SOCK command copied
+ssh-approval-bound-once = The host key is verified, but this signing request is not host-bound. Only one-use approval is available.
+
+ssh-approval-window-open = SSH approval is waiting in its confirmation window. Press Esc to cancel.

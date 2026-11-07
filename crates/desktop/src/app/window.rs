@@ -27,7 +27,7 @@ impl WindowInfo {
 pub enum WindowKind {
     Main,
     About,
-    /// Borderless transparent launcher summoned by the global hotkey. Kept
-    /// alive across summons; visibility toggles via `window::Mode::Hidden`.
+    SshApproval,
+    /// Launcher surface exists only between an explicit summon and dismissal.
     Magnify,
 }

@@ -2,6 +2,7 @@
 members = ["crates/*", "bitwarden_license/*", "tools/*"]
 default-members = ["crates/*", "bitwarden_license/*"]
 resolver = "3"
+exclude = ["vendor/bitwarden-core"]
 
 [workspace.dependencies]
 async-trait = "0.1.89"
@@ -12,19 +13,20 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
-bitwarden-auth = { git = "https://github.com/bitwarden/sdk-internal", rev = "10af2ea2f20b6d17ec1e4654892184e37fc4626e" }
-bitwarden-collections = { git = "https://github.com/bitwarden/sdk-internal", rev = "10af2ea2f20b6d17ec1e4654892184e37fc4626e" }
-bitwarden-core = { git = "https://github.com/bitwarden/sdk-internal", rev = "10af2ea2f20b6d17ec1e4654892184e37fc4626e" }
-bitwarden-crypto = { git = "https://github.com/bitwarden/sdk-internal", rev = "10af2ea2f20b6d17ec1e4654892184e37fc4626e" }
-bitwarden-exporters = { git = "https://github.com/bitwarden/sdk-internal", rev = "10af2ea2f20b6d17ec1e4654892184e37fc4626e" }
-bitwarden-fido = { git = "https://github.com/bitwarden/sdk-internal", rev = "10af2ea2f20b6d17ec1e4654892184e37fc4626e" }
-bitwarden-generators = { git = "https://github.com/bitwarden/sdk-internal", rev = "10af2ea2f20b6d17ec1e4654892184e37fc4626e" }
-bitwarden-logging = { git = "https://github.com/bitwarden/sdk-internal", rev = "10af2ea2f20b6d17ec1e4654892184e37fc4626e" }
-bitwarden-pm = { git = "https://github.com/bitwarden/sdk-internal", rev = "10af2ea2f20b6d17ec1e4654892184e37fc4626e" }
-bitwarden-send = { git = "https://github.com/bitwarden/sdk-internal", rev = "10af2ea2f20b6d17ec1e4654892184e37fc4626e" }
-bitwarden-ssh = { git = "https://github.com/bitwarden/sdk-internal", rev = "10af2ea2f20b6d17ec1e4654892184e37fc4626e" }
-bitwarden-state = { git = "https://github.com/bitwarden/sdk-internal", rev = "10af2ea2f20b6d17ec1e4654892184e37fc4626e" }
-bitwarden-vault = { git = "https://github.com/bitwarden/sdk-internal", rev = "10af2ea2f20b6d17ec1e4654892184e37fc4626e" }
+bitwarden-api-api = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-auth = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-collections = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-core = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-crypto = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-exporters = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-fido = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-generators = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-logging = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-pm = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-send = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-ssh = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-state = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-vault = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
 
 iced = { git = "https://github.com/iced-rs/iced", rev = "0d12e964da8c3f0f7a02d3d731e3187eecfe5779", default-features = false }
 iced_test = { git = "https://github.com/iced-rs/iced", rev = "0d12e964da8c3f0f7a02d3d731e3187eecfe5779" }
@@ -50,3 +52,6 @@ lto = "thin"
 # other sensitive values being left behind without cleanup.
 [profile.release.package.bitwarden-crypto]
 opt-level = 3
+
+[patch."https://github.com/bitwarden/sdk-internal"]
+bitwarden-core = { path = "vendor/bitwarden-core" }

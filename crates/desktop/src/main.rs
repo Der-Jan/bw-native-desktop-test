@@ -56,6 +56,10 @@ pub const APP_FONT_BOLD: Font = Font {
 fn main() -> iced::Result {
     init_tracing();
     services::i18n::init();
+    if let Err(error) = paths::initialize() {
+        eprintln!("{error}");
+        std::process::exit(2);
+    }
 
     // Required by `Client::load_from_state` (called by the SDK loader on each
     // user), which reads `get_host_platform_info()` when constructing
@@ -64,7 +68,9 @@ fn main() -> iced::Result {
         user_agent: "Bitwarden Rust-SDK".to_string(),
         device_type: bitwarden_core::DeviceType::SDK,
         device_identifier: None,
-        bitwarden_client_version: None,
+        bitwarden_client_version: Some(
+            services::accounts::transport::BITWARDEN_PROTOCOL_VERSION.into(),
+        ),
         bitwarden_package_type: None,
     });
 
@@ -77,9 +83,7 @@ fn main() -> iced::Result {
     }
     services::instance_lock::cleanup_stale_socket();
 
-    select_backend();
-
-    services::sdk::verify_data_dir();
+    tracing::info!("Starting app with Iced backend: tiny-skia");
 
     iced::daemon(App::new, App::update, App::view)
         .settings(iced::Settings {
@@ -102,53 +106,6 @@ fn main() -> iced::Result {
         .theme(App::theme)
         .scale_factor(App::scale_factor)
         .run()
-}
-
-fn select_backend() {
-    if let Some(backend) = std::env::var_os("ICED_BACKEND") {
-        tracing::info!("ICED_BACKEND already set in environment, honoring: {backend:?}");
-        return;
-    }
-
-    if !cfg!(feature = "gpu") {
-        tracing::info!("GPU feature not enabled; using tiny-skia backend");
-        return;
-    }
-
-    let settings = crate::services::settings::Settings::load();
-    let backend = if settings.hardware_acceleration {
-        "wgpu"
-    } else {
-        "tiny-skia"
-    };
-    tracing::info!("Starting app with Iced backend: {}", backend);
-    // SAFETY: called at the very start of main, before any threads are spawned.
-    unsafe { std::env::set_var("ICED_BACKEND", backend) };
-
-    // For the GPU backend, we try to load the last used backend so that the app starts faster.
-    // If we don't specify one, wgpu will probe all of them which can take a second or two.
-    #[cfg(feature = "gpu")]
-    if backend == "wgpu" {
-        let mut settings = settings;
-        // If this is set, it means the last attempt probably crashed, reset the stored values.
-        if settings.wgpu_backend_pending.is_some() {
-            tracing::warn!(
-                "previous wgpu attempt did not reach first paint; clearing backend cache"
-            );
-            settings.wgpu_backend_pending = None;
-            settings.wgpu_backend_verified = None;
-            settings.save();
-            return;
-        }
-
-        // If we have a verified backend from a previous run, use it to speed up initialization.
-        if let Some(verified) = &settings.wgpu_backend_verified {
-            // SAFETY: still single-threaded at this point in main.
-            unsafe { std::env::set_var("WGPU_BACKEND", verified) };
-            settings.wgpu_backend_pending = Some(verified.clone());
-            settings.save();
-        }
-    }
 }
 
 /// Install a `tracing` subscriber driven by the `RUST_LOG` env var. SDK crates

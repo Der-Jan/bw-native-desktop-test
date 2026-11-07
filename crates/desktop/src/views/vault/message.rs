@@ -30,6 +30,15 @@ use super::widgets::{
     search_bar::SearchMessage,
 };
 
+/// Redacted navigation metadata and summarized items from one SDK operation.
+pub type VaultListResult = Result<
+    (
+        Summary<Vec<Arc<CipherListView>>>,
+        NoDebug<Vec<FolderOption>>,
+    ),
+    String,
+>;
+
 /// Payload for [`ForUserMessage::FormOptionsLoaded`]. Delivered as a single
 /// value so the handler has one form-exists check.
 #[derive(Clone)]
@@ -41,6 +50,9 @@ pub struct FormOptions {
 
 #[derive(Debug, Clone, derive_more::From)]
 pub enum VaultMessage {
+    Authorization(super::authorization::PromptMessage),
+    #[from(skip)]
+    MagnifyCopy(CipherId, crate::views::magnify::CopyField),
     ItemList(ItemListMessage),
     Search(SearchMessage),
     AccountSwitcher(AccountSwitcherMessage),
@@ -69,7 +81,7 @@ pub enum VaultMessage {
     /// users' caches are still populated; only the filtered view recomputes
     /// when the result is for the active user.
     #[from(skip)]
-    ListLoaded(UserId, Result<Summary<Vec<Arc<CipherListView>>>, String>),
+    ListLoaded(UserId, VaultListResult),
     /// SDK completion routed through a single stale-user guard. The dispatch
     /// site drops the message when the active user changed during the await,
     /// so [`ForUserMessage`] handlers don't need their own guards.
@@ -90,6 +102,10 @@ pub enum VaultMessage {
 /// when the user switched during the await.
 #[derive(Debug, Clone)]
 pub enum ForUserMessage {
+    LoginCopied {
+        password: bool,
+        result: Result<NoDebug<Option<String>>, String>,
+    },
     DetailLoaded(CipherId, Result<NoDebug<Box<CipherView>>, String>),
     /// Fires once the cipher form's option lists (folders, organizations,
     /// collections) are all ready. Bundled into a single message because the
@@ -112,6 +128,7 @@ pub enum ForUserMessage {
 
 #[derive(Debug, Clone, derive_more::From)]
 pub enum VaultEvent {
+    SortChanged(crate::services::vault_sort::VaultSort),
     /// Account-switcher action. Forwarded verbatim to
     /// `App::handle_account_switcher_event` so login, vault, and send share
     /// one dispatch site.
@@ -119,11 +136,15 @@ pub enum VaultEvent {
     /// A save completed successfully. App pushes a success toast and kicks
     /// off a list reload so the sidebar reflects renames / ownership moves.
     #[from(skip)]
-    ItemSaved { uid: UserId },
+    ItemSaved {
+        uid: UserId,
+    },
     /// A soft-delete completed successfully. App pushes a success toast and
     /// reloads the list so the deleted row disappears.
     #[from(skip)]
-    ItemDeleted { uid: UserId },
+    ItemDeleted {
+        uid: UserId,
+    },
     /// User clicked a copy-to-clipboard button on the detail pane.
     /// Routed to `ClipboardManager::copy`; the handler also pushes a
     /// success toast with `toast_label` as the body.
@@ -136,8 +157,12 @@ pub enum VaultEvent {
     /// User clicked the launch button on a login's URI.
     /// Routed to `clipboard::launch_url` which enforces scheme allowlist.
     #[from(skip)]
-    LaunchUrlRequested { uri: String },
+    LaunchUrlRequested {
+        uri: String,
+    },
     /// User clicked the vault header's `+ New` button. App opens the
     /// new-item picker modal.
     OpenNewItemPicker,
+    #[from(skip)]
+    MagnifyCopyAuthorized(CipherId, crate::views::magnify::CopyField),
 }

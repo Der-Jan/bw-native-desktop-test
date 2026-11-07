@@ -1,21 +1,18 @@
 //! `GeneratorView::update` — message dispatch for the generator modal.
 
-use std::time::{Duration, Instant};
-
 use iced::Element;
 
 use crate::{
     app::{Outcome, RenderCtx, UpdateCtx, View},
     components::toast::Toast,
     fl,
-    services::animation,
     theme::AppTheme,
 };
 
 use super::{
-    GeneratorView, TAB_ANIM_MS,
+    GeneratorView,
     message::{GeneratorEvent, GeneratorMessage},
-    state::{Mode, TabKind, accept_digits, bump_clamped},
+    state::{Mode, accept_digits, bump_clamped},
 };
 
 impl View for GeneratorView {
@@ -33,13 +30,6 @@ impl View for GeneratorView {
                     return Outcome::None;
                 }
                 self.active_tab = tab;
-                let new_index = match tab {
-                    TabKind::Password => 0.0_f32,
-                    TabKind::Passphrase => 1.0,
-                    TabKind::Username => 2.0,
-                };
-                self.tab_anim.transition(new_index, Instant::now());
-                animation::extend(Duration::from_millis(TAB_ANIM_MS as u64));
                 self.current = None;
                 self.regenerate_event()
             }

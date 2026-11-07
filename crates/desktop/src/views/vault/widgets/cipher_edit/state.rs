@@ -6,7 +6,7 @@ use bitwarden_vault::{
     CardView, CipherRepromptType, CipherType, CipherView, FolderId, FolderView, IdentityView,
     LoginView, SecureNoteType, SecureNoteView,
 };
-use chrono::Utc;
+use chrono::{NaiveDate, Utc};
 use iced::widget::{combo_box, text_editor};
 
 use crate::{
@@ -92,6 +92,42 @@ impl std::fmt::Display for OrgChoice {
     }
 }
 
+/// Preserve incomplete text input while SDK 4 stores validated calendar dates.
+#[derive(Default)]
+pub(super) struct DateFields {
+    pub(super) birth: String,
+    pub(super) issued: String,
+    pub(super) expires: String,
+}
+
+impl DateFields {
+    fn from_cipher(cipher: &CipherView) -> Self {
+        let dates = match cipher.r#type {
+            CipherType::DriversLicense => cipher
+                .drivers_license
+                .as_ref()
+                .map(|d| (d.date_of_birth, d.issue_date, d.expiration_date)),
+            CipherType::Passport => cipher
+                .passport
+                .as_ref()
+                .map(|p| (p.date_of_birth, p.issue_date, p.expiration_date)),
+            _ => None,
+        }
+        .unwrap_or((None, None, None));
+        Self {
+            birth: dates.0.map(|d| d.to_string()).unwrap_or_default(),
+            issued: dates.1.map(|d| d.to_string()).unwrap_or_default(),
+            expires: dates.2.map(|d| d.to_string()).unwrap_or_default(),
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        [&self.birth, &self.issued, &self.expires]
+            .into_iter()
+            .all(|s| s.is_empty() || s.parse::<NaiveDate>().is_ok())
+    }
+}
+
 // ── CipherForm struct ──────────────────────────────────────────────────────
 
 /// Form backing the cipher edit view. `original = None` distinguishes the
@@ -99,6 +135,7 @@ impl std::fmt::Display for OrgChoice {
 pub struct CipherForm {
     pub original: Option<CipherView>,
     pub modified: CipherView,
+    pub(super) dates: DateFields,
 
     pub folders: Vec<FolderOption>,
     pub organizations: Vec<OrganizationOption>,
@@ -124,11 +161,10 @@ pub struct CipherForm {
 }
 
 impl CipherForm {
-    /// True once all required fields are populated. Today the only
-    /// universally-required field is `name`; type-specific minimums can be
-    /// added as the form grows.
+    /// Require a name and valid optional calendar dates. Partial date input
+    /// stays in the form and cannot silently overwrite a valid stored date.
     pub fn is_valid(&self) -> bool {
-        !self.modified.name.trim().is_empty()
+        !self.modified.name.trim().is_empty() && self.dates.is_valid()
     }
 
     /// Construct an empty form for creating a new cipher of the given type.
@@ -143,7 +179,7 @@ impl CipherForm {
         let ssh_key = (cipher_type == CipherType::SshKey)
             .then(|| generate_sshkey(KeyAlgorithm::Ed25519))
             .and_then(|res| match res {
-                Ok(view) => Some(view),
+                Ok(view) => Some(view.into()),
                 Err(err) => {
                     tracing::error!(%err, "ssh key generation failed; opening form with empty fields");
                     None
@@ -155,6 +191,7 @@ impl CipherForm {
             folder_id: None,
             collection_ids: Vec::new(),
             key: None,
+            partial: false,
             name: String::new(),
             notes: None,
             r#type: cipher_type,
@@ -183,6 +220,7 @@ impl CipherForm {
             archived_date: None,
         };
         let mut form = Self {
+            dates: DateFields::default(),
             original: None,
             modified,
             folders: Vec::new(),
@@ -203,6 +241,7 @@ impl CipherForm {
     pub fn edit(cv: CipherView) -> Self {
         let notes_content = text_editor::Content::with_text(cv.notes.as_deref().unwrap_or(""));
         let mut form = Self {
+            dates: DateFields::from_cipher(&cv),
             original: Some(cv.clone()),
             modified: cv,
             folders: Vec::new(),
@@ -259,6 +298,7 @@ impl CipherForm {
                     uris: None,
                     totp: None,
                     autofill_on_page_load: None,
+                    http_authentication_enabled: None,
                     fido2_credentials: None,
                 });
             }
@@ -310,5 +350,70 @@ impl CipherForm {
                 self.modified.passport.get_or_insert_default();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod sdk4_date_tests {
+    use super::*;
+    use crate::views::vault::widgets::cipher_edit::CipherEditMessage;
+
+    #[test]
+    fn partial_or_invalid_dates_keep_text_and_cannot_be_saved() {
+        let mut form = CipherForm::new(CipherType::DriversLicense, None);
+        form.modified.name = "Synthetic license".into();
+        for input in ["2", "2024-", "2024-02-30"] {
+            form.update(CipherEditMessage::DlDateOfBirthChanged(input.into()));
+            assert_eq!(form.dates.birth, input);
+            assert!(!form.is_valid());
+            assert!(
+                form.modified
+                    .drivers_license
+                    .as_ref()
+                    .unwrap()
+                    .date_of_birth
+                    .is_none()
+            );
+        }
+        form.update(CipherEditMessage::DlDateOfBirthChanged("2024-02-29".into()));
+        assert!(form.is_valid());
+        assert_eq!(
+            form.modified
+                .drivers_license
+                .as_ref()
+                .unwrap()
+                .date_of_birth,
+            NaiveDate::from_ymd_opt(2024, 2, 29)
+        );
+        form.update(CipherEditMessage::DlDateOfBirthChanged(String::new()));
+        assert!(form.is_valid());
+        assert!(
+            form.modified
+                .drivers_license
+                .as_ref()
+                .unwrap()
+                .date_of_birth
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn editing_a_passport_preserves_existing_dates_while_input_is_incomplete() {
+        let mut original = CipherForm::new(CipherType::Passport, None);
+        original.modified.name = "Synthetic passport".into();
+        let issued = NaiveDate::from_ymd_opt(2020, 1, 2);
+        original.modified.passport.as_mut().unwrap().issue_date = issued;
+        let mut form = CipherForm::edit(original.modified);
+        assert_eq!(form.dates.issued, "2020-01-02");
+        form.update(CipherEditMessage::PpIssueDateChanged("2025-".into()));
+        assert_eq!(form.dates.issued, "2025-");
+        assert!(!form.is_valid());
+        assert_eq!(form.modified.passport.as_ref().unwrap().issue_date, issued);
+        form.update(CipherEditMessage::PpIssueDateChanged("2025-12-31".into()));
+        assert!(form.is_valid());
+        assert_eq!(
+            form.modified.passport.as_ref().unwrap().issue_date,
+            NaiveDate::from_ymd_opt(2025, 12, 31)
+        );
     }
 }

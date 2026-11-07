@@ -22,10 +22,14 @@ const PIPE_NAME: &str = r"\\.\pipe\bitwarden-desktop-next";
 /// so `/tmp` is not shared across users.
 #[cfg(unix)]
 fn socket_path() -> std::path::PathBuf {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    crate::paths::data_dir().hash(&mut hash);
+    let name = format!("bitwarden-native-{:016x}.sock", hash.finish());
     if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
-        return std::path::PathBuf::from(dir).join("bitwarden-desktop-next.sock");
+        return std::path::PathBuf::from(dir).join(name);
     }
-    std::env::temp_dir().join("bitwarden-desktop-next.sock")
+    std::env::temp_dir().join(name)
 }
 
 /// Timeout for a primary → second-launch handshake. The probe writes a single

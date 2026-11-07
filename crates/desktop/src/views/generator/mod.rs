@@ -29,10 +29,6 @@ mod tabs;
 mod update;
 mod view;
 
-use std::time::Instant;
-
-use lilt::{Animated, Easing};
-
 use crate::{components, services::sdk::PasswordHistoryEntry};
 
 pub use message::{GenerateKind, GeneratorEvent, GeneratorMessage};
@@ -41,17 +37,10 @@ pub use state::{TabKind, UsernameKind};
 pub use self::state::Mode;
 use self::state::{PassphraseForm, PasswordForm, UsernameForm};
 
-/// How fast the segmented tab indicator slides between positions.
-const TAB_ANIM_MS: f32 = 160.0;
-
 pub struct GeneratorView {
     pub(super) fade: components::FadeInOut,
     mode: Mode,
     active_tab: TabKind,
-    /// Float-valued tab index used to drive the sliding pill indicator.
-    /// Snaps to the active tab's index on `SelectTab` and lilt interpolates
-    /// the path. Starts at `0.0` (Password tab) to match `active_tab`.
-    tab_anim: Animated<f32, Instant>,
     password: PasswordForm,
     passphrase: PassphraseForm,
     username: UsernameForm,
@@ -70,9 +59,6 @@ impl GeneratorView {
             fade: components::FadeInOut::default(),
             mode: Mode::Generator,
             active_tab: TabKind::Password,
-            tab_anim: Animated::new(0.0)
-                .duration(TAB_ANIM_MS)
-                .easing(Easing::EaseOut),
             password: PasswordForm::default(),
             passphrase: PassphraseForm::default(),
             username: UsernameForm::default(),
@@ -86,9 +72,6 @@ impl GeneratorView {
         self.mode = mode;
         if matches!(mode, Mode::Generator) {
             self.active_tab = TabKind::Password;
-            // Snap the indicator without animating — opening is already an
-            // in-animation; sliding the pill on top of that would be busy.
-            self.tab_anim.transition_instantaneous(0.0, Instant::now());
             self.current = None;
         }
     }

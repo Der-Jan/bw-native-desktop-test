@@ -63,25 +63,18 @@ struct UnlockMethodsCfg {
     biometrics: bool,
 }
 
-pub fn verify_data_dir() {
-    let data_dir = data_dir();
-    let meta_path = data_dir.join("mock.json");
-    if !meta_path.is_file() {
-        tracing::error!(
-            path = %meta_path.display(),
-            "mock.json not found; regenerate via `cargo run -p fake-data`"
-        );
-        std::process::exit(0);
+pub async fn load_users(
+    removed: &std::collections::HashSet<UserId>,
+) -> Result<HashMap<UserId, Box<UserEntry>>, String> {
+    if !crate::paths::is_demo() {
+        // Real account persistence will be supplied by the login implementation.
+        return Ok(HashMap::new());
     }
-}
-
-pub async fn load_users() -> HashMap<UserId, Box<UserEntry>> {
     let data_dir = data_dir();
     let meta_path = data_dir.join("mock.json");
-    let file = std::fs::File::open(&meta_path)
-        .expect("failed to open mock data directory; regenerate via `cargo run -p fake-data`");
-    let meta: MockVaultMeta = serde_json::from_reader(BufReader::new(file))
-        .expect("mock.json is malformed; regenerate via `cargo run -p fake-data`");
+    let file = std::fs::File::open(&meta_path).map_err(|e| e.to_string())?;
+    let meta: MockVaultMeta =
+        serde_json::from_reader(BufReader::new(file)).map_err(|e| e.to_string())?;
 
     let meta_by_id: HashMap<UserId, MockUserMeta> =
         meta.users.into_iter().map(|u| (u.user_id, u)).collect();
@@ -91,7 +84,7 @@ pub async fn load_users() -> HashMap<UserId, Box<UserEntry>> {
         Ok(entries) => entries,
         Err(err) => {
             tracing::error!(path = %data_dir.display(), %err, "failed to read data dir");
-            return HashMap::new();
+            return Err(err.to_string());
         }
     };
     for entry in entries {
@@ -112,35 +105,36 @@ pub async fn load_users() -> HashMap<UserId, Box<UserEntry>> {
             tracing::warn!(file = %path.display(), "skipping sqlite file with non-UUID name");
             continue;
         };
+        if removed.contains(&uid) {
+            continue;
+        }
         let Some(mu) = meta_by_id.get(&uid).cloned() else {
             tracing::warn!(user_id = %uid, "sqlite file has no entry in mock.json, skipping");
             continue;
         };
         tracing::debug!(user_id = %uid, email = %mu.email, "loading mock user");
-        users.insert(uid, Box::new(build_user_entry(mu, &data_dir).await));
+        users.insert(uid, Box::new(build_user_entry(mu, &data_dir).await?));
     }
 
     tracing::info!(users = users.len(), "ClientManager loaded");
-    users
+    Ok(users)
 }
 
-async fn build_user_entry(mu: MockUserMeta, data_dir: &Path) -> UserEntry {
+async fn build_user_entry(mu: MockUserMeta, data_dir: &Path) -> Result<UserEntry, String> {
     // Build the registry directly (rather than via `client.platform().state()`)
     // so we can fully prepare it before constructing the client. The persisted
     // state (user_id, urls, wrapped crypto state) was written into this SQLite
     // by `cargo run -p fake-data`, so `load_from_state` will find it and
     // rebuild a locked client bound to the right user + URLs.
-    let registry = StateRegistry::new();
-    registry
-        .initialize_database(
-            DatabaseConfiguration::Sqlite {
-                db_name: mu.user_id.to_string(),
-                folder_path: data_dir.to_path_buf(),
-            },
-            bitwarden_pm::migrations::get_sdk_managed_migrations(),
-        )
-        .await
-        .expect("sqlite database init must succeed");
+    let registry = StateRegistry::new_with_db(
+        DatabaseConfiguration::Sqlite {
+            db_name: mu.user_id.to_string(),
+            folder_path: data_dir.to_path_buf(),
+        },
+        bitwarden_pm::migrations::get_sdk_managed_migrations(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     // `LocalUserDataKeyState` isn't in `get_sdk_managed_migrations()` but
     // `initialize_user_crypto` writes to it during unlock — register an empty
@@ -152,11 +146,11 @@ async fn build_user_entry(mu: MockUserMeta, data_dir: &Path) -> UserEntry {
         Arc::new(bitwarden_auth::token_management::PasswordManagerTokenHandler::default());
     let client = PasswordManagerClient::load_from_state(token_handler, registry)
         .await
-        .expect("load_from_state must succeed — regenerate via `cargo run -p fake-data`");
+        .map_err(|e| e.to_string())?;
 
-    UserEntry {
-        client,
-        email: mu.email,
+    Ok(UserEntry {
+        session: super::session::SessionState::new(mu.user_id, client),
+        email: mu.email.clone(),
         display_name: mu.display_name,
         server_url: mu.server_url,
         unlock_methods: UnlockMethods {
@@ -164,15 +158,16 @@ async fn build_user_entry(mu: MockUserMeta, data_dir: &Path) -> UserEntry {
             pin: mu.unlock_methods.pin,
             biometrics: mu.unlock_methods.biometrics,
         },
-        kdf: mu.kdf,
-        encrypted_user_key: mu.encrypted_user_key,
-        private_key: mu.private_key,
+        server_user_id: mu.user_id,
+        master_unlock: bitwarden_core::key_management::MasterPasswordUnlockData { kdf:mu.kdf, salt:mu.email.clone(),master_key_wrapped_user_key:mu.encrypted_user_key,contained_key_id:None },
+        crypto_state: bitwarden_core::key_management::account_cryptographic_state::WrappedAccountCryptographicState::V1{private_key:mu.private_key},
+        profile:None,
         organizations: mu.organizations,
         collections: mu.collections,
-    }
+    })
 }
 
-fn register_empty_repo<T: RepositoryItem + Clone>(registry: &StateRegistry) {
+pub(super) fn register_empty_repo<T: RepositoryItem + Clone>(registry: &StateRegistry) {
     let repo = Arc::new(MemoryRepo::<T> {
         data: Mutex::new(HashMap::new()),
     });

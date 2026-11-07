@@ -8,7 +8,7 @@
 
 use iced::{
     Alignment, Border, Element, Fill, Padding,
-    widget::{Button, Space, column, container, pane_grid::ResizeEvent, row, text},
+    widget::{Button, column, container, pane_grid::ResizeEvent, row, text},
 };
 
 use crate::{
@@ -61,15 +61,21 @@ pub fn layout<'a, M: 'a>(
         .color(colors.text_primary)
         .font(crate::APP_FONT_BOLD);
 
+    layout_with_heading(title_el.into(), new_button, avatar, search, body)
+}
+
+/// Header variant for a title with a secondary filter summary.
+pub fn layout_with_heading<'a, M: 'a>(
+    heading: Element<'a, M, AppTheme>,
+    new_button: impl Into<Element<'a, M, AppTheme>>,
+    avatar: Element<'a, M, AppTheme>,
+    search: Element<'a, M, AppTheme>,
+    body: Element<'a, M, AppTheme>,
+) -> Element<'a, M, AppTheme> {
     let content_header = container(
-        row![
-            title_el,
-            Space::new().width(Fill),
-            new_button.into(),
-            avatar
-        ]
-        .spacing(12)
-        .align_y(Alignment::Center),
+        row![container(heading).width(Fill), new_button.into(), avatar]
+            .spacing(12)
+            .align_y(Alignment::Center),
     )
     .padding([16, 24])
     .width(Fill);

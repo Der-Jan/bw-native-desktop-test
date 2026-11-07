@@ -1,3 +1,4 @@
+mod flow;
 mod handler;
 mod layout;
 mod login_email;
@@ -121,8 +122,9 @@ impl ServerOption {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum LoginMessage {
+    Flow(flow::FlowMessage),
     PasswordChanged(String),
     Unlock,
     UnlockCompleted(UserId, Result<(), String>),
@@ -158,13 +160,18 @@ pub enum LoginMessage {
 
 #[derive(Debug, Clone, derive_more::From)]
 pub enum LoginEvent {
+    SyncRequested,
     /// Unlock attempt completed successfully — App should flip to the vault
     /// screen and kick off the vault list load for this user.
     #[from(skip)]
-    Unlocked { uid: UserId },
+    Unlocked {
+        uid: UserId,
+    },
     /// Email + password login completed.
     #[from(skip)]
-    LoggedIn { uid: UserId },
+    LoggedIn {
+        uid: UserId,
+    },
     /// Account-switcher action. Forwarded verbatim to
     /// `App::handle_account_switcher_event` so login, vault, and send share
     /// one dispatch site.
@@ -172,6 +179,7 @@ pub enum LoginEvent {
 }
 
 pub struct LoginView {
+    flow: flow::Flow,
     pub(in crate::views::login) auth_page: AuthPage,
     /// True between `LoginMessage::Unlock` firing and `UnlockCompleted` arriving.
     /// Drives the in-progress spinner on the unlock screen and gates re-entry.
@@ -199,6 +207,7 @@ pub(in crate::views::login) struct SelfHostedModal {
 impl LoginView {
     pub fn new() -> Self {
         Self {
+            flow: flow::Flow::default(),
             auth_page: AuthPage::new_unlock(UnlockMethod::MasterPassword),
             unlock_in_progress: false,
             unlock_alternatives: Vec::new(),
@@ -232,7 +241,11 @@ impl View for LoginView {
             open_overlay,
             ..
         } = ctx;
+        if let Some(outcome) = self.flow_update(&msg, client_manager, active_user.copied()) {
+            return outcome;
+        }
         match msg {
+            LoginMessage::Flow(_) => return Outcome::None,
             LoginMessage::PasswordChanged(pw) => {
                 if let AuthPage::Unlock { password_input, .. } = &mut self.auth_page {
                     *password_input = pw;
@@ -356,10 +369,7 @@ impl View for LoginView {
                 }
             }
             LoginMessage::LoginWithPassword => {
-                // Stub. See `Implement the login command` in docs/todo.md —
-                // until the SDK call lands the press is a deliberate no-op
-                // (clearing the field would surprise the user without
-                // feedback as to why).
+                return self.start_login(client_manager);
             }
             LoginMessage::LoginCompleted(msg_uid, result) => {
                 if active_user != Some(&msg_uid) {
@@ -384,6 +394,7 @@ impl View for LoginView {
                 };
             }
             LoginMessage::BackToEmail => {
+                self.cancel_login();
                 // Preserve the email + selected server when going back so
                 // the user doesn't have to retype what they just entered.
                 let (email, server) = match &self.auth_page {
@@ -414,31 +425,18 @@ impl View for LoginView {
                 };
             }
             LoginMessage::SelectServer(server) => {
+                self.cancel_login();
                 *open_overlay = None;
-                // Self-hosted needs a URL — open the configuration modal
-                // instead of writing a blank URL into the auth page. Preserve
-                // any URL the user previously configured so re-opening the
-                // modal doesn't wipe it.
                 if matches!(server, ServerOption::SelfHosted(_)) {
-                    let existing = match &self.auth_page {
-                        AuthPage::LoginEmail {
-                            selected_server: ServerOption::SelfHosted(url),
-                            ..
-                        } => url.clone(),
-                        _ => String::new(),
-                    };
-                    self.self_hosted_modal.url_input = existing;
-                    self.self_hosted_modal.url_error = false;
-                    self.self_hosted_modal.fade.open();
+                    if let Err(error) = self.open_custom_settings(client_manager) {
+                        return Outcome::toast(Toast::error(error, None));
+                    }
                     return Outcome::task(crate::components::fade_in_out::focus_after_open(
                         SELF_HOSTED_URL_FIELD_ID,
                     ));
                 }
-                if let AuthPage::LoginEmail {
-                    selected_server, ..
-                } = &mut self.auth_page
-                {
-                    *selected_server = server;
+                if let Err(error) = self.select_server(server, client_manager) {
+                    return Outcome::toast(Toast::error(error, None));
                 }
             }
 
@@ -446,26 +444,10 @@ impl View for LoginView {
                 self.self_hosted_modal.url_input = url;
                 self.self_hosted_modal.url_error = false;
             }
-            LoginMessage::SelfHostedSave => {
-                match validate_self_hosted_url(&self.self_hosted_modal.url_input) {
-                    SelfHostedUrl::Empty => return Outcome::None,
-                    SelfHostedUrl::Invalid => {
-                        self.self_hosted_modal.url_error = true;
-                        return Outcome::None;
-                    }
-                    SelfHostedUrl::Accepted(url) => {
-                        if let AuthPage::LoginEmail {
-                            selected_server, ..
-                        } = &mut self.auth_page
-                        {
-                            *selected_server = ServerOption::SelfHosted(url);
-                        }
-                        self.self_hosted_modal.fade.close();
-                    }
-                }
-            }
+            LoginMessage::SelfHostedSave => return self.save_server_dialog(client_manager),
             LoginMessage::SelfHostedCancel => {
                 self.self_hosted_modal.fade.close();
+                self.flow.certificate_password.clear();
             }
 
             LoginMessage::AccountSwitcher(m) => {
@@ -476,6 +458,9 @@ impl View for LoginView {
     }
 
     fn view<'a>(&'a self, ctx: &RenderCtx<'a>) -> Element<'a, LoginMessage, AppTheme> {
+        if let Some(content) = self.flow_view(ctx) {
+            return content;
+        }
         let (center_content, status_bar) = match &self.auth_page {
             AuthPage::Unlock {
                 method,
@@ -518,6 +503,14 @@ impl View for LoginView {
         };
 
         let account_switcher_open = ctx.open_overlay == Some(Overlay::AccountSwitcher);
+        let center_content = iced::widget::column![
+            center_content,
+            crate::components::buttons::secondary("Server / mTLS-Einstellungen")
+                .on_press(LoginMessage::Flow(flow::FlowMessage::Settings))
+        ]
+        .spacing(16)
+        .align_x(iced::Alignment::Center)
+        .into();
         layout::auth_page_shell(
             center_content,
             status_bar,
@@ -531,30 +524,39 @@ impl View for LoginView {
     /// Self-hosted server URL modal — pushed onto the overlay stack only
     /// when its fade is visible.
     fn overlays<'a>(&'a self, ctx: &RenderCtx<'a>) -> Vec<Element<'a, LoginMessage, AppTheme>> {
-        self_hosted_modal::view(&self.self_hosted_modal, ctx.colors)
-            .into_iter()
-            .collect()
+        self_hosted_modal::view(
+            &self.self_hosted_modal,
+            self.certificate_controls(),
+            !self.flow.settings_busy,
+            ctx.colors,
+        )
+        .into_iter()
+        .collect()
     }
 }
 
 impl LoginView {
     /// Reset the login flow to the email-entry page with empty inputs.
-    pub fn reset_to_email_entry(&mut self) {
+    pub fn reset_to_email_entry(&mut self, mgr: &ClientManager) {
+        self.cancel_login();
         self.auth_page = AuthPage::new_login_email();
         self.unlock_in_progress = false;
         self.unlock_alternatives.clear();
         self.self_hosted_modal = SelfHostedModal::default();
+        self.restore_server(mgr);
     }
 
     /// Show the unlock page for the given user, picking their preferred
-    /// unlock method. Falls back to master password when the user is absent
-    /// or unknown to the client manager (e.g. during initial startup).
+    /// unlock method. Without a known account, show email entry instead of
+    /// an unlock prompt for a nonexistent vault.
     /// Called from the post-load transition, user-switch, and lock-all flows.
     pub fn show_unlock_for(&mut self, uid: Option<&UserId>, mgr: &ClientManager) {
-        let preferred = uid
-            .and_then(|uid| mgr.unlock_methods(uid))
-            .map(|m| m.preferred())
-            .unwrap_or(UnlockMethod::MasterPassword);
+        self.cancel_login();
+        let Some(methods) = uid.and_then(|uid| mgr.unlock_methods(uid)) else {
+            self.reset_to_email_entry(mgr);
+            return;
+        };
+        let preferred = methods.preferred();
         self.auth_page = AuthPage::new_unlock(preferred);
         self.unlock_in_progress = false;
         self.refresh_unlock_alternatives(uid, mgr);
@@ -587,6 +589,25 @@ impl LoginView {
 #[cfg(test)]
 mod tests {
     use super::{SelfHostedUrl, validate_self_hosted_url};
+
+    #[test]
+    fn absent_accounts_show_email_entry_and_discard_old_unlock_fields() {
+        let manager = crate::services::sdk::ClientManager::empty();
+        let unknown = "00000000-0000-0000-0000-000000000001".parse().unwrap();
+        for uid in [None, Some(&unknown)] {
+            let mut view = super::LoginView::new();
+            view.auth_page = super::AuthPage::Unlock {
+                method: crate::domain::UnlockMethod::MasterPassword,
+                password_input: "synthetic secret".into(),
+                pin_input: String::new(),
+            };
+            view.show_unlock_for(uid, &manager);
+            assert!(
+                matches!(view.auth_page, super::AuthPage::LoginEmail { ref email_input, .. } if email_input.is_empty())
+            );
+            assert!(!view.unlock_in_progress);
+        }
+    }
 
     #[test]
     fn empty_input_is_no_op() {
@@ -758,5 +779,11 @@ mod tests_update {
             view.unlock_in_progress,
             "still in flight, no new task spawned"
         );
+    }
+}
+
+impl std::fmt::Debug for LoginMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LoginMessage(<redacted>)")
     }
 }

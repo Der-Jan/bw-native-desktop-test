@@ -2,7 +2,10 @@ use std::sync::{Arc, Mutex};
 
 use crate::{
     components::sidebar::SidebarMessage,
-    services::{favicon::FaviconMessage, sdk::ClientManager},
+    services::{
+        favicon::FaviconMessage,
+        sdk::{ClientManager, SessionToken},
+    },
     views::{
         about::AboutMessage, export::ExportMessage, fingerprint_phrase::FingerprintMessage,
         generator::GeneratorMessage, import::ImportMessage, login::LoginMessage,
@@ -26,6 +29,29 @@ use crate::{
 
 #[derive(Debug, Clone, derive_more::From)]
 pub enum Message {
+    SshAgent(crate::services::ssh_agent::UiEvent),
+    #[from(skip)]
+    SshDecision {
+        id: uuid::Uuid,
+        decision: crate::services::ssh_agent::Decision,
+    },
+    #[from(skip)]
+    SshFocus {
+        id: uuid::Uuid,
+        target: crate::services::ssh_agent::Decision,
+    },
+    /// Results are checked again on the UI thread, after any queued lock/switch.
+    #[from(skip)]
+    SessionResult {
+        session: SessionToken,
+        presentation: u64,
+        message: Box<Message>,
+    },
+    #[from(skip)]
+    Presentation {
+        generation: u64,
+        message: Box<Message>,
+    },
     #[from(skip)]
     View(ViewMessage),
     About(AboutMessage),
@@ -38,10 +64,6 @@ pub enum Message {
     Sidebar(SidebarMessage),
     /// One per completed fetch; arrival alone triggers the redraw.
     Favicon(FaviconMessage),
-    /// Per-frame tick from `iced::window::frames()` while a transition is
-    /// in flight. No-op handler — the redraw is the point. Subscribed only
-    /// while something is animating, so idle wake rate is zero.
-    AnimationTick,
     /// Routed at the top level (not via `ViewMessage`) because the launcher
     /// owns its own window and can't share `UpdateCtx` with screen views.
     Magnify(MagnifyMessage),
@@ -81,6 +103,11 @@ impl<T: Into<ViewMessage>> From<T> for Message {
 pub enum WindowMessage {
     Opened(iced::window::Id),
     GotRawId(iced::window::Id, u64),
+    /// Result of inspecting the real native backend before hiding a surface.
+    HideBackendResolved {
+        id: iced::window::Id,
+        wayland: bool,
+    },
     /// OS-emitted close (Alt+F4, native X, window-list "Close"). Funnels
     /// into the same `WindowAction::Close` path the custom title-bar X uses,
     /// so close-to-tray applies uniformly. `exit_on_close_request: false`
@@ -125,23 +152,35 @@ pub enum SystemMessage {
     ClientManagerLoaded(Arc<Mutex<Option<ClientManager>>>),
     /// Single-instance listener forwarded a "show" signal from a second launch.
     InstanceWakeRequested,
+    /// SDK work drained and final key cleanup completed.
+    SessionQuiesced(SessionToken),
+    /// Durable removal finished or remains pending; delivered after account removal.
+    LogoutCompleted {
+        operation: uuid::Uuid,
+        result: Result<(), crate::services::sdk::LogoutFailure>,
+    },
     /// OS session state change (screen lock/unlock, suspend/resume). The
     /// handler locks every vault when any user has
     /// [`UserPreferences::lock_on_system_lock`][crate::services::preferences::UserPreferences::lock_on_system_lock]
     /// enabled.
     SessionEvent(session_events::SessionEvent),
-    /// `iced::system::information()` resolved with the actual graphics backend
-    /// wgpu picked. Used to populate `Settings::wgpu_backend_verified` so the
-    /// next launch can skip multi-backend enumeration. Empty/unknown payloads
-    /// are dropped by the handler.
-    #[cfg(feature = "gpu")]
-    WgpuBackendDiscovered(String),
-    /// File → Sync now finished. The fake-data harness always succeeds; the
-    /// `Result` shape is kept so a real sync flow can drop in without
-    /// rippling through the message hierarchy.
-    SyncCompleted(Result<(), String>),
+    SyncCompleted {
+        uid: crate::domain::UserId,
+        operation: uuid::Uuid,
+        result: Result<crate::services::sdk::vault_sync::Report, String>,
+    },
     /// `services::session_timeout`'s driver task fired — at least one user
     /// has crossed their `lock_after` or `logout_after` deadline. Handler
     /// re-runs the per-user check and applies lock / log-out as needed.
     SessionTimeoutCheck,
+}
+
+impl super::ctx::SessionScoped for Message {
+    fn for_session(self, session: SessionToken, presentation: u64) -> Self {
+        Self::SessionResult {
+            session,
+            presentation,
+            message: Box::new(self),
+        }
+    }
 }

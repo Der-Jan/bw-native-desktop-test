@@ -23,6 +23,7 @@ pub fn view<'a>(
     item: &'a CipherView,
     colors: &'a AppColors,
     top_radius: f32,
+    read_only: bool,
 ) -> Element<'a, CipherDetailMessage, AppTheme> {
     let header = header_row(item, colors);
 
@@ -105,7 +106,11 @@ pub fn view<'a>(
     }
 
     let body = scrollable(column(sections).spacing(4).padding([12, 20])).height(Fill);
-    let bottom = bottom_bar(colors);
+    let bottom = if read_only {
+        components::pane_footer(text("Synchronisierter Tresor · schreibgeschützt").size(12))
+    } else {
+        bottom_bar(colors)
+    };
 
     components::rounded_top_pane(
         column![header, body, bottom].spacing(0).height(Fill),

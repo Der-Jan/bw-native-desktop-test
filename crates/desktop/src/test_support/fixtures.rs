@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use bitwarden_core::OrganizationId;
 use bitwarden_vault::{
-    CipherListView, CipherListViewType, CipherRepromptType, LoginListView, LoginUriView,
+    CipherListView, CipherListViewType, CipherRepromptType, CipherType, CipherView, LoginListView,
+    LoginUriView,
 };
 use chrono::{TimeZone, Utc};
 
@@ -18,6 +19,8 @@ pub struct CipherSpec {
     pub deleted: bool,
     pub archived: bool,
     pub organization: Option<OrganizationId>,
+    pub folder: Option<bitwarden_vault::FolderId>,
+    pub collections: Vec<bitwarden_collections::collection::CollectionId>,
     pub kind: CipherListViewType,
 }
 
@@ -30,6 +33,8 @@ impl Default for CipherSpec {
             deleted: false,
             archived: false,
             organization: None,
+            folder: None,
+            collections: Vec::new(),
             kind: CipherListViewType::SecureNote,
         }
     }
@@ -42,9 +47,9 @@ pub fn make_cipher(spec: CipherSpec) -> Arc<CipherListView> {
     Arc::new(CipherListView {
         id: None,
         organization_id: spec.organization,
-        folder_id: None,
-        collection_ids: Vec::new(),
-        key: None,
+        folder_id: spec.folder,
+        collection_ids: spec.collections,
+        partial: false,
         name: spec.name.to_string(),
         subtitle: spec.subtitle.to_string(),
         r#type: spec.kind,
@@ -81,4 +86,42 @@ pub fn login_kind(uri: Option<&str>) -> CipherListViewType {
             }]
         }),
     })
+}
+
+pub fn make_cipher_view() -> CipherView {
+    let now = Utc::now();
+    CipherView {
+        id: None,
+        organization_id: None,
+        folder_id: None,
+        collection_ids: Vec::new(),
+        key: None,
+        partial: false,
+        name: "test".to_string(),
+        notes: None,
+        r#type: CipherType::SecureNote,
+        login: None,
+        identity: None,
+        card: None,
+        secure_note: None,
+        ssh_key: None,
+        bank_account: None,
+        drivers_license: None,
+        passport: None,
+        favorite: false,
+        reprompt: CipherRepromptType::None,
+        organization_use_totp: false,
+        edit: true,
+        permissions: None,
+        view_password: true,
+        local_data: None,
+        attachments: None,
+        attachment_decryption_failures: None,
+        fields: None,
+        password_history: None,
+        creation_date: now,
+        deleted_date: None,
+        revision_date: now,
+        archived_date: None,
+    }
 }

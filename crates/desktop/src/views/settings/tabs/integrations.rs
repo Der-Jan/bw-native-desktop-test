@@ -1,6 +1,6 @@
 use iced::{
     Element, Fill,
-    widget::{Space, column},
+    widget::{Space, column, text},
 };
 
 use crate::{
@@ -18,6 +18,7 @@ use super::{
 pub fn view<'a>(
     snap: &'a SettingsSnapshot,
     colors: &'a AppColors,
+    agent: &'a crate::services::ssh_agent::AgentRuntime,
 ) -> Element<'a, SettingChange, AppTheme> {
     let browser = setting_checkbox(
         snap.settings.browser_integration,
@@ -44,12 +45,6 @@ pub fn view<'a>(
         colors,
     );
 
-    let ddg = setting_checkbox(
-        snap.settings.duck_duck_go,
-        fl!("settings-integrations-duckduckgo"),
-        SettingChange::DuckDuckGo,
-    );
-
     column![
         settings_section(
             fl!("settings-integrations-browser"),
@@ -59,11 +54,29 @@ pub fn view<'a>(
         Space::new().height(SECTION_GAP_PX),
         settings_section(
             fl!("settings-integrations-ssh"),
-            column![ssh, ssh_prompt].spacing(16),
+            column![
+                ssh,
+                ssh_prompt,
+                iced::widget::text(agent.status()).size(14),
+                iced::widget::text(agent.path().display().to_string()).size(12),
+                crate::components::buttons::secondary(text(fl!("ssh-agent-copy-socket")))
+                    .on_press(SettingChange::CopySshSocket),
+                text(agent.shell_setup()).size(12),
+                crate::components::buttons::secondary(text(fl!("ssh-agent-copy-setup")))
+                    .on_press(SettingChange::CopySshSetup),
+                iced::widget::text(fl!("ssh-agent-help")).size(12),
+                iced::widget::text(
+                    if snap.prefs.ssh_prompt_behavior == SshPromptBehavior::Never {
+                        fl!("ssh-agent-unattended")
+                    } else {
+                        fl!("ssh-agent-protected")
+                    }
+                )
+                .size(12),
+            ]
+            .spacing(16),
             colors,
         ),
-        Space::new().height(SECTION_GAP_PX),
-        settings_section(fl!("settings-integrations-other"), ddg, colors),
     ]
     .width(Fill)
     .into()

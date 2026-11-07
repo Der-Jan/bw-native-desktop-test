@@ -65,7 +65,7 @@ impl View for SettingsView {
         let progress = self.fade.progress_when_visible();
 
         let sidebar = self.sidebar_view(ctx.colors);
-        let pane = self.content_pane(ctx.colors);
+        let pane = self.content_pane(ctx);
 
         // Outer dialog: fixed-size, white bg, rounded all corners. The sidebar
         // paints its own light-gray background with matching LEFT corner radii
@@ -158,8 +158,9 @@ pub enum SettingChange {
     BrowserIntegration(bool),
     BrowserIntegrationFingerprint(bool),
     SshAgent(bool),
+    CopySshSocket,
+    CopySshSetup,
     SshPromptBehavior(SshPromptBehavior),
-    DuckDuckGo(bool),
     // Autotype & copy
     AutotypeEnabled(bool),
     ClearClipboard(DurationSecs),
@@ -173,7 +174,6 @@ pub enum SettingChange {
     MinimizeToTray(bool),
     CloseToTray(bool),
     AlwaysShowDock(bool),
-    HardwareAcceleration(bool),
     AllowScreenshots(bool),
 }
 
@@ -238,8 +238,8 @@ impl SettingsView {
                 s.browser_integration_fingerprint = *v
             }
             SettingChange::SshAgent(v) => s.ssh_agent = *v,
+            SettingChange::CopySshSocket | SettingChange::CopySshSetup => {}
             SettingChange::SshPromptBehavior(v) => p.ssh_prompt_behavior = *v,
-            SettingChange::DuckDuckGo(v) => s.duck_duck_go = *v,
             SettingChange::AutotypeEnabled(v) => s.autotype_enabled = *v,
             SettingChange::ClearClipboard(v) => p.clear_clipboard = *v,
             SettingChange::MinimizeOnCopy(v) => p.minimize_on_copy = *v,
@@ -250,7 +250,6 @@ impl SettingsView {
             SettingChange::MinimizeToTray(v) => s.minimize_to_tray = *v,
             SettingChange::CloseToTray(v) => s.close_to_tray = *v,
             SettingChange::AlwaysShowDock(v) => s.always_show_dock = *v,
-            SettingChange::HardwareAcceleration(v) => s.hardware_acceleration = *v,
             SettingChange::AllowScreenshots(v) => s.allow_screenshots = *v,
         }
     }
@@ -286,12 +285,15 @@ impl SettingsView {
             .into()
     }
 
-    fn content_pane<'a>(&'a self, colors: &'a AppColors) -> Element<'a, SettingsMessage, AppTheme> {
+    fn content_pane<'a>(&'a self, ctx: &RenderCtx<'a>) -> Element<'a, SettingsMessage, AppTheme> {
+        let colors = ctx.colors;
         let header = modal::dialog_header(self.active.title(), SettingsMessage::Close, colors);
 
         let body = match self.active {
             CategoryKind::Security => tabs::security::view(&self.snapshot, colors),
-            CategoryKind::Integrations => tabs::integrations::view(&self.snapshot, colors),
+            CategoryKind::Integrations => {
+                tabs::integrations::view(&self.snapshot, colors, ctx.ssh_agent)
+            }
             CategoryKind::Autotype => tabs::autotype::view(&self.snapshot, colors),
             CategoryKind::Appearance => tabs::appearance::view(&self.snapshot, colors),
             CategoryKind::Advanced => tabs::advanced::view(&self.snapshot, colors),

@@ -22,7 +22,7 @@ use crate::{
     components::{FadeInOut, fade_in_out, icons, inputs, modal, toast::Toast},
     domain::UserId,
     fl,
-    services::sdk::{ClientExt, Organization, VaultChoice},
+    services::sdk::{Organization, VaultChoice},
     theme::{AppColors, AppTheme, RADIUS_LG},
 };
 
@@ -106,9 +106,11 @@ pub struct ExportView {
     /// Disables the Confirm dialog's Continue button while the SDK
     /// validation call is in flight.
     validating: bool,
+    validation_id: uuid::Uuid,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum ExportMessage {
     Close,
     /// Continue on the Compose dialog → open the master-password gate.
@@ -131,7 +133,7 @@ pub enum ExportMessage {
     /// active-user switch in flight can't redirect the export to the
     /// wrong account. `Err` re-enables the Confirm button and surfaces
     /// an "Invalid master password" toast.
-    ValidationCompleted(Result<UserId, String>),
+    ValidationCompleted(uuid::Uuid, Result<UserId, String>),
     /// Result of the async SDK export — `Ok(Some(path))` is the file the
     /// App handler wrote the export to, `Ok(None)` means the user cancelled
     /// the native save dialog (silent close), `Err` is a human-readable
@@ -161,8 +163,14 @@ impl View for ExportView {
     type Event = ExportEvent;
 
     fn update(&mut self, msg: ExportMessage, ctx: UpdateCtx<'_>) -> Outcome<Self> {
+        if let ExportMessage::ValidationCompleted(id, _) = &msg
+            && *id != self.validation_id
+        {
+            return Outcome::None;
+        }
         match msg {
             ExportMessage::Close => {
+                ctx.client_manager.clear_grants();
                 self.close_all();
                 Outcome::None
             }
@@ -192,6 +200,8 @@ impl View for ExportView {
                 Outcome::None
             }
             ExportMessage::BackToCompose => {
+                self.cancel_authorization();
+                ctx.client_manager.clear_grants();
                 self.confirm_fade.close();
                 self.master_password.clear();
                 self.validating = false;
@@ -205,21 +215,30 @@ impl View for ExportView {
                     return Outcome::None;
                 };
                 self.validating = true;
-                let password = self.master_password.clone();
+                self.cancel_authorization();
+                self.cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let cancelled = self.cancelled.clone();
+                let request = self.validation_id;
+                let password = std::mem::take(&mut self.master_password);
                 let Some((client, key)) = ctx.client_manager.validation_data_for(&uid) else {
                     return Outcome::None;
                 };
                 Outcome::perform(
                     async move {
                         client
-                            .validate_master_password(key, password)
+                            .authorize_password_scoped(
+                                key,
+                                password,
+                                crate::services::sdk::Authorization::export(),
+                                cancelled,
+                            )
                             .await
                             .map(|()| uid)
                     },
-                    ExportMessage::ValidationCompleted,
+                    move |r| ExportMessage::ValidationCompleted(request, r),
                 )
             }
-            ExportMessage::ValidationCompleted(Ok(uid)) => {
+            ExportMessage::ValidationCompleted(_, Ok(uid)) => {
                 self.validating = false;
                 self.master_password.clear();
                 // The validation task can outlive a user-initiated close
@@ -240,7 +259,7 @@ impl View for ExportView {
                     format,
                 })
             }
-            ExportMessage::ValidationCompleted(Err(_)) => {
+            ExportMessage::ValidationCompleted(_, Err(_)) => {
                 self.validating = false;
                 Outcome::toast(Toast::error(fl!("export-confirm-error"), None))
             }
@@ -253,6 +272,7 @@ impl View for ExportView {
                 ))
             }
             ExportMessage::Completed(Ok(None)) => {
+                ctx.client_manager.clear_grants();
                 // User cancelled the native save dialog — close the modals
                 // silently with no toast.
                 self.close_all();
@@ -303,10 +323,13 @@ impl ExportView {
             file_password: String::new(),
             master_password: String::new(),
             validating: false,
+            validation_id: uuid::Uuid::new_v4(),
+            cancelled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
     pub fn open(&mut self, email: String) {
+        self.cancel_authorization();
         self.fade.open();
         self.confirm_fade.close();
         self.email = email;
@@ -324,7 +347,13 @@ impl ExportView {
         self.vault_choices = VaultChoice::list_with_personal(orgs);
     }
 
+    fn cancel_authorization(&mut self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.validation_id = uuid::Uuid::new_v4();
+    }
     fn close_all(&mut self) {
+        self.cancel_authorization();
         self.fade.close();
         self.confirm_fade.close();
         self.master_password.clear();
@@ -510,6 +539,19 @@ impl ExportView {
     }
 }
 
+impl std::fmt::Debug for ExportMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ExportMessage(<redacted>)")
+    }
+}
+
+impl Drop for ExportView {
+    fn drop(&mut self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 #[cfg(test)]
 mod tests_update {
     use super::*;
@@ -602,7 +644,10 @@ mod tests_update {
         view.validating = true;
 
         let toast = view
-            .run(ExportMessage::ValidationCompleted(Err("invalid".into())))
+            .run(ExportMessage::ValidationCompleted(
+                view.validation_id,
+                Err("invalid".into()),
+            ))
             .await
             .expect_toast();
         assert!(matches!(

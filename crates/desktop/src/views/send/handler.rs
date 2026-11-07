@@ -38,6 +38,9 @@ impl App {
     /// the entry in `ClientManager::password_history` as a side effect.
     fn regenerate_send_password(&self) -> Task<Message> {
         let req = PasswordGeneratorRequest {
+            custom_allowed_chars: None,
+            custom_required_chars: None,
+            max_consecutive: None,
             lowercase: true,
             uppercase: true,
             numbers: true,

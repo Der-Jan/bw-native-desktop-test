@@ -6,11 +6,11 @@
 //! sidebar and title bar.
 //!
 //! Most callers should reach for [`dialog`] — it bundles the standard card
-//! shape (rounded corners + drop shadow + dismiss-on-backdrop-click).
+//! shape (rounded corners + border + dismiss-on-backdrop-click).
 //! [`view`] is the lower-level primitive for non-card overlays.
 
 use iced::{
-    Alignment, Border, Color, Element, Fill, Length, Padding, Shadow, Vector,
+    Alignment, Border, Color, Element, Fill, Length, Padding,
     widget::{Space, center, column, container, mouse_area, opaque, row, stack, text},
 };
 
@@ -18,9 +18,6 @@ use crate::{
     components::{BACKDROP_ALPHA, buttons, icons},
     theme::{AppColors, AppTheme, RADIUS_LG},
 };
-
-/// Drop-shadow alpha at full open, modulated by `progress`.
-const SHADOW_ALPHA: f32 = 0.45;
 
 /// Vertical slide distance (px) the dialog travels during the open
 /// transition. Faked via a top-spacer column — iced has no transform widget.
@@ -65,7 +62,7 @@ pub fn view<'a, Message: Clone + 'a>(
     opaque(stack![backdrop, centered].width(Fill).height(Fill))
 }
 
-/// Centered card-shaped modal — the default shape for app dialogs.
+/// Centered card-shaped modal with a border — the default for app dialogs.
 /// Each call site picks its own `bg` token via the closure so dialogs that
 /// look like content cards (`card_bg`) and dialogs that look like surfaces
 /// (`background`) can coexist. `height: None` shrinks to content height.
@@ -81,22 +78,18 @@ where
     M: Clone + 'a,
 {
     let progress = progress.clamp(0.0, 1.0);
-    let shadow = Shadow {
-        color: Color {
-            a: progress * SHADOW_ALPHA,
-            ..Color::BLACK
-        },
-        offset: Vector::new(0.0, 4.0),
-        blur_radius: 48.0,
-    };
     let card = container(body)
         .width(Length::Fixed(width))
         .height(height.map(Length::Fixed).unwrap_or(Length::Shrink))
         .style(move |theme: &AppTheme| {
             container::Style::default()
                 .background(bg(&theme.colors))
-                .border(Border::default().rounded(RADIUS_LG))
-                .shadow(shadow)
+                .border(
+                    Border::default()
+                        .color(theme.colors.border)
+                        .width(1.0)
+                        .rounded(RADIUS_LG),
+                )
         });
     view(card, on_dismiss, progress)
 }
@@ -173,8 +166,7 @@ const INFO_RING_DIAMETER: f32 = 48.0;
 /// Centered confirmation dialog with a colored info ring up top, a bold title,
 /// arbitrary `body` content below the title, and a stack of caller-supplied
 /// `actions` at the bottom. Backdrop click + `on_close` route through the same
-/// message. The ring uses the theme accent color with a 12% fill tint and a
-/// matching soft shadow.
+/// message. The ring uses the theme accent color with a 12% fill tint.
 ///
 /// `body` is whatever sits *between* the title and the action buttons — a
 /// description paragraph, a phrase row with a copy button, etc. `actions` is
@@ -209,14 +201,6 @@ where
                     ..theme.colors.accent
                 })
                 .border(Border::default().rounded(INFO_RING_DIAMETER / 2.0))
-                .shadow(Shadow {
-                    color: Color {
-                        a: 0.18,
-                        ..theme.colors.accent
-                    },
-                    offset: Vector::new(0.0, 2.0),
-                    blur_radius: 12.0,
-                })
         });
 
     let title = text(title_text.into())

@@ -8,7 +8,7 @@ use iced::Task;
 
 use crate::{
     app::{App, Message},
-    services::{clipboard::Sensitivity, cursor_monitor, sdk::ClientExt},
+    services::{clipboard::Sensitivity, cursor_monitor},
     views::magnify::{
         CopyField, MAGNIFY_RESULTS_SCROLL_ID, MAGNIFY_SEARCH_ID, MagnifyMessage, Mode, dims,
     },
@@ -19,10 +19,16 @@ impl App {
         match msg {
             MagnifyMessage::HotkeyPressed => self.magnify_hotkey(),
             MagnifyMessage::WindowOpened(id) => {
-                // Window is pre-created hidden in `App::new`. First focus /
-                // select-all / scroll happens inside `magnify_hotkey`'s
-                // toggle path when the window actually becomes visible.
-                apply_macos_window_fix(id)
+                if id != self.magnify.window || !self.windows.contains_key(&id) {
+                    return iced::window::close(id);
+                }
+                Task::batch([
+                    apply_macos_window_fix(id),
+                    iced::window::gain_focus(id),
+                    iced::widget::operation::focus(MAGNIFY_SEARCH_ID),
+                    iced::widget::operation::select_all(MAGNIFY_SEARCH_ID),
+                    self.magnify_keep_selected_visible(),
+                ])
             }
             MagnifyMessage::QueryChanged(query) => {
                 self.magnify.query = query;
@@ -174,6 +180,9 @@ impl App {
     // ── Helpers ───────────────────────────────────────────────────────────
 
     fn magnify_hotkey(&mut self) -> Task<Message> {
+        if self.windows.contains_key(&self.magnify.window) {
+            return self.magnify_hide();
+        }
         let now = Instant::now();
         let active = self.active_user;
         let unlocked = active.is_some_and(|uid| self.client_manager.is_unlocked(&uid));
@@ -194,67 +203,60 @@ impl App {
 
         self.magnify_recompute();
 
-        let id = self.magnify.window;
-        // Resize *before* the window becomes visible — avoids a one-frame
-        // flash at the old height before the resize lands.
         let height = dims::height_for(self.magnify.results.len());
-        let resize = iced::window::resize::<Message>(id, iced::Size::new(dims::WIDTH, height));
-        // Falls back to no-op where the cursor-monitor lookup is unimplemented;
-        // the window then stays where it last was.
-        let reposition = magnify_reposition_for_cursor(id, height);
-        // Safe to fire while hidden — operating on a hidden scrollable just
-        // updates its offset for the next show. Lives outside the `mode`
-        // continuation because `Task` isn't `Clone`.
-        let scroll = self.magnify_keep_selected_visible();
-        // Re-applied on every hotkey press because `WindowOpened` fires
-        // before the renderer surface (and thus the CAMetalLayer sublayer
-        // for `magnify-fix-opaque`) is configured. Idempotent — both setters
-        // are property writes.
-        let macos_fix = apply_macos_window_fix(id);
-        Task::batch([
-            resize,
-            reposition,
-            scroll,
-            macos_fix,
-            iced::window::mode(id).then(move |mode| match mode {
-                iced::window::Mode::Hidden => Task::batch([
-                    iced::window::set_mode(id, iced::window::Mode::Windowed),
-                    iced::window::gain_focus(id),
-                    iced::widget::operation::focus(MAGNIFY_SEARCH_ID),
-                    iced::widget::operation::select_all(MAGNIFY_SEARCH_ID),
-                ]),
-                iced::window::Mode::Windowed | iced::window::Mode::Fullscreen => {
-                    iced::window::set_mode(id, iced::window::Mode::Hidden)
-                }
-            }),
-        ])
+        let (id, size, open) = open_magnify_window(height);
+        self.magnify.window = id;
+        self.windows.insert(
+            id,
+            crate::app::window::WindowInfo::new(crate::app::window::WindowKind::Magnify, size),
+        );
+        // A new widget tree starts at offset zero; restore selection on mount.
+        self.magnify.scroll_offset_y = 0.0;
+        open
     }
 
     fn magnify_hide(&mut self) -> Task<Message> {
         self.magnify.touch();
-        iced::window::set_mode(self.magnify.window, iced::window::Mode::Hidden)
+        if self.windows.remove(&self.magnify.window).is_some() {
+            iced::window::close(self.magnify.window)
+        } else {
+            Task::none()
+        }
     }
 
     fn magnify_open_main(&mut self) -> Task<Message> {
         let hide = self.magnify_hide();
-        let main_id = self.main_window_id();
-        let show = Task::batch([
-            iced::window::set_mode(main_id, iced::window::Mode::Windowed),
-            iced::window::gain_focus(main_id),
-        ]);
+        let show = self.show_main_window();
         let route = self.show_login_for_active();
         Task::batch([hide, show, route])
     }
 
-    fn magnify_copy_field(&mut self, field: CopyField) -> Task<Message> {
+    pub(crate) fn magnify_copy_field(&mut self, field: CopyField) -> Task<Message> {
         let Some(cipher_id) = self.magnify.selected_item().and_then(|item| item.id) else {
             return Task::none();
         };
+        if let (Some(item), Some(uid)) = (self.magnify.selected_item(), self.active_user) {
+            let target = crate::services::sdk::Authorization {
+                cipher: Some(cipher_id),
+                revision: Some(item.revision_date),
+                action: crate::services::sdk::Action::Copy,
+            };
+            if item.reprompt == bitwarden_vault::CipherRepromptType::Password
+                && !self.client_manager.permitted(&uid, &target, false)
+            {
+                self.set_screen(crate::domain::Screen::Vault);
+                let show = self.show_main_window();
+                let authorize = self.update(
+                    crate::views::vault::VaultMessage::MagnifyCopy(cipher_id, field).into(),
+                );
+                return Task::batch([self.magnify_hide(), show, authorize]);
+            }
+        }
         self.magnify.pending_decrypt = Some((cipher_id, field));
         let decrypt = self.perform_with_active_client(
             move |client| async move {
                 client
-                    .full_cipher(cipher_id)
+                    .full_cipher_for(cipher_id, crate::services::sdk::Action::Copy)
                     .await
                     .map(|view| extract_field(view, field))
             },
@@ -335,15 +337,9 @@ impl App {
     }
 }
 
-/// Opens the launcher window hidden at startup so subsequent hotkey presses
-/// just toggle visibility. `Position::Centered` is the first-summon fallback
-/// used when the cursor-monitor lookup is unavailable. `min_size`/`max_size`
-/// bracket the dynamic-resize range so later `window::resize` calls grow or
-/// shrink freely without OS clamping. Returns the new id, the initial size
-/// (so the caller can register a `WindowInfo`), and the open-task pre-mapped
-/// onto `MagnifyMessage::WindowOpened`.
-pub(crate) fn open_magnify_window() -> (iced::window::Id, iced::Size, Task<Message>) {
-    let height = dims::height_for(0);
+/// Create a visible launcher only when explicitly summoned. Closing destroys
+/// the surface while keeping sticky search state in the application model.
+pub(crate) fn open_magnify_window(height: f32) -> (iced::window::Id, iced::Size, Task<Message>) {
     let size = iced::Size::new(dims::WIDTH, height);
     let (id, open_task) = iced::window::open(iced::window::Settings {
         size,
@@ -352,12 +348,19 @@ pub(crate) fn open_magnify_window() -> (iced::window::Id, iced::Size, Task<Messa
             dims::WIDTH,
             dims::height_for(dims::MAX_VISIBLE_ROWS),
         )),
-        position: iced::window::Position::Centered,
+        position: cursor_monitor::cursor_monitor_logical_center()
+            .map(|(cx, cy)| {
+                iced::window::Position::Specific(iced::Point::new(
+                    cx - dims::WIDTH / 2.0,
+                    cy - height / 2.0,
+                ))
+            })
+            .unwrap_or(iced::window::Position::Centered),
         resizable: false,
         decorations: false,
         transparent: true,
         level: iced::window::Level::AlwaysOnTop,
-        visible: false,
+        visible: true,
         exit_on_close_request: false,
         platform_specific: magnify_platform_specific(),
         ..Default::default()
@@ -383,18 +386,6 @@ fn apply_macos_window_fix(id: iced::window::Id) -> Task<Message> {
 #[cfg(not(target_os = "macos"))]
 fn apply_macos_window_fix(_id: iced::window::Id) -> Task<Message> {
     Task::none()
-}
-
-/// Centers the launcher on the cursor's monitor. `Task::none()` when the
-/// platform lookup is unavailable, so the window stays where it last was.
-fn magnify_reposition_for_cursor(id: iced::window::Id, height: f32) -> Task<Message> {
-    match cursor_monitor::cursor_monitor_logical_center() {
-        Some((cx, cy)) => {
-            let top_left = iced::Point::new(cx - dims::WIDTH / 2.0, cy - height / 2.0);
-            iced::window::move_to(id, top_left)
-        }
-        None => Task::none(),
-    }
 }
 
 /// Disable Windows' native rounded corners so the iced-side rounded
@@ -463,5 +454,35 @@ fn magnify_first_uri(item: &std::sync::Arc<bitwarden_vault::CipherListView>) -> 
             .and_then(|u| u.uri.clone())
             .filter(|s| !s.is_empty()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn launcher_has_no_startup_surface_and_dismissal_destroys_it() {
+        let mut app = App::test();
+        assert!(
+            !app.windows
+                .values()
+                .any(|w| w.kind == crate::app::window::WindowKind::Magnify)
+        );
+        let _ = app.magnify_hotkey();
+        let first = app.magnify.window;
+        assert!(app.windows.contains_key(&first));
+        let _ = app.magnify_hotkey();
+        assert!(!app.windows.contains_key(&first));
+        let _ = app.magnify_hotkey();
+        let second = app.magnify.window;
+        assert_ne!(first, second);
+        // A delayed open/close event from a dismissed surface cannot remove its replacement.
+        let _ = app.handle_magnify_message(MagnifyMessage::WindowOpened(first));
+        let _ = app.handle_window_message(crate::app::WindowMessage::Closed(first));
+        assert!(app.windows.contains_key(&second));
+        let _ = app.magnify_hide();
+        assert!(!app.windows.contains_key(&second));
+        assert!(!app.shutting_down);
     }
 }

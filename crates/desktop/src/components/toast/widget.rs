@@ -149,11 +149,6 @@ fn toast_view<'a, Message: 'a + Clone>(
             container::Style::default()
                 .background(status.background(&theme.colors).scale_alpha(alpha))
                 .border(iced::border::rounded(RADIUS_MD))
-                .shadow(iced::Shadow {
-                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.30 * alpha),
-                    offset: Vector::new(0.0, 2.0),
-                    blur_radius: 6.0,
-                })
         })
         .into()
 }

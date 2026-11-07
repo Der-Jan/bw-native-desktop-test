@@ -19,6 +19,33 @@ impl App {
     /// clipboard-timeout push, tray respawn — or emit the generic
     /// "not supported yet" toast for stubbed fields.
     fn apply_setting_change(&mut self, change: SettingChange) -> Task<Message> {
+        if matches!(
+            change,
+            SettingChange::CopySshSocket | SettingChange::CopySshSetup
+        ) {
+            return self.copy_and_toast(
+                if matches!(change, SettingChange::CopySshSetup) {
+                    self.ssh_agent.shell_setup()
+                } else {
+                    self.ssh_agent.path().display().to_string()
+                },
+                crate::services::clipboard::Sensitivity::Normal,
+                if matches!(change, SettingChange::CopySshSetup) {
+                    crate::fl!("ssh-agent-setup-copied")
+                } else {
+                    crate::fl!("ssh-agent-socket-copied")
+                },
+            );
+        }
+        // Keep navigation reconciliations that may have occurred during a background sync.
+        self.views.settings.snapshot.settings.vault_filters = self.settings.vault_filters.clone();
+        self.views
+            .settings
+            .snapshot
+            .settings
+            .collapsed_navigation_groups = self.settings.collapsed_navigation_groups.clone();
+        self.views.settings.snapshot.settings.sidebar_collapsed = self.settings.sidebar_collapsed;
+        self.views.settings.snapshot.settings.vault_sort = self.settings.vault_sort;
         // Copy every field the view just mutated back into App state. The
         // view's snapshot holds the fresh `Settings` (including the full
         // `user_preferences` map from open time) plus the active user's
@@ -63,18 +90,21 @@ impl App {
             }
             SettingChange::TrayEnabled(_)
             | SettingChange::MinimizeToTray(_)
-            | SettingChange::CloseToTray(_) => self.refresh_tray(),
+            | SettingChange::CloseToTray(_) => {
+                self.refresh_tray();
+                if self.main_window_hidden && self.tray.is_none() {
+                    return self.show_main_window();
+                }
+            }
 
             // No runtime side-effect needed — the setting is read where it
             // takes effect. `MinimizeOnCopy` is consumed in the vault
             // clipboard handler; `ShowFavicons` is consumed by the item-list
-            // renderer; `HardwareAcceleration` is read once at startup (see
-            // `main.rs`) and only takes effect on restart;
+            // renderer;
             // `LockOnSystemLock` is read by the session-event handler in
             // `app/handlers/platform.rs` when an event fires.
             SettingChange::MinimizeOnCopy(_)
             | SettingChange::ShowFavicons(_)
-            | SettingChange::HardwareAcceleration(_)
             | SettingChange::LockOnSystemLock(_) => {}
 
             // Both timeouts are consumed by `services::session_timeout`'s
@@ -84,6 +114,10 @@ impl App {
                 self.refresh_session_timeout_deadline();
             }
 
+            SettingChange::SshAgent(_)
+            | SettingChange::SshPromptBehavior(_)
+            | SettingChange::CopySshSocket
+            | SettingChange::CopySshSetup => {}
             SettingChange::AllowScreenshots(allow) => {
                 return self.apply_allow_screenshots_change(allow);
             }
@@ -96,9 +130,6 @@ impl App {
             | SettingChange::TouchIdUnlock(_)
             | SettingChange::BrowserIntegration(_)
             | SettingChange::BrowserIntegrationFingerprint(_)
-            | SettingChange::SshAgent(_)
-            | SettingChange::SshPromptBehavior(_)
-            | SettingChange::DuckDuckGo(_)
             | SettingChange::AutotypeEnabled(_)
             | SettingChange::AlwaysShowDock(_) => {
                 self.push_toast(crate::views::settings::not_supported_toast());

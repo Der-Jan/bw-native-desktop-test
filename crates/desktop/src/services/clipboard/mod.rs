@@ -37,9 +37,11 @@ enum Command {
         value: String,
         sensitivity: Sensitivity,
     },
-    /// `None` disables auto-clear AND clear-on-close — the worker drops any
-    /// outstanding tracked value (without clearing it) and stops starting timers.
+    /// `None` disables auto-clear and clear-on-close, but retains ownership
+    /// so lock/logout can explicitly clear an app-owned clipboard value.
     SetTimeout(Option<Duration>),
+    /// Explicit security transition; applies even if timed clearing is disabled.
+    ClearOwned,
 }
 
 pub struct ClipboardManager {
@@ -70,10 +72,14 @@ impl ClipboardManager {
     }
 
     /// `None` disables auto-clear AND clear-on-close. Passing `Some` re-enables
-    /// tracking for future copies; a copy already in the clipboard before this
-    /// call is not retroactively tracked.
+    /// timed clearing for tracked copies. Explicit lock/logout clearing is
+    /// independent of this preference.
     pub fn set_timeout(&self, timeout: Option<Duration>) {
         self.send(Command::SetTimeout(timeout));
+    }
+
+    pub fn clear_owned(&self) {
+        self.send(Command::ClearOwned);
     }
 
     fn send(&self, cmd: Command) {
@@ -127,25 +133,18 @@ fn worker_loop(cmd_rx: mpsc::Receiver<Command>, initial_timeout: Option<Duration
                     continue;
                 }
 
-                if timeout.is_some() {
-                    last = Some(value);
-                } else {
-                    last = None;
-                }
+                // Keep ownership for security-transition clearing even when
+                // the user has disabled the timed clear.
+                last = Some(value);
             }
             Ok(Command::SetTimeout(new_timeout)) => {
                 timeout = new_timeout;
-                if timeout.is_none() {
-                    last = None;
-                }
             }
+            Ok(Command::ClearOwned) => clear_tracked(&mut clipboard, &mut last),
             Err(e) => {
-                // Clear on timeout/exit if our last-written value is still there.
-                if let Some(expected) = last.take()
-                    && clipboard.get_text().unwrap_or_default() == expected
-                    && let Err(e) = clipboard.clear()
-                {
-                    tracing::warn!(%e, "clipboard clear failed");
+                // Explicit ClearOwned is independent of this timeout policy.
+                if timeout.is_some() {
+                    clear_tracked(&mut clipboard, &mut last);
                 }
 
                 if matches!(e, RecvTimeoutError::Disconnected) {
@@ -155,6 +154,30 @@ fn worker_loop(cmd_rx: mpsc::Receiver<Command>, initial_timeout: Option<Duration
         }
     }
     tracing::info!("clipboard worker exiting");
+}
+
+/// Only clears a value still owned by this process. Read failure is not ownership.
+trait OwnedClipboard {
+    fn read_owned_text(&mut self) -> Option<String>;
+    fn clear_owned_text(&mut self) -> Result<(), String>;
+}
+
+impl OwnedClipboard for arboard::Clipboard {
+    fn read_owned_text(&mut self) -> Option<String> {
+        self.get_text().ok()
+    }
+    fn clear_owned_text(&mut self) -> Result<(), String> {
+        self.clear().map_err(|e| e.to_string())
+    }
+}
+
+fn clear_tracked(clipboard: &mut impl OwnedClipboard, last: &mut Option<String>) {
+    if let Some(expected) = last.take()
+        && clipboard.read_owned_text().as_deref() == Some(expected.as_str())
+        && let Err(error) = clipboard.clear_owned_text()
+    {
+        tracing::warn!(%error, "clipboard clear failed");
+    }
 }
 
 // ── arboard + platform extensions ─────────────────────────────────────────
@@ -235,6 +258,47 @@ pub fn launch_url(uri: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct TestClipboard {
+        value: Option<String>,
+        cleared: bool,
+    }
+    impl OwnedClipboard for TestClipboard {
+        fn read_owned_text(&mut self) -> Option<String> {
+            self.value.clone()
+        }
+        fn clear_owned_text(&mut self) -> Result<(), String> {
+            self.cleared = true;
+            self.value = None;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn security_clear_removes_owned_text_and_releases_the_worker_copy() {
+        let mut clipboard = TestClipboard {
+            value: Some("secret".into()),
+            cleared: false,
+        };
+        let mut tracked = Some("secret".into());
+        clear_tracked(&mut clipboard, &mut tracked);
+        assert!(clipboard.cleared);
+        assert!(tracked.is_none());
+    }
+
+    #[test]
+    fn security_clear_preserves_foreign_or_unreadable_clipboard_contents() {
+        for value in [Some("another application's text".into()), None] {
+            let mut clipboard = TestClipboard {
+                value,
+                cleared: false,
+            };
+            let mut tracked = Some("secret".into());
+            clear_tracked(&mut clipboard, &mut tracked);
+            assert!(!clipboard.cleared);
+            assert!(tracked.is_none());
+        }
+    }
 
     #[test]
     fn launch_https_url_is_accepted() {

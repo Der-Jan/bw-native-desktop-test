@@ -40,8 +40,8 @@ pub(in super::super) fn passport_card<'a>(
         .on_input(CipherEditMessage::PpSurnameChanged)
         .disabled(form.saving),
         text_field(
-            fl!("form-pp-date-of-birth"),
-            p.date_of_birth.as_deref().unwrap_or(""),
+            format!("{} (YYYY-MM-DD)", fl!("form-pp-date-of-birth")),
+            &form.dates.birth,
             colors,
         )
         .on_input(CipherEditMessage::PpDateOfBirthChanged)
@@ -99,15 +99,15 @@ pub(in super::super) fn passport_card<'a>(
         .on_input(CipherEditMessage::PpIssuingAuthorityChanged)
         .disabled(form.saving),
         text_field(
-            fl!("form-pp-issue-date"),
-            p.issue_date.as_deref().unwrap_or(""),
+            format!("{} (YYYY-MM-DD)", fl!("form-pp-issue-date")),
+            &form.dates.issued,
             colors,
         )
         .on_input(CipherEditMessage::PpIssueDateChanged)
         .disabled(form.saving),
         text_field(
-            fl!("form-pp-expiration-date"),
-            p.expiration_date.as_deref().unwrap_or(""),
+            format!("{} (YYYY-MM-DD)", fl!("form-pp-expiration-date")),
+            &form.dates.expires,
             colors,
         )
         .on_input(CipherEditMessage::PpExpirationDateChanged)

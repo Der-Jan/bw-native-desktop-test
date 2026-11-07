@@ -5,7 +5,7 @@ edition = "2024"
 license-file = "LICENSE.txt"
 
 [features]
-default = ["gpu"]
+default = []
 
 # Debug overlay with layout bounds, render time, widget IDs. Toggle with F12.
 # Usage: cargo run --features dev
@@ -15,12 +15,6 @@ dev = ["iced/debug"]
 # Usage: cargo run --features test
 test = ["iced/tester"]
 
-# GPU rendering backend (wgpu). Adds ~9 MB binary size + ~500 ms startup.
-# Compiles wgpu into the binary; the active backend is chosen at runtime by
-# `settings.hardware_acceleration` (toggle in app settings), so building
-# without this feature forces tiny-skia regardless of the in-app toggle.
-gpu = ["iced/wgpu"]
-
 [dependencies]
 async-trait = { workspace = true }
 iced = { workspace = true, features = [
@@ -29,44 +23,60 @@ iced = { workspace = true, features = [
     "advanced",   # custom widgets (DropDown, toast)
     "canvas",     # vector drawing (TOTP countdown ring)
     "svg",
-    "image",
+    "image-without-codecs", # Image formats are selected explicitly below.
     "crisp",      # pixel-snapping for sharp edges on form UI
     "hinting",    # text metric hinting for clearer glyphs
     "web-colors", # sRGB blending to match Bitwarden web app colors
     "x11",        # Linux X11 display backend
     "wayland",    # Linux Wayland display backend
     "lazy",
-    "sysinfo",    # `iced::system::information()` (wgpu backend cache + bug report)
 ] }
 arboard = { version = "3.6", default-features = false, features = [
     "wayland-data-control",
 ] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 derive_more = { version = "2", default-features = false, features = ["from"] }
+dirs = "6"
 global-hotkey = "0.8"
-image = "0.25"
+# Preserve the existing image formats except OpenEXR and TIFF. Iced's `image`
+# feature would re-enable image/default and bring both decoders back.
+image = { version = "0.25", default-features = false, features = [
+    "rayon", "avif", "bmp", "dds", "ff", "gif", "hdr", "ico", "jpeg",
+    "png", "pnm", "qoi", "tga", "webp",
+] }
 i18n-embed = { version = "0.16", features = [
     "fluent-system",
     "desktop-requester",
 ] }
 i18n-embed-fl = "0.10"
-lilt = "0.8"
 muda = "0.19"
 open = "5"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest-account = { package = "reqwest", version = "0.13", default-features = false, features = ["rustls", "json", "form"] }
+reqwest-middleware = "0.5"
+rustls = { version = "0.23.46", default-features = false, features = ["std"] }
+http = "1"
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+openssl = "0.10"
+p12-keystore = "0.4.1"
+base64 = "0.22"
 rfd = "0.17"
 rust-embed = "8"
 serde = { workspace = true }
 serde_json = { workspace = true }
 session-events = { path = "../session-events" }
 system-theme = "0.3"
-tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "fs"] }
+tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "fs", "sync"] }
 tray-icon = "0.24"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = "2"
 uuid = { workspace = true }
+zeroize = "1"
+ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["std", "ed25519", "rsa", "p256", "p384", "p521"] }
+signature = "3.0.0"
 
+bitwarden-api-api = { workspace = true }
 bitwarden-auth = { workspace = true }
 bitwarden-collections = { workspace = true }
 bitwarden-core = { workspace = true }
@@ -79,6 +89,12 @@ bitwarden-send = { workspace = true }
 bitwarden-ssh = { workspace = true }
 bitwarden-state = { workspace = true }
 bitwarden-vault = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "=0.3.7", default-features = false, features = ["tokio", "blocking"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
@@ -103,5 +119,5 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 iced_test = { workspace = true }

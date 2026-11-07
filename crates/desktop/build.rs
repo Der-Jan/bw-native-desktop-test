@@ -38,6 +38,7 @@ fn embed_sdk_rev() {
 }
 
 /// Walk `Cargo.lock` looking for the `bitwarden-core` `[[package]]` block
+/// (or unpatched `bitwarden-crypto` when core has a local transport patch)
 /// and return the hash from its `source = "git+...?rev=HEX#HEX"` line.
 fn extract_sdk_rev(lock: &str) -> Option<String> {
     let mut in_target = false;
@@ -47,7 +48,7 @@ fn extract_sdk_rev(lock: &str) -> Option<String> {
             in_target = false;
             continue;
         }
-        if line == r#"name = "bitwarden-core""# {
+        if line == r#"name = "bitwarden-core""# || line == r#"name = "bitwarden-crypto""# {
             in_target = true;
             continue;
         }

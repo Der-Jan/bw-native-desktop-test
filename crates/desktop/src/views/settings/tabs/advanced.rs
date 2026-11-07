@@ -38,11 +38,6 @@ pub fn view<'a>(
         fl!("settings-advanced-always-show-dock"),
         SettingChange::AlwaysShowDock,
     );
-    let hardware_accel = setting_checkbox(
-        snap.settings.hardware_acceleration,
-        fl!("settings-advanced-hardware-acceleration"),
-        SettingChange::HardwareAcceleration,
-    );
     let allow_screenshots = setting_checkbox(
         snap.settings.allow_screenshots,
         fl!("settings-advanced-allow-screenshots"),
@@ -58,7 +53,7 @@ pub fn view<'a>(
         Space::new().height(SECTION_GAP_PX),
         settings_section(
             fl!("settings-advanced-platform"),
-            column![always_dock, hardware_accel, allow_screenshots].spacing(10),
+            column![always_dock, allow_screenshots].spacing(10),
             colors,
         ),
     ]

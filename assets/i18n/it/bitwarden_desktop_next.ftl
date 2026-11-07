@@ -322,7 +322,6 @@ menu-view-reset-zoom = Reimposta zoom
 menu-view-toggle-fullscreen = Attiva/disattiva schermo intero
 
 ## Menu — Account
-menu-account-premium = Abbonamento Premium
 menu-account-change-password = Cambia password principale
 menu-account-two-step = Verifica in due passaggi
 menu-account-fingerprint = Frase impronta
@@ -342,12 +341,7 @@ menu-help-legal-tos = Termini di servizio
 menu-help-legal-privacy = Informativa sulla privacy
 menu-help-follow = Seguici
 menu-help-web-vault = Vai alla cassaforte web
-menu-help-mobile-app = Ottieni app mobile
 menu-help-browser-extension = Ottieni estensione del browser
-menu-help-troubleshooting = Risoluzione problemi
-menu-help-troubleshooting-gpu = Attiva/disattiva accelerazione hardware
-menu-help-toast-hw-accel-on = Accelerazione hardware abilitata. Riavvia Bitwarden per applicare la modifica.
-menu-help-toast-hw-accel-off = Accelerazione hardware disabilitata. Riavvia Bitwarden per applicare la modifica.
 menu-help-about = Informazioni su Bitwarden
 
 menu-toast-sync-success = Cassaforte sincronizzata
@@ -432,11 +426,9 @@ settings-integrations-browser-fingerprint = Richiedi impronta di verifica
 settings-integrations-ssh = Agente SSH
 settings-integrations-ssh-enable = Abilita agente SSH
 settings-integrations-ssh-prompt = Comportamento della richiesta
-settings-ssh-prompt-always = Sempre
+settings-ssh-prompt-always = Ask (default: allow once)
 settings-ssh-prompt-never = Mai
-settings-ssh-prompt-remember = Ricorda fino al blocco
-settings-integrations-other = Altro
-settings-integrations-duckduckgo = Abilita integrazione del browser DuckDuckGo
+settings-ssh-prompt-remember = Ask (default: allow until lock)
 
 # Autotype and copy tab
 settings-autotype-heading = Digitazione automatica
@@ -463,7 +455,6 @@ settings-advanced-minimize-to-tray = Riduci a icona nella tray
 settings-advanced-close-to-tray = Chiudi nella tray
 settings-advanced-platform = Piattaforma
 settings-advanced-always-show-dock = Mostra sempre l'icona del Dock
-settings-advanced-hardware-acceleration = Abilita accelerazione hardware
 settings-advanced-allow-screenshots = Consenti screenshot
 
 ## Send list
@@ -629,3 +620,47 @@ export-confirm-error = Password principale non valida.
 export-toast-success = Cassaforte esportata in { $path }
 export-toast-failed-title = Esportazione non riuscita
 export-toast-failed-body = Impossibile esportare la cassaforte. Riprova.
+
+# Composable vault filters
+sidebar-group-vaults = Casseforti
+sidebar-group-view = Vista
+sidebar-group-types = Tipi di elementi
+sidebar-filter-all-vaults = Tutte le casseforti
+sidebar-filter-active-items = Elementi attivi
+sidebar-filter-all-types = Tutti i tipi
+
+sidebar-group-folders = Cartelle
+sidebar-filter-all-folders = Tutte le cartelle
+sidebar-filter-no-folder = Nessuna cartella
+sidebar-group-collections = Raccolte
+sidebar-filter-all-collections = Tutte le raccolte
+sidebar-filter-no-collection = Nessuna raccolta
+
+vault-column-last-changed = Ultima modifica
+vault-column-base-url = URL di base
+vault-filter-folder = Cartella: { $name }
+vault-filter-collection = Raccolta: { $name }
+vault-filter-search = Ricerca: «{ $query }»
+
+ssh-approval-title = Allow SSH authentication?
+ssh-approval-key = Key: { $name }
+ssh-approval-user = SSH user: { $name }
+ssh-approval-process = Local process: { $name }
+ssh-approval-process-note = The process name is informational and does not verify an application or destination hostname.
+ssh-approval-unbound = No verified host-key binding. This request can only be approved once.
+ssh-approval-hosts = Verified host keys (forwarding path → destination):
+ssh-approval-deny = Deny
+ssh-approval-once = Allow once
+ssh-approval-remember = Allow until lock
+ssh-approval-timeout = No response within 45 seconds denies the request.
+ssh-agent-copy-socket = Copy socket path
+ssh-agent-socket-copied = SSH socket path copied
+ssh-agent-help = Set SSH_AUTH_SOCK or the SSH IdentityAgent option to this path. Only the active unlocked account provides keys.
+ssh-agent-unattended = Without prompts, any local process of your user can use permitted SSH keys while the active vault is unlocked.
+ssh-agent-protected = Deleted, archived, hidden-password and master-password-reprompt keys are not offered. Remembered approvals require a verified session binding and a host-bound signature.
+
+ssh-agent-copy-setup = Copy SSH_AUTH_SOCK command
+ssh-agent-setup-copied = SSH_AUTH_SOCK command copied
+ssh-approval-bound-once = The host key is verified, but this signing request is not host-bound. Only one-use approval is available.
+
+ssh-approval-window-open = SSH approval is waiting in its confirmation window. Press Esc to cancel.

@@ -4,7 +4,7 @@ use iced::{
 };
 
 use crate::{
-    components::{self, drop_down::PANEL_SHADOW},
+    components,
     services::{
         menu::{MenuEntry, MenuState},
         sdk::AccountEntry,
@@ -89,7 +89,6 @@ fn styled_panel<'a>(
                         .width(1.0)
                         .rounded(PANEL_RADIUS),
                 )
-                .shadow(PANEL_SHADOW)
         })
         .into()
 }

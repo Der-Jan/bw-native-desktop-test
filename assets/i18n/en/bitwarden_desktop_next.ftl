@@ -418,7 +418,6 @@ menu-view-reset-zoom = Reset zoom
 menu-view-toggle-fullscreen = Toggle full screen
 
 ## Menu — Account
-menu-account-premium = Premium membership
 menu-account-change-password = Change master password
 menu-account-two-step = Two-step login
 menu-account-fingerprint = Fingerprint phrase
@@ -438,12 +437,7 @@ menu-help-legal-tos = Terms of service
 menu-help-legal-privacy = Privacy policy
 menu-help-follow = Follow us
 menu-help-web-vault = Go to web vault
-menu-help-mobile-app = Get mobile app
 menu-help-browser-extension = Get browser extension
-menu-help-troubleshooting = Troubleshooting
-menu-help-troubleshooting-gpu = Toggle hardware acceleration
-menu-help-toast-hw-accel-on = Hardware acceleration enabled. Restart Bitwarden to apply.
-menu-help-toast-hw-accel-off = Hardware acceleration disabled. Restart Bitwarden to apply.
 menu-help-about = About Bitwarden
 
 menu-toast-sync-success = Vault synced
@@ -537,11 +531,9 @@ settings-integrations-browser-fingerprint = Require verification fingerprint
 settings-integrations-ssh = SSH agent
 settings-integrations-ssh-enable = Enable SSH agent
 settings-integrations-ssh-prompt = Prompt behavior
-settings-ssh-prompt-always = Always
+settings-ssh-prompt-always = Ask (default: allow once)
 settings-ssh-prompt-never = Never
-settings-ssh-prompt-remember = Remember until lock
-settings-integrations-other = Other
-settings-integrations-duckduckgo = Enable DuckDuckGo browser integration
+settings-ssh-prompt-remember = Ask (default: allow until lock)
 
 # Autotype and copy tab
 settings-autotype-heading = Autotype
@@ -568,7 +560,6 @@ settings-advanced-minimize-to-tray = Minimize to tray
 settings-advanced-close-to-tray = Close to tray
 settings-advanced-platform = Platform
 settings-advanced-always-show-dock = Always show dock icon
-settings-advanced-hardware-acceleration = Enable hardware acceleration
 settings-advanced-allow-screenshots = Allow screenshots
 
 ## Send list
@@ -734,3 +725,55 @@ export-confirm-error = Invalid master password.
 export-toast-success = Vault exported to { $path }
 export-toast-failed-title = Export failed
 export-toast-failed-body = Couldn't export the vault. Try again.
+
+# Local account storage and logout recovery
+storage-accounts-unavailable = Local account storage is unavailable. No accounts were loaded for safety.
+storage-logout-incomplete = The account is signed out. Some local account data could not be removed yet. Cleanup will be retried on the next start.
+storage-logout-not-stored = Logout could not be saved. The account is locked now but may reappear after restarting. Please check storage access.
+storage-logout-pending = Finishing logout …
+
+send-item-unsupported = Sharing vault items through Send is not yet supported.
+
+# Composable vault filters
+sidebar-group-vaults = Vaults
+sidebar-group-view = View
+sidebar-group-types = Item types
+sidebar-filter-all-vaults = All vaults
+sidebar-filter-active-items = Active items
+sidebar-filter-all-types = All item types
+
+sidebar-group-folders = Folders
+sidebar-filter-all-folders = All folders
+sidebar-filter-no-folder = No folder
+sidebar-group-collections = Collections
+sidebar-filter-all-collections = All collections
+sidebar-filter-no-collection = No collection
+
+vault-column-last-changed = Last changed
+vault-column-base-url = Base URL
+vault-filter-folder = Folder: { $name }
+vault-filter-collection = Collection: { $name }
+vault-filter-search = Search: “{ $query }”
+
+ssh-approval-title = Allow SSH authentication?
+ssh-approval-key = Key: { $name }
+ssh-approval-user = SSH user: { $name }
+ssh-approval-process = Local process: { $name }
+ssh-approval-process-note = The process name is informational and does not verify an application or destination hostname.
+ssh-approval-unbound = No verified host-key binding. This request can only be approved once.
+ssh-approval-hosts = Verified host keys (forwarding path → destination):
+ssh-approval-deny = Deny
+ssh-approval-once = Allow once
+ssh-approval-remember = Allow until lock
+ssh-approval-timeout = No response within 45 seconds denies the request.
+ssh-agent-copy-socket = Copy socket path
+ssh-agent-socket-copied = SSH socket path copied
+ssh-agent-help = Set SSH_AUTH_SOCK or the SSH IdentityAgent option to this path. Only the active unlocked account provides keys.
+ssh-agent-unattended = Without prompts, any local process of your user can use permitted SSH keys while the active vault is unlocked.
+ssh-agent-protected = Deleted, archived, hidden-password and master-password-reprompt keys are not offered. Remembered approvals require a verified session binding and a host-bound signature.
+
+ssh-agent-copy-setup = Copy SSH_AUTH_SOCK command
+ssh-agent-setup-copied = SSH_AUTH_SOCK command copied
+ssh-approval-bound-once = The host key is verified, but this signing request is not host-bound. Only one-use approval is available.
+
+ssh-approval-window-open = SSH approval is waiting in its confirmation window. Press Esc to cancel.

@@ -19,7 +19,7 @@ pub(crate) mod virtual_list;
 pub(crate) use fade_in_out::FadeInOut;
 
 use iced::{
-    Background, Border, Color, Element, Fill, Padding, Shadow, Vector,
+    Background, Border, Color, Element, Fill, Padding, Shadow,
     widget::{container, image, rule, scrollable, text},
 };
 
@@ -29,20 +29,6 @@ use crate::theme::{AppColors, AppTheme, RADIUS_LG};
 /// open. The actual paint multiplies this by the fade-in progress so the
 /// scrim cross-fades with the foreground.
 pub const BACKDROP_ALPHA: f32 = 0.45;
-
-/// Subtle drop shadow used by `styled_card`, the generator history-row, and
-/// the send-edit section card. A 1px-down soft shadow at 20% black; pulls
-/// cards a hair off their background without a heavy halo.
-pub const CARD_SHADOW: Shadow = Shadow {
-    color: Color {
-        r: 0.0,
-        g: 0.0,
-        b: 0.0,
-        a: 0.20,
-    },
-    offset: Vector::new(0.0, 1.0),
-    blur_radius: 2.0,
-};
 
 /// Right-pane shell shared by the cipher detail, cipher edit, and send edit
 /// panes: full-fill container painted with `card_bg` and rounded only at the
@@ -122,8 +108,12 @@ pub fn styled_card<'a, M: 'a>(
         .style(|theme: &AppTheme| {
             container::Style::default()
                 .background(theme.colors.background)
-                .border(iced::border::rounded(RADIUS_LG))
-                .shadow(CARD_SHADOW)
+                .border(
+                    Border::default()
+                        .color(theme.colors.border)
+                        .width(1.0)
+                        .rounded(RADIUS_LG),
+                )
         })
         .into()
 }
@@ -246,3 +236,7 @@ where
         .spacing(8)
         .on_toggle(on_toggle)
 }
+
+pub mod ssh_approval;
+
+pub mod focus_button;

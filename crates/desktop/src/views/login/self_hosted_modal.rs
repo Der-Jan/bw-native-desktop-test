@@ -21,6 +21,8 @@ pub const SELF_HOSTED_URL_FIELD_ID: widget::Id = widget::Id::new("self-hosted-ur
 
 pub fn view<'a>(
     state: &'a SelfHostedModal,
+    certificate_controls: Element<'a, LoginMessage, AppTheme>,
+    save_enabled: bool,
     colors: &'a AppColors,
 ) -> Option<Element<'a, LoginMessage, AppTheme>> {
     let progress = state.fade.progress_if_visible()?;
@@ -54,22 +56,22 @@ pub fn view<'a>(
 
     let footer = modal::footer_actions(
         fl!("login-self-hosted-modal-save"),
-        Some(LoginMessage::SelfHostedSave),
+        save_enabled.then_some(LoginMessage::SelfHostedSave),
         fl!("login-self-hosted-modal-cancel"),
         LoginMessage::SelfHostedCancel,
     );
 
-    let body = column![header, url_field, info_row, footer]
+    let body = column![header, url_field, info_row, certificate_controls, footer]
         .spacing(16)
         .padding(modal::BODY_PADDING)
         .width(Fill);
 
     Some(modal::dialog(
-        460.0,
+        620.0,
         None,
         |c| c.background,
         progress,
-        container(body),
+        container(iced::widget::scrollable(body).height(iced::Length::Shrink)),
         LoginMessage::SelfHostedCancel,
     ))
 }

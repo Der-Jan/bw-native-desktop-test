@@ -41,8 +41,6 @@ fn folder_repo(client: &PasswordManagerClient) -> Result<Arc<dyn Repository<Fold
 
 #[async_trait::async_trait]
 pub trait ClientExt {
-    fn lock(&self);
-
     /// Verify the user's master password against the cached user-key envelope
     /// without touching the keystore. Used by Export to gate vault data
     /// leaving the encrypted store behind a fresh master-password check.
@@ -96,10 +94,6 @@ pub trait ClientExt {
 
 #[async_trait::async_trait]
 impl ClientExt for PasswordManagerClient {
-    fn lock(&self) {
-        self.0.internal.get_key_store().clear();
-    }
-
     async fn validate_master_password(
         self,
         encrypted_user_key: String,

@@ -7,10 +7,11 @@ UI-only stub: crypto, API, auth, vault decrypt run through the real `bitwarden-*
 ## Quick Start
 
 ```bash
-cargo run                                     # Loading screen → login
+cargo run                                     # Empty profile in private OS application storage
 cargo clippy                                  # Lint check (must pass clean)
 cargo run --bin packager                      # Package .app/.dmg/.msi
-cargo run -p fake-data                        # Regenerate per-user SQLite + mock.json under data/
+cargo run -p fake-data -- --output ./demo-data # New/empty explicit demo directory
+cargo run -- --demo ./demo-data                # Synthetic account preview
 ```
 
 ## Dev Modes
@@ -20,7 +21,7 @@ DEV_BOTH_MENUS=1 cargo run                                            # Native +
 RUST_LOG=bitwarden_desktop_next=debug,bitwarden_core=debug cargo run  # Full SDK tracing
 ```
 
-The `gpu` cargo feature (on by default) compiles wgpu into the binary. The runtime backend is selected by `settings.hardware_acceleration` in `main.rs::select_backend()` — toggled from the in-app settings dialog, not a CLI flag.
+Rendering uses tiny-skia on the CPU. There is no GPU feature or hardware-acceleration setting. Image codecs are selected explicitly in `crates/desktop/Cargo.toml`; keep Iced on `image-without-codecs` so it does not re-enable OpenEXR or TIFF through image defaults.
 
 ## Docs (READ BEFORE CHANGES)
 
@@ -79,7 +80,7 @@ The `gpu` cargo feature (on by default) compiles wgpu into the binary. The runti
 - Widget IDs referenced from more than one file live as `pub const <NAME>: widget::Id = widget::Id::new("...")` in the widget's own module (e.g. `views/vault/widgets/search_bar.rs::SEARCH_ID`).
 
 ### MVU + SDK
-- `ClientManager` ([services/sdk/mod.rs](crates/desktop/src/services/sdk/mod.rs)) holds plain `HashMap<UserId, _>`s, no internal locking. Mutating methods take `&mut self` and run sync from `App::update`. Async SDK calls go through `ClientExt` methods on `PasswordManagerClient` (cheap-clone, `Arc`-internal), so the manager is never borrowed across `.await`. Use `ClientManager::client_for(uid)` to get the handle, or `unlock_data_for(uid)` / `validation_data_for(uid)` when the call needs more than the client.
+- `ClientManager` ([services/sdk/mod.rs](crates/desktop/src/services/sdk/mod.rs)) holds plain `HashMap<UserId, _>`s, no internal locking. Mutating methods take `&mut self` and run sync from `App::update`. Async SDK calls go through `ClientExt` methods on revocable `SessionClient` handles. Raw SDK clients stay in the session runtime and are obtained only under operation leases, so queued tasks cannot retain a database owner after logout. The manager is never borrowed across `.await`. Use `ClientManager::client_for(uid)` to get the handle, or `unlock_data_for(uid)` / `validation_data_for(uid)` when the call needs more than the client.
 - The "extract per-user client + run async + dispatch result" shape is `App::perform_with_active_client` / `App::perform_with_client` (returning `Task<Message>`) and the matching `UpdateCtx::perform_with_active_client` / `perform_with_client` (returning `Outcome<V>`). Reach for these before re-implementing.
 - `Outcome::perform(future, on_complete)` is the analogue of `Task::perform`. `Outcome::toast(t)` surfaces a toast via `dispatch` directly — views don't need a `ToastRequested` event variant.
 - `ctx` is the first parameter after `self` in every view handler / view function. Both `UpdateCtx` and `RenderCtx`.
@@ -91,7 +92,7 @@ The `gpu` cargo feature (on by default) compiles wgpu into the binary. The runti
 - `components::rail_scroll_style` — `.style(...)` fn for the muted-rail scrollable look.
 - `components::rounded_top_pane(content, top_radius)` — right-pane shell painted with `card_bg`.
 - `components::pane_header(title, on_close, &AppColors)` / `components::pane_footer(content)` — 18 px title + close-X header (separator below) and `background`-coloured action bar (separator above) for right-pane shells. Used by cipher detail / cipher edit.
-- `components::CARD_SHADOW` — subtle 1px-down 20% black shadow used by `styled_card` and the generator history-row.
+- Use borders and background colors to distinguish cards, menus, and dialogs. Do not add painted drop shadows: the CPU renderer recomputes their full pixel area on redraw.
 - `components::section_label(label, &AppColors)` (14 px primary) / `components::section_heading(label, &AppColors)` (16 px bold primary) — typography for grouping labels above a card or settings sub-section.
 - `components::section_card(heading, body, &AppColors)` — bold 14 px heading stacked above a `styled_card` body. Used by send-edit; import has its own visually-distinct heading-inside-card variant.
 - `components::labeled_checkbox(checked, label, on_toggle)` — standard 18 px / 8 sp checkbox used across settings + generator tab toggles.
@@ -99,8 +100,8 @@ The `gpu` cargo feature (on by default) compiles wgpu into the binary. The runti
 - `field_helpers::add_item_button(label, msg, &AppColors)` — "+ Add X" secondary button used by cipher-edit cards.
 - `services::broadcast_stream::from_once_lock(&LOCK, "lag-label")` — iced `Stream` over a `OnceLock<broadcast::Receiver<T>>`. Used by `services/menu`, `services/tray`, `services/global_hotkey`.
 - `UpdateCtx::is_active_user(uid)` — `bool` for stale-result guards in async completion handlers.
-- `FadeInOut::close_with_finalize(msg)` — start the fade-out and emit `msg` once the animation duration elapses.
-- `fade_in_out::focus_after_open(id)` — `Task` that focuses a widget after the fade-in animation settles.
+- `FadeInOut` is an immediate boolean visibility adapter; `close_with_finalize(msg)` closes and emits `msg` without a timer.
+- `fade_in_out::focus_after_open(id)` — focus a mounted overlay input immediately.
 
 ## Iced Gotchas
 
@@ -114,7 +115,7 @@ The `gpu` cargo feature (on by default) compiles wgpu into the binary. The runti
 - External event sources are pushed into `tokio::sync::broadcast` channels at startup and consumed by iced via `Subscription::run(fn_pointer)` — no polling, no pump threads. muda and tray-icon get their `set_event_handler` callbacks installed once (`menu::install_event_handler`, `tray::install_event_handler`); both crates' setters are `OnceCell`-backed and only accept a single registration. `instance_lock::wake_stream` uses an async socket listener inside an `iced::stream::channel` directly. Avoid `iced::time::every()` for external sources — it wakes `App::update` 60×/s even when idle.
 - For per-widget animation prefer the self-driving `RedrawRequested` + `shell.request_redraw()` (or `request_redraw_at` when the cadence must be explicit) pattern — it avoids running full `App::update` cycles just to redraw one widget.
 - `widget::operation::focus(Id)` sets input focus without a message round-trip; it's a `Task`-returning operation.
-- **Auto-focus inside a `FadeInOut`-animated overlay must be deferred past the animation duration.** Applying `widget::operation::focus(Id)` while the intro animation is in flight visually focuses the input but the focus state gets dropped before keystrokes can reach it — the per-frame tree rebuild during the 180 ms fade clobbers `text_input`'s focus slot. **Fix: use [`components::fade_in_out::focus_after_open(id)`](crates/desktop/src/components/fade_in_out.rs).** It returns a `Task` that sleeps past the animation + jitter buffer, then runs the focus operation — chain it to `fade.open()` and return via `Outcome::task(...)`. No intermediate message round-trip needed.
+- Dialogs, sheets, dropdowns and generator tabs switch immediately; do not add transition animations or focus delays. Use `focus_after_open(id)` when opening an input dialog.
 - `iced_aw` (0.13) is kept as a dependency with `default-features = false` purely so the source is in the cargo registry cache for reference — we use our own `drop_down.rs` fork at runtime.
 - `AppTheme` is cloned every time iced calls `App::theme(window_id)`. Keep the struct cheap: `name` is `&'static str`, `colors` is `Copy`.
 - **`pane_grid` eats the first click / first keystroke on widgets inside a newly-mounted pane.** `pane_grid::PaneGrid` has a custom `diff` (widget/src/pane_grid.rs:362-392 in the pinned iced rev) that retains children by matching the new `panes` list against a stashed `Memory::order`. On first mount (and on any view() that toggles the grid in/out of the tree), order is empty and every child tree slot is allocated fresh — `text_input::is_focused` resets to `None`, `text_editor`'s focus state is dropped. Result: first click on `text_editor` is ignored; first keystroke on `text_input` types one char then loses focus. Subsequent content swaps inside an already-mounted grid are fine. **Fix: use [`components::collapsible_pane::CollapsiblePane`](crates/desktop/src/components/collapsible_pane.rs).** It mounts pane_grid once from view construction and toggles visibility via the split ratio (0.0–1.0, where 1.0 collapses the right pane to zero width); `min_size(0)` on the builder lets the pane genuinely disappear. Don't roll a fresh `pane_grid::State<T>` per screen unless you're certain the grid never enters/leaves the widget tree. The cipher detail/form flow dodged this accidentally because clicking a row mounts the grid with a read-only detail pane, and Edit later swaps the detail for the form — pane_grid has warmed up by the time fields are on screen.

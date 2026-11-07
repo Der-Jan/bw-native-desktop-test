@@ -139,6 +139,9 @@ impl PasswordForm {
         let min_number = parse_u8(&self.min_number, 1, 0, 9);
         let min_special = parse_u8(&self.min_special, 1, 0, 9);
         PasswordGeneratorRequest {
+            custom_allowed_chars: None,
+            custom_required_chars: None,
+            max_consecutive: None,
             lowercase: self.lowercase,
             uppercase: self.uppercase,
             numbers: self.numbers,

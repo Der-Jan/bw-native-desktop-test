@@ -1,12 +1,11 @@
 use std::path::PathBuf;
 
+use crate::services::sdk::SessionClient;
 use bitwarden_core::OrganizationId;
-use bitwarden_pm::PasswordManagerClient;
 use iced::Task;
 
 use crate::{
     app::{App, Message},
-    services::sdk::ClientExt,
     views::export::{ExportEvent, ExportMessage},
 };
 
@@ -79,7 +78,7 @@ fn extension_for(format: &bitwarden_exporters::ExportFormat) -> &'static str {
 /// iced and rfd both want the main thread; the async one cooperates with our
 /// `Task::perform` runtime.
 async fn pick_and_export(
-    client: PasswordManagerClient,
+    client: SessionClient,
     organization_id: Option<OrganizationId>,
     format: bitwarden_exporters::ExportFormat,
     extension: &'static str,
@@ -100,20 +99,12 @@ async fn pick_and_export(
 }
 
 /// Call the SDK exporter and write the result to the user-chosen file.
-/// `tokio::fs::write` so a slow target (network drive, USB) doesn't park
-/// the runtime worker — large vaults can serialize to tens of MB.
+/// The session lease covers SDK serialization and private staged publication.
 async fn write_export(
-    client: PasswordManagerClient,
+    client: SessionClient,
     organization_id: Option<OrganizationId>,
     format: bitwarden_exporters::ExportFormat,
     path: PathBuf,
 ) -> Result<String, String> {
-    let content = match organization_id {
-        None => client.export_vault(format).await?,
-        Some(org_id) => client.export_organization_vault(org_id, format).await?,
-    };
-    tokio::fs::write(&path, content)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(path.display().to_string())
+    client.export_to_path(organization_id, format, path).await
 }

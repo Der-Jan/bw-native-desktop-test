@@ -165,7 +165,7 @@ fn icon_for<'a>(
             CipherListViewType::SecureNote => icons::BWI_NOTE,
             CipherListViewType::SshKey => icons::BWI_KEY,
             CipherListViewType::Login(_) => icons::BWI_LOGIN,
-            CipherListViewType::BankAccount => icons::BWI_BANK,
+            CipherListViewType::BankAccount(_) => icons::BWI_BANK,
             CipherListViewType::DriversLicense => icons::BWI_DRIVERS_LICENSE,
             CipherListViewType::Passport => icons::BWI_PASSPORT,
         };

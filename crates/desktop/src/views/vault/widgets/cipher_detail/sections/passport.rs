@@ -38,7 +38,7 @@ pub(in super::super) fn passport_card<'a>(
     push_optional_field(
         &mut fields,
         fl!("detail-field-pp-date-of-birth"),
-        pp.date_of_birth.as_deref(),
+        pp.date_of_birth.map(|date| date.to_string()),
         colors,
     );
     push_optional_field(
@@ -96,13 +96,13 @@ pub(in super::super) fn passport_card<'a>(
     push_optional_field(
         &mut fields,
         fl!("detail-field-pp-issue-date"),
-        pp.issue_date.as_deref(),
+        pp.issue_date.map(|date| date.to_string()),
         colors,
     );
     push_optional_field(
         &mut fields,
         fl!("detail-field-pp-expiration-date"),
-        pp.expiration_date.as_deref(),
+        pp.expiration_date.map(|date| date.to_string()),
         colors,
     );
 

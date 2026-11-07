@@ -81,6 +81,11 @@ impl<'de> Deserialize<'de> for ZoomFactor {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Settings {
+    pub vault_filters: HashMap<UserId, crate::services::vault_navigation::VaultFilter>,
+    pub collapsed_navigation_groups:
+        std::collections::HashSet<crate::services::vault_navigation::NavigationGroup>,
+    pub sidebar_collapsed: bool,
+    pub vault_sort: crate::services::vault_sort::VaultSort,
     pub theme: ThemePreference,
     /// BCP-47 language tag (e.g. `"en"`, `"es"`) or [`LANGUAGE_SYSTEM`] for OS
     /// preferred. Plain string so new locales need only an `assets/i18n/<tag>/`
@@ -90,11 +95,10 @@ pub struct Settings {
     /// Stub (not wired) — shown in the Security tab.
     pub open_at_login: bool,
 
-    /// Integrations group — all stubs.
+    /// Integrations; SSH agent is implemented, browser integration remains a stub.
     pub browser_integration: bool,
     pub browser_integration_fingerprint: bool,
     pub ssh_agent: bool,
-    pub duck_duck_go: bool,
 
     /// Stub — the real autotype engine hasn't been ported yet.
     pub autotype_enabled: bool,
@@ -117,9 +121,6 @@ pub struct Settings {
 
     /// Stub — macOS-only `NSApplication.activationPolicy` toggle.
     pub always_show_dock: bool,
-    /// Read once at startup by `select_backend()` in `main.rs`; live
-    /// changes only take effect after a restart.
-    pub hardware_acceleration: bool,
     /// Whether the user permits screen capture / screen recording. When
     /// `false` (the [`bool`] default), the main window is excluded from
     /// captures via [`crate::services::screenshot_protection`] —
@@ -129,21 +130,6 @@ pub struct Settings {
     /// no upstream protocol, so the toggle no-ops there after a
     /// one-shot toast.
     pub allow_screenshots: bool,
-
-    // wgpu backend cache — only meaningful with the `gpu` Cargo feature.
-    // Pre-existing fields in settings.json are silently dropped on deserialize
-    // when the feature is off (no `deny_unknown_fields`), and re-populated on
-    // the first launch after re-enabling the feature.
-    /// Backend wgpu used last time we reached first paint. Reused on the next
-    /// launch via `WGPU_BACKEND` to skip the multi-backend enumeration walk
-    /// (saves ~325 ms on a warm machine — see `select_backend` in `main.rs`).
-    #[cfg(feature = "gpu")]
-    pub wgpu_backend_verified: Option<String>,
-    /// Set just before `iced::run`, cleared on first paint. If still set on
-    /// the next launch, the previous run never reached first paint — treat
-    /// the cache as poisoned and re-enumerate.
-    #[cfg(feature = "gpu")]
-    pub wgpu_backend_pending: Option<String>,
 
     /// Per-user preferences. Populated lazily; persisted alongside the app-wide
     /// fields so unlock-with-PIN, clipboard delay, etc. survive across launches.
@@ -183,9 +169,13 @@ impl Settings {
     }
 
     /// Atomic write: serialize into a sibling `.tmp` and rename over the
-    /// target. A crash during the write leaves the original file intact —
-    /// crucial for the `wgpu_backend_pending` sentinel that guards against
-    /// the wgpu crash-loop.
+    /// target. A crash during the write leaves the original file intact.
+    // App-state tests must never write to an actual user profile. Serialization
+    // is exercised separately with disposable settings values.
+    #[cfg(test)]
+    pub fn save(&self) {}
+
+    #[cfg(not(test))]
     pub fn save(&self) {
         let path = crate::paths::data_dir().join("settings.json");
         let tmp_path = path.with_extension("json.tmp");
@@ -216,6 +206,63 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn obsolete_gpu_settings_are_ignored_without_losing_preferences() {
+        let settings: Settings = serde_json::from_str(
+            r#"{
+                "hardware_acceleration": true,
+                "duck_duck_go": true,
+                "wgpu_backend_verified": "vulkan",
+                "wgpu_backend_pending": "vulkan",
+                "zoom_factor": 15,
+                "language": "de"
+            }"#,
+        )
+        .expect("existing settings remain readable");
+        assert_eq!(settings.zoom_factor.scale(), 1.5);
+        assert_eq!(settings.language, "de");
+        let saved = serde_json::to_value(settings).expect("settings serialize");
+        assert!(saved.get("hardware_acceleration").is_none());
+        assert!(saved.get("duck_duck_go").is_none());
+        assert!(saved.get("wgpu_backend_verified").is_none());
+        assert!(saved.get("wgpu_backend_pending").is_none());
+    }
+
+    #[test]
+    fn navigation_roundtrip_keeps_account_choices_and_collapsed_groups() {
+        use crate::services::vault_navigation::*;
+        let first = UserId::new_v4();
+        let second = UserId::new_v4();
+        let mut settings = Settings::default();
+        let filter = VaultFilter::default()
+            .with_scope(VaultScope::Personal)
+            .with_category(Some(bitwarden_vault::CipherType::SshKey))
+            .with_section(VaultSection::Favorites)
+            .with_folder(FolderFilter::Folder(bitwarden_vault::FolderId::new_v4()));
+        settings.vault_filters.insert(first, filter);
+        settings
+            .vault_filters
+            .insert(second, VaultFilter::default());
+        settings
+            .collapsed_navigation_groups
+            .insert(NavigationGroup::Folders);
+        settings.sidebar_collapsed = true;
+        let encoded = serde_json::to_string(&settings).unwrap();
+        let restored: Settings = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(restored.vault_filters[&first], filter);
+        assert_eq!(restored.vault_filters[&second], VaultFilter::default());
+        assert!(
+            restored
+                .collapsed_navigation_groups
+                .contains(&NavigationGroup::Folders)
+        );
+        assert!(restored.sidebar_collapsed);
+        assert!(!encoded.contains("search"));
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert!(old.vault_filters.is_empty());
+        assert!(!old.sidebar_collapsed);
+    }
 
     // ── ZoomFactor::new — clamping ─────────────────────────────────────────
 

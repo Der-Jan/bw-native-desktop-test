@@ -13,3 +13,7 @@ mod magnify_macos_fix;
 mod platform;
 mod screenshot_confirm;
 mod sidebar;
+
+pub(crate) mod vault_sync;
+
+mod ssh_agent;

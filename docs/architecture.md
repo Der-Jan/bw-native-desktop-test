@@ -4,19 +4,30 @@ This is the prescriptive guide for the `bitwarden-desktop-next` crate. It define
 module layout, the dependency direction, and the contract each module type must satisfy.
 Treat the rules as rigid. Deviations need a short comment explaining why.
 
+The [security remediation concept](security-concept.md),
+[login and sync requirements](login-sync-requirements.md), and
+[mTLS requirements](mtls-requirements.md) propose changes to account lifecycle,
+SDK client ownership, persistence and networking. The first session and storage
+boundaries and durable local removal are implemented below. Production account
+identity, password/TOTP/email login and scoped HTTP mTLS now have a pre-sync
+implementation. Full read sync uses an atomic encrypted snapshot in SDK-SQLite
+and read-only runtime repository adapters; server writes, WSS and full feature
+parity remain future contracts.
+
 ## Overview
 
 `bitwarden-desktop-next` is a lightweight Rust alternative to the Electron/Angular
 Bitwarden desktop app, built on the **Iced 0.15** GUI framework (git-pinned; 0.15 is still
 pre-release on crates.io). It wraps the real `bitwarden-*` SDK crates for all crypto,
-auth, and vault work. The UI layer is in Rust; there is no JavaScript.
+password derivation, wrapped account keys and local vault work. A bounded app HTTP
+adapter supplies the login/2FA protocol fields missing from the modern SDK login API. The UI layer is in Rust; there is no JavaScript.
 
 ### Tech stack
 
 - **Language**: Rust 2024
-- **GUI**: Iced 0.15 (git) with `tiny-skia` default backend; `wgpu` opt-in behind the
-  `gpu` Cargo feature.
-- **SDK**: `bitwarden-core` / `bitwarden-crypto` / `bitwarden-pm` / `bitwarden-state` /
+- **GUI**: Iced 0.15 (git) with the `tiny-skia` CPU backend. GPU rendering is
+  excluded. SVG support remains; image codecs explicitly exclude OpenEXR and TIFF.
+- **SDK**: 4.0.0 at `a13b4c4e1fa3685280241f417920fd19d7ef24a6`; `bitwarden-core` / `bitwarden-crypto` / `bitwarden-pm` / `bitwarden-state` /
   `bitwarden-vault` git-pinned.
 - **Async**: Iced's `tokio` multi-thread runtime.
 - **Menus**: `muda` for native macOS, custom-drawn title bar on Windows/Linux.
@@ -103,7 +114,6 @@ crates/desktop/src/
 │   ├── instance_lock/              # single-instance guard + wake stream
 │   ├── preferences/                # per-user UserPreferences
 │   ├── settings/                   # Settings load/save
-│   └── animation/                  # global "any animation in progress" watermark
 │
 ├── components/                     # shared UI atoms (typography + layout helpers
 │   │                               #  live in mod.rs: section_label/heading/card,
@@ -372,7 +382,7 @@ fires both effects. The view reports the fact; App decides the follow-up.
 
 ### `perform_with_active_client` helpers
 
-The most common shape is "extract the active user's `PasswordManagerClient`, run async,
+The most common shape is "extract the active user's `SessionClient`, run async,
 dispatch result". Helpers on both App and `UpdateCtx` capture that pattern:
 
 ```rust
@@ -392,13 +402,53 @@ ctx.perform_with_active_client(
 ctx.perform_with_client(uid, move |client| client.full_cipher(id), …)
 ```
 
-Internally these call `ClientManager::client_for(uid)` (cheap-clone, internally
-`Arc`-backed) and wrap `Task::perform` so the manager is never borrowed across `.await`.
+Internally these call `ClientManager::client_for(uid)`, which returns a revocable
+`SessionClient`, and wrap `Task::perform`; the manager is never borrowed across `.await`.
+Raw SDK handles stay inside `services/sdk`. Every operation takes a per-account
+read lease and checks its session generation before and after SDK work. Lock/logout
+revoke authority synchronously, then obtain an exclusive lease before clearing SDK
+keys. Crypto initialization uses the same exclusive lease and cancellation cleanup.
+
+Task results and secret-bearing rendered UI messages carry a `SessionToken` and
+presentation generation. `App::update` rejects stale generations, replaced account
+incarnations, and results for a different selected account. Account switches advance
+the presentation generation even when switching back to the same account.
+
+Lock immediately drops sensitive forms, lists, generator state, overlays, Magnify
+results and app-owned clipboard text, without an outro containing old secrets.
+In-flight side effects drain before final key cleanup; revocation cannot undo an
+already committed mutation. Export holds its lease through a private staged write,
+checks authority before publication, and zeroizes its final serialization buffer.
+Do not treat dropping ordinary SDK/GUI strings as proof of complete memory erasure.
+
+Normal startup uses the OS local application-data directory, mode 0700 on Unix,
+and does not load mock metadata. `--demo <directory>` explicitly opts into the mock
+loader. Production account loading remains unimplemented.
+
+`SessionState` owns the optional SDK client. `SessionClient`, `UnlockData` and
+`LockOperation` retain authority tokens; they obtain a raw client only under their
+execution lease. This lets removal close the SDK owner even while old tasks or
+native dialogs have not started/resumed. Manager replacement also revokes tokens
+and releases its SDK owners.
+
+`ClientManager::log_out` returns a `LogoutOperation`. It commits a private durable
+marker through `RemovalStore`, finishes crypto cleanup under the exclusive lease,
+then removes demo account metadata and UUID-derived SQLite files. Mutations of the
+shared metadata are serialized; I/O runs on blocking workers. Startup validates
+markers and retries cleanup before opening any database. Invalid journal state
+blocks account loading. Markers remain to reject restored old caches.
+
+App tracks pending logout operation IDs so duplicate completions cannot finish a
+different logout. Pending progress and storage failures render above the page and
+survive account/lock transitions. Normal menu/tray/window shutdown waits for logout;
+a failed intent commit cancels deferred exit so its warning remains visible.
+Production token-store deletion and account incarnation namespaces must extend this
+protocol when login is implemented.
 
 ### `ClientExt` extension trait
 
-Async SDK calls live as methods on
-[`PasswordManagerClient`](crates/desktop/src/services/sdk/client_ext.rs) via the
+App-facing async SDK calls live on
+[`SessionClient`](../crates/desktop/src/services/sdk/session_client.rs) via the
 `ClientExt` trait — `client.list_ciphers().await`, `client.save_cipher(view).await`,
 `client.export_vault(format).await`, etc. Importing `services::sdk::ClientExt` brings them
 in scope. Unlock is the exception: it lives on `UnlockData` (returned by
@@ -455,7 +505,6 @@ pub enum Message {
     Sidebar(SidebarMessage),
     Magnify(MagnifyMessage),
     Favicon(FaviconMessage),    // fetch completions
-    AnimationTick,              // 60 fps tick while any animation is running
 }
 
 pub enum ViewMessage {
@@ -747,12 +796,47 @@ open window-level modals (Generator, Import, Export) without flipping `Screen`.
 
 ### Sidebar state lives on `App`
 
-`SidebarState` (mode, active section, per-screen filters, tree-open flags) persists across
+`SidebarState` (mode, active section, per-screen filters, collapsed navigation groups) persists across
 screen switches, so it belongs on `App`, not inside any one view.
 [`app/handlers/sidebar.rs`](../crates/desktop/src/app/handlers/sidebar.rs) owns the full
 dispatcher: section clicks may flip `Screen`, filter clicks mutate `SidebarState` **and**
 push the new filter down to the owning view via its `apply_filter(&uid, filter)` method.
 The view never reads `SidebarState` back — App is the single writer, views are receivers.
+
+Vault filtering combines three independent selections: ownership scope (all, personal,
+or one organization), item type, and view (active, favorites, archive, trash), plus
+the search query. Sidebar changes update only their own selection. Switching accounts
+resets the selections. If a selected
+organization disappears during sync, only the ownership scope returns to all vaults.
+The navigation has independent collapse controls for Vaults, View, Item types, Folders,
+Collections and Send. Collapsing a group changes only its visibility, preserving every
+filter and the other groups. There is no outer Vault group. The list heading follows
+the selected ownership scope (all vaults, personal vault, or organization name).
+A secondary heading line lists active type, favorites/archive/trash, folder, collection
+and search constraints; defaults are omitted. Scope and filter text stay on one line
+each, clipped to available width with full text on hover in narrow panes.
+Heading labels avoid the pinned renderer's height-limited ellipsis cache, which
+can hide unchanged text after a list relayout. The vault table adds the SDK cipher's
+`revision_date` in local time and the first usable web URI's hostname/port. URI paths,
+queries, fragments and user information are excluded. Non-login items show no URL.
+Header and rows share a horizontal scroll viewport with a 720 px minimum table width;
+the nested vertical list remains virtualized with its existing row-height contract.
+The horizontal bar is inset from the window resize edge.
+Name, last-change and base-URL headers select/toggle column sorting. The preference
+(column and direction only) persists in Settings; transient comparison keys live with
+the per-account item cache and are discarded on lock/logout. Reordering reconciles
+selection by cipher ID and resets the virtual list offset. URL-less rows stay last.
+Manual sync is available through File → Sync now; the list has no duplicate sync button.
+The sidebar navigation scrolls so all filters remain reachable with many organizations.
+Folder and collection filters combine with these selections and search. Folder names
+and organization collection names use slash-separated nesting and render as indented
+trees, including non-selectable headings for missing parents. Selecting a real parent
+includes its descendants (collection descendants stay within that organization).
+“All” and “None” choices clear the corresponding constraint or select unfiled items.
+Collections are grouped by organization and hidden for the personal vault. Changing
+ownership clears an incompatible collection choice. List reload clears only folder
+or collection selections whose IDs have disappeared. Folder metadata loads alongside
+ciphers under the same revocable SDK lease; caches and names are purged on lock/logout.
 
 ### Adding a sidebar-driven nav section (screen _or_ modal)
 
@@ -836,10 +920,9 @@ the page layout):
 
 - **Dropdowns** — `components::drop_down::DropDown` (local fork of iced_aw). Custom
   alignments: `BelowLeft`, `BelowRight`, `AboveRight`. Used for the account switcher and
-  title-bar menus. Wraps user-supplied overlay content in a shared shadowed container +
-  `iced::widget::opaque` so clicks on the panel's empty space don't fall through to
-  widgets behind, and so every dropdown reads as lifted off the page without each call
-  site declaring its own shadow.
+  title-bar menus. Wraps user-supplied overlay content in `iced::widget::opaque` so
+  clicks on the panel's empty space do not fall through. Panels use borders and
+  background colors for separation; painted drop shadows are excluded.
 - **Toasts** — `components::toast::Manager` wraps the app content and overlays a vertical
   stack of toasts in the lower-right. Animation state (fade, progress, hover-pause) is
   driven from the overlay's `update()` via `window::Event::RedrawRequested` ticks — no
@@ -849,7 +932,7 @@ In addition, two **window-level overlay archetypes** are composed at the App roo
 the main column, including the sidebar and title bar):
 
 - **Modal dialogs** — `components::modal::{view, dialog, confirm_dialog, info_dialog}`.
-  Backdrop scrim, click-to-dismiss, drop shadow, and animated open/close via `FadeInOut`.
+  Backdrop scrim, click-to-dismiss, a visible border, and immediate open/close via the compatibility `FadeInOut` visibility state.
   The dialog body is itself wrapped in `opaque` so clicks on its empty space don't dismiss;
   the entire stack is wrapped in `opaque` so hover doesn't leak through to widgets behind.
 
@@ -868,13 +951,12 @@ the main column, including the sidebar and title bar):
 
   Use `modal::info_dialog(width, icon, title, body, actions, …)` instead when the modal
   is a confirmation/notification with an accent-coloured icon ring up top — it bakes in
-  the ring + ring-shadow + centered title + button stack so the per-call site shrinks to
+  the ring + centered title + button stack so the per-call site shrinks to
   the body element and the action button list. `modal::confirm_dialog` is the shorthand
   for the common "title + body text + Cancel/Confirm" shape.
 - **Bottom sheet** — `components::bottom_sheet`. Narrow-mode detail/form pane. Same
   scrim + opaque pattern. Open/close uses a `FadeInOut` on the owning view's `Selection`;
-  the close path defers `selection.clear()` by the outro duration so the sheet has content
-  to render while sliding out.
+  the close path schedules selection cleanup immediately, without an animation timer.
 
 Iced overlays support only ONE level — a `DropDown` inside another `DropDown`'s overlay
 won't render its own overlay. Submenus must be part of the same overlay content (e.g.
@@ -895,8 +977,8 @@ today; the `WindowKind` enum is the single point of extension for adding more.
 - **Magnify launcher** — borderless transparent secondary window summoned by the
   `Ctrl+Shift+Space` global hotkey
   ([crates/desktop/src/services/global_hotkey/](../crates/desktop/src/services/global_hotkey/mod.rs)).
-  Lazily opened on the first hotkey press, then kept alive across summons via
-  `Mode::Hidden` toggling so subsequent summons are instant. Resizes dynamically
+  Created only on an explicit hotkey press and destroyed on dismissal. There
+  is no hidden startup window: Wayland ignores winit's visibility setting. Resizes dynamically
   (`window::resize`) as the result count changes — the only window in the app that does.
   Owns its own state on `App::magnify` and reads decrypted ciphers off
   `VaultView::all_items_for(uid)`; its message variant `Message::Magnify(MagnifyMessage)`
@@ -911,45 +993,12 @@ once at startup before the first hotkey can fire.
 
 ## Animation
 
-Two patterns coexist:
-
-1. **Self-driving widgets** — for animations local to one widget (spinner, toast, TOTP
-   countdown). Intercept `window::Event::RedrawRequested` in `Widget::update` and call
-   `shell.request_redraw()` (or `request_redraw_at(now + delta)` for explicit cadence). No
-   app-level subscription. See [decisions.md](./decisions.md) → "Self-Animating Widget
-   Pattern".
-
-2. **State-driven animations via lilt** — for transitions tied to view state changes
-   (modal open/close, segmented-pill swoosh). State holds a `lilt::Animated<T, Instant>`;
-   `update()` calls `.transition(target, now)` on user actions; `view()` reads the
-   interpolated value via `.animate_wrapped(now)` etc. The App-level subscription unions
-   in `iced::window::frames()` while any animation is running, gated by a single global
-   watermark in `services::animation`:
-
-   ```rust
-   // at the start of every transition
-   self.fade.transition(true, Instant::now());
-   services::animation::extend(Duration::from_millis(180));
-
-   // at the App level
-   if services::animation::any_in_progress() {
-       Subscription::batch([..., iced::window::frames().map(|_| Message::AnimationTick)])
-   }
-   ```
-
-   `services::animation::extend(d)` pushes the global "earliest quiet" instant forward by
-   `d`. Any animation primitive that calls it auto-registers — adding new animated widgets
-   needs no plumbing on the App side. `components::FadeInOut` is the bool-valued case;
-   float-valued animations (e.g. the generator's segmented-pill swoosh) hold an
-   `Animated<f32, Instant>` directly and call `extend` themselves.
-
-   Lifetime trick for outro animations: a `FadeInOut` stays "visible" while in_progress is
-   true, even after `value` flips false. View functions gate on
-   `progress_if_visible()? -> Option<f32>` — when fully closed the view returns `None` and
-   the overlay unmounts. For overlays whose content is tied to selection state (bottom
-   sheet), the close handler additionally spawns a delayed `Task` that runs
-   `selection.clear()` after the outro duration so content stays rendered for the
-   duration.
+Only local status indicators (spinner, toast, TOTP countdown) animate. They drive their
+own redraws through `RedrawRequested` / `request_redraw_at`, without an app frame ticker.
+Dialogs, sheets, dropdown menus and the generator tab indicator switch immediately.
+`FadeInOut` retains its existing name/API but stores only a boolean; visible progress
+is always 1.0. `focus_after_open` focuses on mount without sleeping. A sheet cleanup
+uses `Task::done` and ignores completion if the sheet has already reopened.
 
 ## External Event Sources (broadcast-channel recipe)
 
@@ -1103,9 +1152,74 @@ Git-pinned checkouts for investigation:
 - `muda = "0.19"` — native OS menus
 - `iced_aw` (0.13, default-features = false) — kept as local source reference for our
   `DropDown` fork
-- `lilt = "0.8"` — renderer-agnostic interruptable transition animations; powers
-  `FadeInOut` and the generator's segmented-pill swoosh
 - `system-theme = "0.3"` — OS dark/light detection
 - `bitwarden-*` — SDK (git-pinned via `[workspace.dependencies]`)
 - `tracing` / `tracing-subscriber` — structured logging driven by `RUST_LOG`
 - `cargo-packager` — used by `tools/packager`
+
+
+## Persisted navigation, Linux tray and SSH agent
+
+`services::vault_navigation` owns the serializable independent vault facets. Settings
+store selections by local account UUID and global collapsed sidebar groups/mode.
+Startup/account switch restores the selected account's choices; list reconciliation
+clears missing folder, collection and organization IDs. Logout removes that account's
+selection. Only IDs/enums are persisted, never a search string or item name.
+
+Linux tray uses `ksni` StatusNotifierItem directly, with callbacks bridged into the
+existing broadcast subscription. Other platforms retain `tray-icon`. Hiding requires
+an available tray; loss of the host restores a hidden window. Explicit hidden state
+plus unminimize/focus makes restoration independent of stale window-mode queries.
+On Wayland, the pinned winit implements `set_visible` as a no-op. Hiding queries
+the actual raw backend, then closes only the main native surface on Wayland. The
+logical window geometry and all view/SDK state stay in the daemon. Restore creates
+a new main surface/ID. On opening, virtual list scroll offsets are reapplied to
+the fresh widget tree so cached row windows and scrollbars stay aligned. Hiding
+marks the main window unfocused for session idle deadlines. Intentional suspension never follows the application-exit
+path; stale hide/close/raw-handle results are ignored after restoration. X11 and
+other native backends retain cheap visibility toggles. Linux advertises a monochrome
+`bitwarden-symbolic` SVG through SNI IconName/IconThemePath, with KDE
+ColorScheme-Text styling and a monochrome ARGB fallback.
+
+`services::ssh_agent` owns the listener, framing/parser, session bindings, short-lived
+approval broker and remembered grants. `services::sdk::ssh_agent` is the sole private
+key boundary, using the existing session leases and revision/policy checks. The app
+refreshes agent authority after every update; SDK token invalidation also denies
+operations before the next UI update. Approval metadata enters Iced through a
+broadcast subscription and renders as an exclusive modal. Runtime shutdown revokes
+authority before aborting tasks/removing the owned socket. See the
+[SSH agent requirements](ssh-agent-requirements.md) for protocol/security limits.
+
+
+The SSH listener's default path is now stable and readable:
+`$XDG_RUNTIME_DIR/bitwarden-desktop-next/ssh-agent.sock`, with a private per-UID
+system-temp fallback. No profile hash is exposed in the endpoint. Parallel profiles
+may choose explicit absolute `BITWARDEN_SSH_AUTH_SOCK` endpoints; occupied paths
+fail closed. The settings UI can copy either the literal path or a shell-quoted
+export command. It never attempts to modify the parent shell environment. The unused
+DuckDuckGo integration setting and its messages/translations have been removed;
+legacy serialized values are ignored and omitted on the next settings save.
+
+
+## Native SSH approval windows and keyboard focus
+
+Each SSH approval owns a separate `WindowKind::SshApproval` surface, associated
+with its request UUID. A new always-on-top surface gains activation on KDE/Wayland,
+where the pinned winit `focus_window` on an existing surface is a no-op. The main
+vault keeps its prior visibility and is covered by an inert modal while approval
+is pending. Only public request metadata enters the native dialog. Native close,
+Escape, timeout, disconnect, lock and authority changes close it with denial.
+Late open/close/dismiss events cannot adopt or dismiss a newer request; an open
+that loses a race with cancellation is closed immediately.
+
+`components::focus_button` adds the missing keyboard focus behavior to the pinned
+Iced button: a focus ring, Enter/Space, no auto-repeat approval, and a Tab cycle
+restricted to the prompt's action IDs. Messages carry the original approval UUID;
+there is no global Enter handler that could approve a replacement prompt. A new
+request gets a fresh widget tree. The selected prompt preference controls whether
+Allow once or the eligible Allow until lock action is the initial default.
+
+Reusable grants require both a verified OpenSSH session binding and a host-bound
+signature covering its final host key. Both ask modes offer the explicit grant;
+plain/unverified requests remain one-use. Permission/revision/key rechecks and
+session-generation revocation are unchanged.

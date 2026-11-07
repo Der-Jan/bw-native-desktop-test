@@ -12,15 +12,35 @@ change, ~25k GitHub stars, actively maintained, cross-platform. 0.15 brings a cl
 window/daemon API and builder methods on `Border` / `container::Style` that remove much of
 the `..Default::default()` boilerplate.
 
-## Renderer: tiny-skia by default
+## Renderer and image formats
 
-**Decision**: Default to tiny-skia (CPU renderer). The wgpu GPU backend is available
-behind a feature flag.
+**Decision**: Use tiny-skia CPU rendering exclusively. Remove the GPU Cargo
+feature, graphics-backend discovery/cache, and hardware-acceleration controls.
 
-**Why**: wgpu init takes ~500 ms and adds ~9 MB to the binary. A form-based UI does not
-need it.
+**Why**: The current form and virtualized-list UI works with CPU rendering.
+The additional GPU stack increases binary size without a demonstrated benefit
+for this application. Existing settings files remain readable; obsolete GPU
+fields are ignored and omitted on the next save.
 
-**How to enable wgpu**: see [architecture.md](./architecture.md) → "wgpu opt-in".
+**Image formats**: Disable image defaults and select the existing codecs explicitly,
+excluding OpenEXR and TIFF. Use Iced's `image-without-codecs` feature so it cannot
+restore the default codecs indirectly. SVG remains available for the embedded
+vector assets. Other existing image formats remain supported.
+
+## Surface separation without painted shadows
+
+**Decision**: Use borders, background colors and modal backdrops instead of painted
+shadows on dialogs, menus, cards, generator history, toast notifications and picker
+panels. Dialog and menu transitions were subsequently removed (see below).
+
+**Why**: The pinned tiny-skia renderer regenerates the full shadow pixel buffer
+when a shadowed quad is redrawn, including for small intersecting damage regions.
+A release-mode headless control at 2× scale took about 5.6 ms without a shadow
+and 68.9 ms with one. These are offscreen full-frame render timings, not end-to-end
+input latency. Removing shadows avoids that work without requiring GPU rendering.
+The settings dialog subsequently measured about 18.6 ms per warm full frame,
+down from 58.8 ms under the same 1024×768 logical, 2× raster test. Input latency
+and the existing animation/focus delays require separate measurement.
 
 ## Crate Name: bitwarden-desktop-next
 
@@ -167,7 +187,7 @@ Windows and Linux.
 
 **Why changed**: Native Win32 menus create a 1px transparent gap between the menu bar and
 the iced client area (DWM compositor border). This is a known muda issue (#123, fixed for
-Tauri's webview but not for raw wgpu/tiny-skia rendering). Drawing the menu ourselves
+Tauri's webview but not for raw tiny-skia rendering). Drawing the menu ourselves
 eliminates the gap entirely.
 
 **macOS**: Keeps native menus via `init_for_nsapp()` because macOS users expect the system
@@ -311,48 +331,18 @@ cycle even when nothing changed; the redraw-request path only redraws the widget
 without running `update`, so the cost stays bounded to the widget that needs the
 animation.
 
-## State-Driven Animation: lilt + Animation Watermark
+## Immediate dialog and menu interaction
 
-**Decision**: Animations tied to view state changes (modal open/close, segmented-pill
-swoosh, future slide-ins) use `lilt::Animated<T, Instant>` for the interpolation math and
-a single global watermark in
-[`services::animation`](../crates/desktop/src/services/animation/mod.rs) to gate the App's
-per-frame subscription. Every primitive that starts a transition calls
-`animation::extend(duration)` to push the watermark forward;
-`animation::any_in_progress()` is a single read that the App's subscription consults to
-decide whether to drive `iced::window::frames()`.
+**Decision**: Open and close dialogs, sheets and dropdown menus immediately. The
+generator tab indicator also switches directly. Remove the 180 ms dialog transitions,
+80 ms menu transitions, 160 ms tab transition, 220 ms deferred focus and the global
+animation watermark/frame subscription. Keep the historical `FadeInOut` API as a
+boolean visibility adapter; its cleanup task completes without sleeping.
 
-**Why not the self-animating widget pattern?** That pattern works for animations whose
-state lives entirely inside one widget (spinner, toast, TOTP). Modals/sheets/segmented
-controls have animation state on the _view_ (e.g. `tab_anim: Animated<f32, Instant>` next
-to `active_tab: TabKind`), driven by user-facing messages (`SelectTab`).
-State-on-the-widget can't see the message, and threading frame ticks through `update()`
-for every animation would mean either dummy `AnimationTick` per primitive or a global one.
-We went with one global tick + the watermark.
-
-**Auto-registration is the load-bearing property**: adding a new animated overlay needs no
-plumbing on the App side. `FadeInOut::open/close` calls `animation::extend(180ms)`
-internally; the App's `Subscription::batch` already includes `frames()` gated on
-`animation::any_in_progress()`. Drop in a new `Animated<f32>` somewhere, call `extend` on
-transition, done. Without auto-registration we had a fan-out of `any_modal_animating()`
-checks across every view — easy to forget, drift over time.
-
-**`FadeInOut`**: thin wrapper around `Animated<bool, Instant>` for open/close lifecycles.
-Exposes `open()` / `close()` (auto-extend) and a `progress_if_visible() -> Option<f32>`
-gate that view functions use as `let progress = self.fade.progress_if_visible()?;` to
-short-circuit when the overlay is fully closed. The "keep rendering during outro" lifetime
-is solved by lilt's `in_progress(now)` semantics — value flips false immediately, but
-`is_visible` stays true while the close transition runs.
-
-**Outro content lifetime**: for overlays whose content is tied to selection state (the
-bottom sheet's content comes from `selection.detail`), the close handler additionally
-spawns a delayed `Task` that runs `selection.clear()` after the outro duration. Skipping
-this would wipe the content on close-click and leave nothing for the slide-out to render.
-
-**Why lilt and not cosmic-time / hand-rolled?** lilt is renderer-agnostic (only depends on
-`web-time`), tracks no specific iced version, and its `Animated<T>` value semantics
-("transition declares a path, render reads the value at `now`") fit the elm-style update
-loop without per-tick mutation. ~250 LOC API, drop-in.
+**Why**: These decorative transitions imposed waiting and repeated layout/redraws
+on interactive controls. Immediate changes improve responsiveness with the existing
+CPU renderer and require no GPU dependency. Status indicators such as loading
+spinners and toast expiry keep their local redraw behavior.
 
 ## Component Library
 
@@ -415,7 +405,7 @@ SDK (`make_register_keys`, `initialize_user_crypto`, `vault().ciphers().encrypt`
 per user (filename = user UUID) plus a `mock.json` file holding non-cipher user metadata
 (email, KDF, encrypted user key, unlock methods). The desktop app discovers users by
 listing `data/*.sqlite`, pairs each with its `mock.json` entry, and opens the DB via
-`client.platform().state().initialize_database(Sqlite { db_name, folder_path }, bitwarden_pm::migrations::get_sdk_managed_migrations())`.
+`StateRegistry::new_with_db(Sqlite { db_name, folder_path }, bitwarden_pm::migrations::get_sdk_managed_migrations()).await`.
 `ClientManager` then owns one `PasswordManagerClient` per user whose `Cipher`/`Folder`
 repositories read from SQLite.
 
@@ -433,11 +423,10 @@ persistence layer is automatically exercised in dev.
 
 **Caveats**: `LocalUserDataKeyState` isn't in `get_sdk_managed_migrations()` but
 `initialize_user_crypto` writes to it, so a narrow `MemoryRepo<LocalUserDataKeyState>` is
-registered client-managed per user. We also hand-assemble the `PasswordManagerClient` via
-`ClientBuilder` with `StateRegistry::new()` because `PasswordManagerClient::new` defaults
-to `new_with_memory_db`, which pre-sets the database `OnceLock` and blocks our
-`initialize_database` call. Both sites have a TODO to switch to
-`PasswordManagerClient::load_from_state` once the SDK exposes it.
+registered client-managed per user. The registry is initialized with the SDK's
+SQLite configuration before passing it to `PasswordManagerClient::load_from_state`.
+SDK 4 replaces the old two-step registry initialization with `new_with_db`.
+The generator also persists the email required by SDK 4's `SaveStateData`.
 
 **Dev passwords** (documented in `services/sdk/loader.rs`): `alice@example.com` /
 `password`, `alice@acmecorp.com` / `123456`, `loadtest@example.com` / `loadtest` (20 k
@@ -741,3 +730,85 @@ rebinding each tick.
 deliver a wake signal to the primary, so a second launch would just exit silently and the
 user would think the app was broken. Writing it ourselves (~100 lines) delivers real UX
 and avoids pulling in dbus-rs (its Linux dep).
+
+
+## Bitwarden SDK 4 upgrade
+
+**Decision (2026-11-07):** Pin every workspace Bitwarden dependency to upstream
+`main` commit `a13b4c4e1fa3685280241f417920fd19d7ef24a6` (4.0.0), replacing
+`10af2ea2f20b6d17ec1e4654892184e37fc4626e` (3.0.0). Keep exact Git revisions and
+the lockfile for reproducible builds. This is a tested development snapshot,
+not a claim that upstream `main` is a stable published release.
+
+The SDK's crypto dependency graph is updated with it; existing prerelease pins
+in the old lockfile conflict with the new SSH/PKCS8 requirements. Use current
+public key-generation and registry constructors. Legacy V1 unlocks explicitly
+leave the new contained-key ID unset. Preserve session revocation, operation
+leases, key cleanup and durable account-removal boundaries.
+
+The UI adapts to the SDK's typed calendar dates using independent input buffers:
+incomplete input stays visible, valid input updates the typed field, and invalid
+input prevents saving. SSH generator results are converted to vault views. New
+password-generator options default to unset. SDK item Sends remain explicitly
+unsupported and cannot be saved through the existing text/file editor.
+
+The SDK now attempts a feature-flag `/config` refresh during rehydration. Future
+login/mTLS integration must establish the account transport before this call.
+The available sync entry points still need a complete integration proof; the
+app's login and sync stubs do not become functional through this upgrade.
+
+
+**Validation:** `cargo test --workspace --locked` passed 219 desktop tests and the
+seed-tool test; `cargo clippy --workspace --all-targets --locked` completed with
+only the three existing desktop warnings. Both desktop and seed-tool release
+binaries built. GUI tests loaded all 50 work-vault items from copied SDK-3 stores
+and from newly generated SDK-4 stores, then verified lock, logout, restart recovery
+and an empty profile after removing the last account. Existing UI snapshots passed.
+The application dependency graph still excludes GPU rendering, TIFF and OpenEXR;
+SDK memory-hardening remains enabled. A private SQLite-API backup of the preview
+profile was created before any future migration by the new preview binary.
+
+
+## Atomic read-sync snapshots through SDK SQLite
+
+The pinned SDK's sync orchestrator does not yet register a cipher handler or
+transact all handlers together. Applying its individual repositories directly
+would expose mixed snapshots and allow a failed refresh to delete usable rows.
+The native read-sync adapter therefore commits the complete typed encrypted
+response as one SDK `Setting` row and publishes read-only cipher/folder adapters
+backed by one immutable snapshot Arc. SQLite remains SDK-managed; there is no
+second database engine or persistent JSON cache. Local and server account IDs,
+schema version and successful sync time travel with the same commit.
+
+Network fetch and token rotation use the existing account transport. A successful
+snapshot advances session authority so queued plaintext results and grants from
+the old revision cannot survive. Crypto remains in SDK components. Organization
+keys are initialized under an exclusive lease with cancellation/failure rollback;
+the empty-membership case explicitly clears keys, which the upstream helper does
+not do itself. Already-authorized encrypted commits can drain during lock, while
+plaintext publication remains forbidden after revocation. First delivery is
+read-only; writes, background polling, WSS, attachments and full policies follow
+separately.
+
+
+## Tray visibility under Wayland
+
+Use native backend detection when hiding the main surface. The pinned winit
+Wayland implementation's `set_visible(false)` deliberately does nothing, so an
+Xvfb/X11-only acceptance check cannot validate KDE/Wayland behavior. Wayland tray
+hiding closes the native main surface while the Iced daemon retains account/view
+state; restoring opens a replacement surface with the remembered size, fullscreen,
+maximized and stacking state. No SDK session or vault data is recreated. Pending
+backend results are checked against both current window ID and desired visibility.
+
+The Linux tray uses a monochrome symbolic shield rather than the colored app icon.
+KDE receives its SVG with ColorScheme-Text, allowing the panel palette to select the
+foreground color; a monochrome pixmap remains available to other SNI hosts. This is
+a desktop theme convention, not a requirement that all Linux tray icons be black.
+
+Validation: 264 desktop tests and one fixture test pass, including suspension and
+hide/restore race tests. A disposable native KDE/Wayland profile was closed and
+restored twice through its SNI item, checking the main surface disappears/reappears
+with a new native ID. An X11 profile also verified the actual Window → Hide to tray
+menu click. The symbolic icon name/path were checked over D-Bus. Clippy retains only
+the three existing menu/opacity warnings.

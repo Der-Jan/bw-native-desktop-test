@@ -1,8 +1,6 @@
 //! `GeneratorView::modal_view` and the supporting render helpers (tab row,
 //! value card, history disclosure, section heading).
 
-use std::time::Instant;
-
 use iced::{
     Alignment, Background, Border, Color, Element, Fill, Length, Padding,
     widget::{Space, Stack, button, column, container, row, scrollable, text},
@@ -84,7 +82,11 @@ impl GeneratorView {
         &'a self,
         colors: &'a AppColors,
     ) -> Element<'a, GeneratorMessage, AppTheme> {
-        let tab_progress = self.tab_anim.animate_wrapped(Instant::now());
+        let tab_progress = match self.active_tab {
+            TabKind::Password => 0.0,
+            TabKind::Passphrase => 1.0,
+            TabKind::Username => 2.0,
+        };
         let tabs = tab_row(self.active_tab, tab_progress, colors);
         let value_card = value_card(self.current.as_deref().unwrap_or(""), colors);
         let options: Element<'a, GeneratorMessage, AppTheme> = match self.active_tab {
@@ -114,7 +116,7 @@ pub(super) use crate::components::section_heading;
 /// Segmented tab bar (three buttons in a rounded pill). The accent pill
 /// is a separate layer behind the buttons; its position interpolates
 /// between tab indices via the caller-supplied `progress` (a float-valued
-/// tab index driven by lilt). Buttons themselves render only their text.
+/// tab index). Buttons themselves render only their text.
 fn tab_row<'a>(
     active: TabKind,
     progress: f32,
@@ -266,7 +268,7 @@ fn history_entry_row<'a>(colors: &'a AppColors) -> Element<'a, GeneratorMessage,
                 background: Some(bg),
                 text_color: colors.text_primary,
                 border: Border::default().rounded(RADIUS_LG),
-                shadow: components::CARD_SHADOW,
+                shadow: iced::Shadow::default(),
                 snap: false,
             }
         })

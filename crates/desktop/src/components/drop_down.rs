@@ -1,53 +1,20 @@
 //! Drop down menu widget
 //!
 //! Copied from iced_aw 0.13.1 to allow local modifications. The local
-//! customisations on top of upstream are: extra `Alignment` variants
-//! (`BelowLeft` / `BelowRight` / `AboveRight`), an auto-shadow wrap in
-//! [`DropDown::new`], and a slide animation driven by an internal
-//! [`lilt::Animated`] that participates in the global animation watermark.
-
-use std::time::{Duration, Instant};
+//! customisations include extra alignment variants and immediate opening/closing.
 
 use iced::{
-    Border, Color, Element, Event, Length, Point, Rectangle, Shadow, Size, Vector,
+    Element, Event, Length, Point, Rectangle, Size, Vector,
     advanced::{
         Layout, Shell, Widget,
         layout::{Limits, Node},
         mouse::{self, Cursor},
         overlay, renderer,
-        widget::{self, Operation, Tree, tree},
+        widget::{self, Operation, Tree},
     },
     keyboard::{self, key::Named},
     touch,
-    widget::container,
 };
-use lilt::{Animated, Easing};
-
-use crate::{services::animation, theme::RADIUS_LG};
-
-/// Open animation duration. Snappier than the 180 ms modal slide because
-/// dropdowns travel a shorter visual distance and a menu shouldn't keep
-/// the user waiting before they can act on it. Close is a snap.
-const ANIM_DURATION_MS: f32 = 80.0;
-const ANIM_DURATION: Duration = Duration::from_millis(ANIM_DURATION_MS as u64);
-
-/// Vertical slide distance. The panel starts offset by this amount along
-/// its open direction (above for "below" alignments, below for "above")
-/// and animates to its anchored position.
-const SLIDE_PX: f32 = 8.0;
-
-/// Drop shadow applied by [`DropDown::new`] behind panels. Border radius
-/// matches [`RADIUS_LG`] so the shadow follows panels' rounded corners.
-/// Composite overlays that paint more than one visual panel (e.g. the title
-/// bar's menu + open submenu) should use [`DropDown::new_no_shadow`] and
-/// apply this shadow per-panel instead — a single wrapping shadow would
-/// span the gap between panels and any layout offsets.
-pub const PANEL_SHADOW: Shadow = Shadow {
-    color: Color::from_rgba(0.0, 0.0, 0.0, 0.25),
-    offset: Vector::new(0.0, 4.0),
-    blur_radius: 16.0,
-};
-
 // ── Alignment ──────────────────────────────────────────────────────────────
 
 /// ```text
@@ -142,54 +109,13 @@ where
     expanded: bool,
 }
 
-/// Per-instance state held in iced's widget tree. Drives the slide
-/// animation and keeps the overlay mounted through the close transition.
-#[derive(Debug)]
-struct AnimState {
-    anim: Animated<bool, Instant>,
-}
-
-impl Default for AnimState {
-    fn default() -> Self {
-        Self {
-            anim: Animated::new(false)
-                .duration(ANIM_DURATION_MS)
-                .easing(Easing::EaseOut),
-        }
-    }
-}
-
 impl<'a, Message, Theme, Renderer> DropDown<'a, Message, Theme, Renderer>
 where
     Message: Clone + 'a,
     Renderer: renderer::Renderer + 'a,
 {
-    /// Create a new [`DropDown`].
-    ///
-    /// The overlay is wrapped in a shadow container ([`RADIUS_LG`]) and
-    /// [`iced::widget::opaque`] so panel empty-space clicks don't fall
-    /// through. Caller panels should match the shadow radius so the
-    /// shadow follows their rounded corners.
+    /// Create a dropdown with an opaque overlay so empty-space clicks cannot fall through.
     pub fn new<U, B>(underlay: U, overlay: B, expanded: bool) -> Self
-    where
-        U: Into<Element<'a, Message, Theme, Renderer>>,
-        B: Into<Element<'a, Message, Theme, Renderer>>,
-        Theme: container::Catalog + 'a,
-        <Theme as container::Catalog>::Class<'a>: From<container::StyleFn<'a, Theme>>,
-    {
-        let shadowed = container(overlay).style(|_theme: &Theme| {
-            container::Style::default()
-                .border(Border::default().rounded(RADIUS_LG))
-                .shadow(PANEL_SHADOW)
-        });
-        Self::new_no_shadow(underlay, shadowed, expanded)
-    }
-
-    /// Like [`new`](Self::new) but without the auto-shadow wrap. Use this
-    /// when the overlay paints more than one visual panel side-by-side
-    /// (e.g. a menu with an open submenu) and each panel needs its own
-    /// shadow — apply [`PANEL_SHADOW`] inside each panel's container style.
-    pub fn new_no_shadow<U, B>(underlay: U, overlay: B, expanded: bool) -> Self
     where
         U: Into<Element<'a, Message, Theme, Renderer>>,
         B: Into<Element<'a, Message, Theme, Renderer>>,
@@ -282,29 +208,8 @@ where
         vec![Tree::new(&self.underlay), Tree::new(&self.overlay)]
     }
 
-    fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<AnimState>()
-    }
-
-    fn state(&self) -> tree::State {
-        tree::State::new(AnimState::default())
-    }
-
     fn diff(&self, tree: &mut Tree) {
         tree.diff_children(&[&self.underlay, &self.overlay]);
-
-        // Sync the animator's target with the prop. Open animates;
-        // close is a snap — mutually-exclusive menus (title bar) would
-        // overlap visually if both the closing and opening panels
-        // animated, and click-outside dismissal feels laggier with a
-        // close transition.
-        let state = tree.state.downcast_mut::<AnimState>();
-        if state.anim.value != self.expanded {
-            state.anim.transition(self.expanded, Instant::now());
-            if self.expanded {
-                animation::extend(ANIM_DURATION);
-            }
-        }
     }
 
     fn operate<'b>(
@@ -329,20 +234,6 @@ where
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
-        // Self-drive frames while the open animation is in flight. The
-        // App-level `animation::extend` watermark is queried from
-        // `subscription()` BEFORE the next `diff()` runs, so we can't
-        // rely on it to start frames the same tick as the transition —
-        // request the next frame here instead. Same pattern as `spinner`.
-        // Close is a snap (see `diff`), so only need to drive while the
-        // animator is targeting `true`.
-        if let Event::Window(iced::window::Event::RedrawRequested(_)) = event {
-            let anim = &state.state.downcast_ref::<AnimState>().anim;
-            if anim.value && anim.in_progress(Instant::now()) {
-                shell.request_redraw();
-            }
-        }
-
         self.underlay.as_widget_mut().update(
             &mut state.children[0],
             event,
@@ -379,12 +270,7 @@ where
         viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
-        // Open animates (slide-in over `ANIM_DURATION`); close snaps —
-        // see `diff` for the rationale. Visibility tracks `anim.value`
-        // alone so the overlay unmounts the moment a close is requested.
-        let now = Instant::now();
-        let anim = &state.state.downcast_ref::<AnimState>().anim;
-        if !anim.value {
+        if !self.expanded {
             return self.underlay.as_widget_mut().overlay(
                 &mut state.children[0],
                 layout,
@@ -393,7 +279,6 @@ where
                 translation,
             );
         }
-        let progress = anim.animate_bool(0.0, 1.0, now);
 
         Some(overlay::Element::new(Box::new(DropDownOverlay::new(
             &mut state.children[1],
@@ -406,7 +291,6 @@ where
             layout.bounds(),
             layout.position() + translation,
             *viewport,
-            progress,
         ))))
     }
 }
@@ -438,9 +322,6 @@ where
     underlay_bounds: Rectangle,
     position: Point,
     viewport: Rectangle,
-    /// 0.0 = fully closed (overlay slid to its start position),
-    /// 1.0 = fully open (overlay at its anchored position).
-    progress: f32,
 }
 
 impl<'a, 'b, Message, Theme, Renderer> DropDownOverlay<'a, 'b, Message, Theme, Renderer>
@@ -463,7 +344,6 @@ where
         underlay_bounds: Rectangle,
         position: Point,
         viewport: Rectangle,
-        progress: f32,
     ) -> Self {
         DropDownOverlay {
             state,
@@ -476,7 +356,6 @@ where
             underlay_bounds,
             position,
             viewport,
-            progress,
         }
     }
 }
@@ -593,23 +472,6 @@ where
         if new_position.y < 0.0 {
             new_position.y = 0.0;
         }
-
-        // Slide the panel along its open direction. Applied after
-        // viewport clamping so the in-flight position can briefly cross
-        // the viewport edge — that's the visual the animation wants.
-        let slide_amount = SLIDE_PX * (1.0 - self.progress);
-        let slide_dy = match self.alignment {
-            Alignment::Top | Alignment::TopStart | Alignment::TopEnd | Alignment::AboveRight => {
-                slide_amount
-            }
-            Alignment::Bottom
-            | Alignment::BottomEnd
-            | Alignment::BottomStart
-            | Alignment::BelowLeft
-            | Alignment::BelowRight => -slide_amount,
-            Alignment::Start | Alignment::End => 0.0,
-        };
-        new_position.y += slide_dy;
 
         node.move_to(new_position)
     }

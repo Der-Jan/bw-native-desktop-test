@@ -97,7 +97,7 @@ fn custom_field<'a>(
 pub(super) fn push_optional_field<'a>(
     fields: &mut Vec<Element<'a, CipherDetailMessage, AppTheme>>,
     label: impl Into<String>,
-    value: Option<&'a str>,
+    value: Option<impl iced::widget::text::IntoFragment<'a>>,
     colors: &AppColors,
 ) {
     if let Some(v) = value {

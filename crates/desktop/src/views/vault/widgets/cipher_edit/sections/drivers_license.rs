@@ -54,8 +54,8 @@ pub(in super::super) fn drivers_license_card<'a>(
             colors,
         ),
         text_field(
-            fl!("form-dl-date-of-birth"),
-            d.date_of_birth.as_deref().unwrap_or(""),
+            format!("{} (YYYY-MM-DD)", fl!("form-dl-date-of-birth")),
+            &form.dates.birth,
             colors,
         )
         .on_input(CipherEditMessage::DlDateOfBirthChanged)
@@ -82,15 +82,15 @@ pub(in super::super) fn drivers_license_card<'a>(
         .on_input(CipherEditMessage::DlIssuingAuthorityChanged)
         .disabled(form.saving),
         text_field(
-            fl!("form-dl-issue-date"),
-            d.issue_date.as_deref().unwrap_or(""),
+            format!("{} (YYYY-MM-DD)", fl!("form-dl-issue-date")),
+            &form.dates.issued,
             colors,
         )
         .on_input(CipherEditMessage::DlIssueDateChanged)
         .disabled(form.saving),
         text_field(
-            fl!("form-dl-expiration-date"),
-            d.expiration_date.as_deref().unwrap_or(""),
+            format!("{} (YYYY-MM-DD)", fl!("form-dl-expiration-date")),
+            &form.dates.expires,
             colors,
         )
         .on_input(CipherEditMessage::DlExpirationDateChanged)

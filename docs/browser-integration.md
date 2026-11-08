@@ -55,6 +55,12 @@ IDs. SDK Noise is upstream code, exposed through the small native export patch
 documented in `vendor/bitwarden-ipc/NATIVE-EXPORTS.md`; no custom Noise protocol
 is implemented.
 
+Legacy replies use the native messaging `EncString` object representation
+(`encryptedString`, `encryptionType`, `iv`, `data`, `mac`). Sending only the
+`toJSON()` string breaks the official browser's decrypt service and leaves its
+status/unlock callback waiting until timeout. The interoperability test requires
+the object and checks its fields before SDK decryption.
+
 ## Key release and limits
 
 Only the selected account's user key is released, after an explicit current
@@ -91,6 +97,11 @@ verified Enter approval, Escape denial, until-lock reuse and browser disconnect
 on desktop lock. No real vault or browser storage was used. This validates the
 transport and approval flow; the installed official extension's settings flow
 still needs an interactive acceptance check.
+
+A follow-up test also loaded the public WASM SDK and JavaScript bindings from
+the installed official extension version 2026.10.2 into the disposable test
+extension. Discover, status, approval, denial, remembered approval and lock
+revocation pass against this actual browser SDK as well.
 
 The native test passed with EGL under Xvfb (GLX disabled). Raw Xvfb with GLX
 failed when repeatedly recreating child windows with `GLXBadWindow`; this is an

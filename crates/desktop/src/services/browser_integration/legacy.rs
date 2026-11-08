@@ -169,9 +169,17 @@ impl Channel {
             .map_err(|_| "Reply encoding failed")?,
         );
         let encrypted = encrypt_bytes(&self.key, &body)?;
-        serde_json::to_vec(
-            &serde_json::json!({"appId":self.app_id,"messageId":id,"message":encrypted}),
-        )
+        // Native Messaging uses EncString's structured-clone representation,
+        // not its toJSON() string. The browser passes this object directly to
+        // EncryptService.decryptString, which reads .encryptedString.
+        let parts: Vec<_> = encrypted[2..].split('|').collect();
+        serde_json::to_vec(&serde_json::json!({
+            "appId":self.app_id,"messageId":id,
+            "message":{
+                "encryptedString":encrypted,"encryptionType":2,
+                "iv":parts[0],"data":parts[1],"mac":parts[2]
+            }
+        }))
         .map_err(|_| "Reply encoding failed".into())
     }
 }
@@ -275,7 +283,17 @@ mod tests {
         assert!(channel.request(&request).is_err());
         let response = channel.respond(decoded, connection.clone()).await.unwrap();
         let response: Value = serde_json::from_slice(&response).unwrap();
-        let enc: EncString = response["message"].as_str().unwrap().parse().unwrap();
+        // Match the official browser's decryptString(rawMessage, key), which
+        // reads rawMessage.encryptedString rather than accepting a string.
+        let wire = &response["message"];
+        assert!(wire.is_object());
+        assert_eq!(wire["encryptionType"], 2);
+        let encoded = wire["encryptedString"].as_str().unwrap();
+        let parts: Vec<_> = encoded[2..].split('|').collect();
+        assert_eq!(wire["iv"], parts[0]);
+        assert_eq!(wire["data"], parts[1]);
+        assert_eq!(wire["mac"], parts[2]);
+        let enc: EncString = encoded.parse().unwrap();
         let clear: String = enc.decrypt_with_key(&key).unwrap();
         let clear: Value = serde_json::from_str(&clear).unwrap();
         assert_eq!(clear["response"], 0);
@@ -311,7 +329,11 @@ mod tests {
         assert!(!pending.is_finished());
         approval.respond(super::super::Decision::Deny);
         let encrypted: Value = serde_json::from_slice(&pending.await.unwrap()).unwrap();
-        let clear = decrypt_bytes(&channel.key, encrypted["message"].as_str().unwrap()).unwrap();
+        let clear = decrypt_bytes(
+            &channel.key,
+            encrypted["message"]["encryptedString"].as_str().unwrap(),
+        )
+        .unwrap();
         let clear: Value = serde_json::from_slice(&clear).unwrap();
         assert_eq!(clear["response"], false);
         assert!(clear.get("userKeyB64").is_none());

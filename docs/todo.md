@@ -1,5 +1,11 @@
 # TODO
 
+> The production frontend migrated to egui on 2026-11-08. Historical Iced
+> implementation notes below describe the preserved checkpoint `0945673`.
+> Current architecture and supported behavior: [architecture](architecture.md)
+> and [migration](egui-migration.md).
+
+
 Open work, organized by **what it asks of the picker** rather than by importance. Pick by
 what unblocks you or what's interesting — order within each section is not a queue.
 

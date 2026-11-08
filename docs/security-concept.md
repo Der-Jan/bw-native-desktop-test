@@ -111,13 +111,17 @@ and access authorization are application responsibilities.
 
 ## Audit gaps and required outcomes
 
+The table records the original audit baseline, not a list of current unresolved
+issues. See the implemented boundaries above and [egui migration](egui-migration.md)
+for current validation.
+
 | Gap and source | Required outcome |
 | --- | --- |
 | [Seed tool](../tools/fake-data/src/main.rs) writes development passwords to `mock.json`; [loader](../crates/desktop/src/services/sdk/loader.rs) requires mock metadata | Production startup accepts an empty profile and never reads development secrets. Test data has a separate explicit mode and directory. |
-| [Lock](../crates/desktop/src/app/helpers.rs) clears SDK keys but preserves decrypted view state | Lock removes all account plaintext, invalidates outstanding work, and prevents secret-bearing actions. |
+| [Lock](https://github.com/Der-Jan/bw-native-desktop-test/blob/2c26788/crates/desktop/src/app/helpers.rs) clears SDK keys but preserves decrypted view state | Lock removes all account plaintext, invalidates outstanding work, and prevents secret-bearing actions. |
 | [Logout](../crates/desktop/src/services/sdk/mod.rs) removes only runtime membership | Logout remains effective after restart, removes local account credentials and cache, and cannot be reversed by late tasks. |
-| [Reprompt checkbox](../crates/desktop/src/views/vault/widgets/cipher_edit/sections/shared.rs) has no corresponding checks in access handlers | Protected field reveal/copy, edit, and other protected operations require fresh authorization. |
-| [Favicon setup](../crates/desktop/src/app/lifecycle.rs) hardcodes the US icon service | Resolve each account's configured icon service, honor disablement, and never fall back from a private server to public infrastructure silently. |
+| [Reprompt checkbox](https://github.com/Der-Jan/bw-native-desktop-test/blob/2c26788/crates/desktop/src/views/vault/widgets/cipher_edit/sections/shared.rs) has no corresponding checks in access handlers | Protected field reveal/copy, edit, and other protected operations require fresh authorization. |
+| [Favicon setup](https://github.com/Der-Jan/bw-native-desktop-test/blob/2c26788/crates/desktop/src/app/lifecycle.rs) hardcodes the US icon service | Resolve each account's configured icon service, honor disablement, and never fall back from a private server to public infrastructure silently. |
 | [Paths](../crates/desktop/src/paths.rs) depend on cwd; exports use ordinary file writes | Use stable private OS directories and explicit private file creation. |
 
 ## Account runtime and operation authority

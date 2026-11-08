@@ -1,6 +1,8 @@
 # Native desktop mTLS requirements
 
-Status: HTTP login/probe and read-sync implemented for review, 2026-11-07. WSS and online writes are deferred.
+Status: HTTP login/probe and read-sync implemented for review, 2026-11-07.
+The egui frontend preserves these contracts (2026-11-08); see
+[migration validation](egui-migration.md). WSS and online writes are deferred.
 Implement this with the [security lifecycle](security-concept.md) and
 [login and sync flow](login-sync-requirements.md).
 
@@ -21,7 +23,7 @@ fingerprint selection and endpoint-global bindings in
 `apps/desktop/src/platform/main/mtls/`. Its changes require restart. The adjacent
 `apps/desktop/native-linux-client-concept.md` proposes Rust transport injection
 and endpoint isolation for a different GTK project; it is architectural input,
-not an implementation in this Iced app.
+not an implementation in this desktop app.
 
 Adopt the iOS account-scoped replacement behavior for this native app, with an
 explicit endpoint allowlist per saved profile. Before login, the saved profile

@@ -14,7 +14,7 @@ use std::{
     sync::{Arc, OnceLock, RwLock},
 };
 
-use iced::widget::image;
+use eframe::egui::ColorImage;
 use tokio::sync::{Semaphore, broadcast};
 
 use crate::domain::UserId;
@@ -52,7 +52,7 @@ struct FaviconInner {
     resolve_icons_url: Arc<dyn Fn(&UserId) -> String + Send + Sync>,
     /// Runtime handle captured at construction. `get()` spawns from `view()`
     /// which is a synchronous context; using the handle explicitly avoids
-    /// relying on tokio TLS being set on every iced render tick.
+    /// relying on tokio TLS being set on every UI render pass.
     runtime: tokio::runtime::Handle,
     /// Broadcast sender for fetch completions. App's subscription clones this
     /// and calls [`broadcast::Sender::subscribe`] each time it (re)builds the
@@ -67,13 +67,13 @@ struct UserCache {
 }
 
 /// `Pending` exists to dedupe in-flight fetches; it renders identically to
-/// `Missing`. `Found` carries a [`iced::widget::image::Handle`] built from
-/// [`image::Handle::from_rgba`] at fetch time — clones share the internal `Id`
+/// `Missing`. `Found` carries a [`Arc<ColorImage>`] built from
+/// [`Arc<ColorImage>::from_rgba`] at fetch time — clones share the internal `Id`
 /// so iced's GPU texture cache hits on every re-render for the session.
 #[derive(Clone)]
 pub enum IconState {
     Pending,
-    Found(image::Handle),
+    Found(Arc<ColorImage>),
     Missing,
 }
 
@@ -138,11 +138,11 @@ impl FaviconService {
         IconState::Pending
     }
 
-    /// Resolve the favicon for a login's first URI to an `image::Handle`,
+    /// Resolve the favicon for a login's first URI to an `Arc<ColorImage>`,
     /// falling back to the globe icon when the URI is missing, unfetchable,
     /// or the favicon hasn't loaded yet. Triggers a background fetch on
     /// first sight via [`Self::get`].
-    pub fn handle_for_login_uri(&self, uid: &UserId, uri: Option<&str>) -> image::Handle {
+    pub fn handle_for_login_uri(&self, uid: &UserId, uri: Option<&str>) -> Arc<ColorImage> {
         uri.and_then(hostname_for_fetch)
             .map(|h| self.get(uid, &h))
             .and_then(|state| match state {
@@ -302,10 +302,8 @@ async fn decode_to_handle(raw: Vec<u8>) -> Result<IconState, DecodeError> {
         .map_err(|e| DecodeError(e.to_string()))?
         .map_err(|e| DecodeError(e.to_string()))?;
     let (w, h) = (rgba.width(), rgba.height());
-    Ok(IconState::Found(image::Handle::from_rgba(
-        w,
-        h,
-        rgba.into_raw(),
+    Ok(IconState::Found(Arc::new(
+        ColorImage::from_rgba_unmultiplied([w as usize, h as usize], rgba.as_raw()),
     )))
 }
 
@@ -367,15 +365,23 @@ fn apply_rounded_mask(img: &mut ::image::RgbaImage, radius: f32) {
 
 // ── Globe fallback handle ──────────────────────────────────────────────────
 
-/// Process-wide cached globe handle. `image::Handle::from_bytes` calls
+/// Process-wide cached globe handle. `Arc<ColorImage>::from_bytes` calls
 /// `Id::unique()` internally, so naively re-constructing the handle on each
 /// render produces a fresh id every frame, defeating iced's GPU texture
 /// cache and visibly flickering the globe icon during scroll.
-static GLOBE_HANDLE: OnceLock<image::Handle> = OnceLock::new();
+static GLOBE_HANDLE: OnceLock<Arc<ColorImage>> = OnceLock::new();
 
-pub fn globe_handle() -> image::Handle {
+pub fn globe_handle() -> Arc<ColorImage> {
     GLOBE_HANDLE
-        .get_or_init(|| image::Handle::from_bytes(crate::assets::BWI_GLOBE_PNG))
+        .get_or_init(|| {
+            let image = image::load_from_memory(crate::assets::BWI_GLOBE_PNG)
+                .expect("embedded globe")
+                .into_rgba8();
+            Arc::new(ColorImage::from_rgba_unmultiplied(
+                [image.width() as usize, image.height() as usize],
+                image.as_raw(),
+            ))
+        })
         .clone()
 }
 

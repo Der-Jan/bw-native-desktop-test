@@ -5,37 +5,15 @@ edition = "2024"
 license-file = "LICENSE.txt"
 
 [features]
-default = ["gpu"]
-
-# Hardware rendering with automatic tiny-skia fallback.
-# CPU comparison: ICED_BACKEND=tiny-skia cargo run
-# CPU-only build: cargo run --no-default-features
-gpu = ["iced/wgpu"]
-
-# Debug overlay with layout bounds, render time, widget IDs. Toggle with F12.
-# Usage: cargo run --features dev
-dev = ["iced/debug"]
-
-# Interactive test recorder/player for UI automation. Opens automatically on launch.
-# Usage: cargo run --features test
-test = ["iced/tester"]
+default = []
 
 [dependencies]
 async-trait = { workspace = true }
-iced = { workspace = true, features = [
-    "tokio",
-    "tiny-skia",
-    "advanced",   # custom widgets (DropDown, toast)
-    "canvas",     # vector drawing (TOTP countdown ring)
-    "svg",
-    "image-without-codecs", # Image formats are selected explicitly below.
-    "crisp",      # pixel-snapping for sharp edges on form UI
-    "hinting",    # text metric hinting for clearer glyphs
-    "web-colors", # sRGB blending to match Bitwarden web app colors
-    "x11",        # Linux X11 display backend
-    "wayland",    # Linux Wayland display backend
-    "lazy",
-] }
+eframe = { version = "=0.37.0", default-features = false, features = ["glow", "wayland", "x11", "accesskit"] }
+egui_extras = { version = "=0.37.0", default-features = false, features = ["svg"] }
+fontdb = "0.23"
+futures = "0.3"
+raw-window-handle = "0.6"
 arboard = { version = "3.6", default-features = false, features = [
     "wayland-data-control",
 ] }
@@ -43,8 +21,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 derive_more = { version = "2", default-features = false, features = ["from"] }
 dirs = "6"
 global-hotkey = "0.8"
-# Preserve the existing image formats except OpenEXR and TIFF. Iced's `image`
-# feature would re-enable image/default and bring both decoders back.
+# Explicit image codecs: never enable the image defaults (OpenEXR/TIFF).
 image = { version = "0.25", default-features = false, features = [
     "rayon", "avif", "bmp", "dds", "ff", "gif", "hdr", "ico", "jpeg",
     "png", "pnm", "qoi", "tga", "webp",
@@ -71,7 +48,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 session-events = { path = "../session-events" }
 system-theme = "0.3"
-tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "fs", "sync"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "io-util", "time", "fs", "sync"] }
 tray-icon = "0.24"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -125,4 +102,3 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
-iced_test = { workspace = true }

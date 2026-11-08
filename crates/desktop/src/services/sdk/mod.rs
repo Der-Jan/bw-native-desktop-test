@@ -55,10 +55,10 @@ use self::user_entry::UserEntry;
 
 pub use authorization::{Action, Authorization};
 pub use client_ext::ClientExt;
-pub use removal::{LogoutFailure, LogoutOperation, StorageWarning};
+pub use removal::{LogoutOperation, StorageWarning};
 pub use session::{LockOperation, SessionToken};
 pub use session_client::SessionClient;
-pub use types::{AccountEntry, Collection, Organization, PasswordHistoryEntry, VaultChoice};
+pub use types::{AccountEntry, Collection, Organization, PasswordHistoryEntry};
 pub use unlock::UnlockData;
 
 use crate::domain::UnlockMethods;

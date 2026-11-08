@@ -1,28 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
-mod app;
 mod assets;
-mod components;
-mod debug_fmt;
+mod core;
 mod domain;
 mod paths;
 mod services;
-mod theme;
-mod views;
-
 #[cfg(test)]
 mod test_support;
+mod theme;
+mod ui;
 
-/// Convenience wrapper around [`i18n_embed_fl::fl!`] that passes our static
-/// [`i18n::LANGUAGE_LOADER`] implicitly. Usage:
-///
-/// ```ignore
-/// fl!("login-unlock-title")
-/// fl!("login-server-accessing", server = "bitwarden.com")
-/// ```
-///
-/// Unknown message IDs or wrong argument names are a **compile error** — the
-/// macro validates against the `.ftl` files under `i18n/` at build time.
 #[macro_export]
 macro_rules! fl {
     ($message_id:literal) => {{
@@ -33,39 +19,15 @@ macro_rules! fl {
     }};
 }
 
-use iced::{Font, font::Weight};
-
-use crate::{app::App, components::icons};
-
-/// Desktop typography where configured, otherwise the system sans-serif font.
-pub fn app_font() -> Font {
-    services::desktop_typography::current().font
-}
-pub fn app_font_bold() -> Font {
-    Font {
-        weight: Weight::Bold,
-        ..app_font()
-    }
-}
-
-/// Rounded point sizes derived from the compact typography hierarchy.
-pub fn text_size(design: u32) -> f32 {
-    services::desktop_typography::current().text_size(design)
-}
-
-fn main() -> iced::Result {
+fn main() -> eframe::Result {
     init_tracing();
     services::i18n::init();
     if let Err(error) = paths::initialize() {
         eprintln!("{error}");
         std::process::exit(2);
     }
-
-    // Required by `Client::load_from_state` (called by the SDK loader on each
-    // user), which reads `get_host_platform_info()` when constructing
-    // `ClientSettings`. Must be set once before any SDK client construction.
     bitwarden_core::init_host_platform_info(bitwarden_core::HostPlatformInfo {
-        user_agent: "Bitwarden Rust-SDK".to_string(),
+        user_agent: "Bitwarden Rust-SDK".into(),
         device_type: bitwarden_core::DeviceType::SDK,
         device_identifier: None,
         bitwarden_client_version: Some(
@@ -73,45 +35,18 @@ fn main() -> iced::Result {
         ),
         bitwarden_package_type: None,
     });
-
-    // Single-instance guard: if another process is already running, tell it
-    // to surface its window and exit. Otherwise take over as the primary —
-    // `wake_stream` will bind the listener once iced's tokio runtime is up.
     if services::instance_lock::notify_primary_if_running() {
-        tracing::info!("Bitwarden Desktop already running; signalled primary. Exiting.");
         return Ok(());
     }
     services::instance_lock::cleanup_stale_socket();
-
-    tracing::info!(
-        gpu_enabled = cfg!(feature = "gpu"),
-        backend_override = ?std::env::var("ICED_BACKEND").ok(),
-        "Starting Iced; compositor reports the selected graphics adapter"
-    );
-
-    iced::daemon(App::new, App::update, App::view)
-        .settings(iced::Settings {
-            // Maps to `WM_CLASS` on X11 and `app_id` on Wayland so the running
-            // window matches the `.desktop` file (and its icon). Kept in sync
-            // with `Packager.toml`'s `identifier`. Ignored on Windows + macOS.
-            id: Some("com.bitwarden.desktop.next".into()),
-            fonts: vec![assets::BWI_FONT.into(), icons::FONT_BYTES.into()],
-            default_font: app_font(),
-            default_text_size: crate::text_size(14).into(),
-            antialiasing: true,
-            ..Default::default()
-        })
-        .subscription(App::subscription)
-        .title(App::title)
-        .theme(App::theme)
-        .scale_factor(App::scale_factor)
-        .run()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("background runtime");
+    let _entered = runtime.enter();
+    ui::window_loop::run()
 }
 
-/// Install a `tracing` subscriber driven by the `RUST_LOG` env var. SDK crates
-/// emit `#[tracing::instrument]` spans (unlock, crypto init, vault decrypt) so
-/// once this runs they become visible under e.g.
-/// `RUST_LOG=bitwarden_desktop_next=debug,bitwarden_core=debug cargo run`.
 fn init_tracing() {
     use tracing_subscriber::{
         EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt,
@@ -125,7 +60,7 @@ fn init_tracing() {
 
     // `EnvFilter::from_default_env()` alone falls back to `LevelFilter::ERROR`
     // when `RUST_LOG` is unset, which would silence our `warn!` / `debug!`.
-    const DEFAULT_FILTER: &str = "bitwarden_desktop_next=debug,iced_wgpu=info,warn";
+    const DEFAULT_FILTER: &str = "bitwarden_desktop_next=debug,warn";
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
 

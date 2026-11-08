@@ -20,39 +20,30 @@
 //! so a user accidentally enabling protection in a remote-desktop session
 //! doesn't lose access to the window.
 
-use iced::{Task, window};
-
-/// Set whether `window_id` is excluded from screen capture.
-///
-/// - **Windows**: `SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE | WDA_NONE)`.
-///   Win10 build 2004+ truly excludes the window; earlier builds fall
-///   back to `WDA_MONITOR` (window goes black during capture).
-/// - **macOS**: `NSWindow.sharingType = NSWindowSharingNone | NSWindowSharingReadOnly`.
-/// - **Linux / other**: no-op.
-pub fn apply(window_id: window::Id, protect: bool) -> Task<()> {
-    iced::window::run(window_id, move |w| {
-        #[cfg(target_os = "windows")]
-        apply_windows(w, protect);
-        #[cfg(target_os = "macos")]
-        apply_macos(w, protect);
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        let _ = (w, protect);
-    })
+use raw_window_handle::HasWindowHandle;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use raw_window_handle::RawWindowHandle;
+/// Call only on the UI thread, while the native handle is live.
+pub fn apply(window: &impl HasWindowHandle, protect: bool) {
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    #[cfg(target_os = "windows")]
+    apply_windows(handle.as_raw(), protect);
+    #[cfg(target_os = "macos")]
+    apply_macos(handle.as_raw(), protect);
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let _ = (handle, protect);
 }
 
 #[cfg(target_os = "windows")]
-fn apply_windows(w: &dyn window::Window, protect: bool) {
-    use iced::window::raw_window_handle::RawWindowHandle;
+fn apply_windows(handle: RawWindowHandle, protect: bool) {
     use windows_sys::Win32::{
         Foundation::HWND,
         UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE},
     };
 
-    let Ok(handle) = w.window_handle() else {
-        tracing::warn!("screenshot_protection: window_handle unavailable");
-        return;
-    };
-    let RawWindowHandle::Win32(h) = handle.as_raw() else {
+    let RawWindowHandle::Win32(h) = handle else {
         tracing::warn!("screenshot_protection: non-Win32 handle on Windows");
         return;
     };
@@ -71,15 +62,10 @@ fn apply_windows(w: &dyn window::Window, protect: bool) {
 }
 
 #[cfg(target_os = "macos")]
-fn apply_macos(w: &dyn window::Window, protect: bool) {
-    use iced::window::raw_window_handle::RawWindowHandle;
+fn apply_macos(handle: RawWindowHandle, protect: bool) {
     use objc2_app_kit::{NSView, NSWindowSharingType};
 
-    let Ok(handle) = w.window_handle() else {
-        tracing::warn!("screenshot_protection: window_handle unavailable");
-        return;
-    };
-    let RawWindowHandle::AppKit(h) = handle.as_raw() else {
+    let RawWindowHandle::AppKit(h) = handle else {
         tracing::warn!("screenshot_protection: non-AppKit handle on macOS");
         return;
     };

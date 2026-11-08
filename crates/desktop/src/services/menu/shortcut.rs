@@ -61,20 +61,16 @@ impl Shortcut {
         self.display().parse().ok()
     }
 
-    pub fn matches(&self, key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> bool {
-        if modifiers.command() != self.ctrl_cmd {
+    pub fn matches(&self, key: &eframe::egui::Key, modifiers: eframe::egui::Modifiers) -> bool {
+        if modifiers.command != self.ctrl_cmd {
             return false;
         }
-        if modifiers.shift() != self.shift {
+        if modifiers.shift != self.shift {
             return false;
         }
 
-        match (&self.key, key) {
-            (ShortcutKey::Char(c), iced::keyboard::Key::Character(s)) => s
-                .chars()
-                .next()
-                .is_some_and(|pressed| pressed.eq_ignore_ascii_case(c)),
-            _ => false,
-        }
+        let ShortcutKey::Char(character) = self.key;
+        eframe::egui::Key::from_name(&character.to_ascii_uppercase().to_string()) == Some(*key)
+            && !modifiers.alt
     }
 }

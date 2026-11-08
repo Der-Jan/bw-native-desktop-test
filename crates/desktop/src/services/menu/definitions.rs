@@ -193,8 +193,8 @@ impl MenuTree {
     /// for shortcuts that don't land on a focused widget first.
     pub fn find_shortcut_action(
         &self,
-        key: &iced::keyboard::Key,
-        modifiers: iced::keyboard::Modifiers,
+        key: &eframe::egui::Key,
+        modifiers: eframe::egui::Modifiers,
         state: &MenuState,
     ) -> Option<MenuAction> {
         for sec in &self.sections {
@@ -208,8 +208,8 @@ impl MenuTree {
 
 fn find_in_entries(
     entries: &[MenuEntry],
-    key: &iced::keyboard::Key,
-    modifiers: iced::keyboard::Modifiers,
+    key: &eframe::egui::Key,
+    modifiers: eframe::egui::Modifiers,
     state: &MenuState,
 ) -> Option<MenuAction> {
     for entry in entries {
@@ -236,10 +236,10 @@ fn find_in_entries(
 mod tests {
     use super::*;
     use crate::services::menu::{EnabledWhen, shortcut::ShortcutKey};
-    use iced::keyboard::{Key, Modifiers};
+    use eframe::egui::{Key, Modifiers};
 
     fn key_char(c: &str) -> Key {
-        Key::Character(c.into())
+        Key::from_name(&c.to_ascii_uppercase()).unwrap()
     }
 
     fn unlocked() -> MenuState {
@@ -351,7 +351,7 @@ mod tests {
         let tree = menu_tree();
         // cmd+`n` is bound; `n` alone (no modifiers) is not.
         assert_eq!(
-            tree.find_shortcut_action(&key_char("n"), Modifiers::empty(), &unlocked()),
+            tree.find_shortcut_action(&key_char("n"), Modifiers::NONE, &unlocked()),
             None
         );
         // Adding shift shouldn't match either.

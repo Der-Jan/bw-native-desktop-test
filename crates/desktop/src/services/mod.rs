@@ -7,7 +7,6 @@ pub mod accounts;
 pub mod broadcast_stream;
 pub mod clipboard;
 pub mod cursor_monitor;
-pub mod desktop_typography;
 pub mod favicon;
 pub mod global_hotkey;
 pub mod i18n;

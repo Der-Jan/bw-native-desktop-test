@@ -1,5 +1,11 @@
 # Design Reference
 
+> The production frontend migrated to egui on 2026-11-08. Historical Iced
+> implementation notes below describe the preserved checkpoint `0945673`.
+> Current architecture and supported behavior: [architecture](architecture.md)
+> and [migration](egui-migration.md).
+
+
 This document captures findings from the official Bitwarden desktop app (`clients/`
 submodule) that inform the native Rust UI.
 

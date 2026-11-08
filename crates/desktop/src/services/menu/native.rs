@@ -6,19 +6,21 @@
 //!
 //! - **Enabled state** — [`NativeMenuHandle::sync_enabled`] toggles each
 //!   leaf's enabled flag against a fresh [`super::MenuState`]. Called from
-//!   [`crate::app::App::refresh_accounts_cache`].
+//!   the frontend account-menu refresh.
 //! - **Dynamic submenu contents** — [`NativeMenuHandle::sync_dynamic`]
 //!   clears each dynamic submenu and rebuilds it from the current accounts.
 //!   Also called from `refresh_accounts_cache`.
 
 use std::collections::HashMap;
 
-use muda::{Menu, MenuItem as MudaMenuItem, PredefinedMenuItem, Submenu};
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use muda::{Menu, PredefinedMenuItem};
+use muda::{MenuItem as MudaMenuItem, Submenu};
 
-use super::{
-    DynamicSubmenu, EnabledWhen, MenuAction, MenuChildren, MenuEntry, MenuState, MenuTree,
-    should_use_native_title_bar,
-};
+use super::{DynamicSubmenu, EnabledWhen, MenuAction, MenuState};
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use super::{MenuChildren, MenuEntry, MenuTree, should_use_native_title_bar};
+
 use crate::services::sdk::AccountEntry;
 
 pub struct NativeMenuHandle {
@@ -87,6 +89,7 @@ impl NativeMenuHandle {
 }
 
 /// Returns `None` if native menu is not enabled.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub fn attach_menu(raw_id: u64, tree: &MenuTree) -> Option<NativeMenuHandle> {
     if !should_use_native_title_bar() {
         return None;
@@ -147,6 +150,7 @@ pub fn attach_menu(raw_id: u64, tree: &MenuTree) -> Option<NativeMenuHandle> {
     })
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn append_entries_to_submenu(
     submenu: &Submenu,
     entries: &[MenuEntry],

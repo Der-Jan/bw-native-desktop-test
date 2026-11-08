@@ -1,8 +1,8 @@
 # bitwarden-desktop-next
 
-A vibe-coded project investigating how the [Bitwarden Rust SDK](https://github.com/bitwarden/sdk-internal) can be used to build a native desktop password manager — a slim alternative to the official Electron client, written entirely in Rust on top of [iced 0.15](https://iced.rs/).
+A vibe-coded project investigating how the [Bitwarden Rust SDK](https://github.com/bitwarden/sdk-internal) can be used to build a native desktop password manager — a slim alternative to the official Electron client, written entirely in Rust on top of [egui/eframe 0.37](https://github.com/emilk/egui).
 
-The UI is hand-rolled; cryptography and local vault operations use the real `bitwarden-*` SDK crates. Password login, TOTP/email verification, account-scoped mTLS and full read-only vault sync are available for review. Server writes and notifications are deferred. Treat this as an exploration, not a production app.
+The production UI uses egui; cryptography and local vault operations use the real `bitwarden-*` SDK crates. Password login, TOTP/email verification, account-scoped mTLS and full read-only vault sync are available for review. Server writes and notifications are deferred. Treat this as an exploration, not a production app.
 
 The Bitwarden SDK is pinned to **4.0.0**, commit
 [`a13b4c4e`](https://github.com/bitwarden/sdk-internal/commit/a13b4c4e1fa3685280241f417920fd19d7ef24a6)
@@ -20,7 +20,13 @@ Proposed hardening and server integration requirements:
 
 The first hardening slice implements revocable SDK sessions, plaintext UI cleanup on lock, guarded task results, private staged exports, and explicit demo profiles. Local demo logout now survives restart and recovers interrupted deletion. The next slice adds single-use protected-action grants, encrypted credentials backed by the OS credential store, password login and scoped mTLS. See the login/mTLS documents for the implemented subset and remaining gates.
 
-## egui comparison demo
+## egui frontend
+
+The complete production frontend now uses egui. See [migration status and review
+questions](docs/egui-migration.md). The former Iced UI is preserved in commit
+`0945673`. Supported backend features and profile formats are retained.
+
+### Independent comparison demo
 
 A separate [egui demo](tools/egui-demo/README.md) compares virtualized lists,
 scrolling, combined filters and keyboard navigation using synthetic data:
@@ -52,9 +58,8 @@ import a PKCS#12 identity under Server / mTLS settings. Import a private server 
 separately if needed. Additional API/Identity origins require explicit permission.
 Enter account credentials only in the app. Linux requires a working Secret Service
 (e.g. KWallet/gnome-keyring); there is no plaintext fallback. After login/unlock the app downloads a complete encrypted snapshot and opens the
-read-only vault. If initial sync fails, an authenticated status page offers retry;
-a previous committed cache stays usable offline. File → Sync now refreshes the full snapshot. “Verbindung prüfen (ohne Sync)” remains
-a profile-only check and can renew expired tokens without fetching vault entries.
+read-only vault. If initial sync fails, the vault displays the error and File → Sync now retries;
+a previous committed cache stays usable offline. File → Sync now refreshes the full snapshot. The server-settings connection test checks the selected TLS/mTLS configuration without downloading vault data.
 CAPTCHA, SSO, WebAuthn/security-key 2FA and new-device verification are not implemented.
 For synthetic vault interaction, use the demo commands above. The generator refuses
 existing nonempty directories.
@@ -79,7 +84,7 @@ existing nonempty directories.
 - System tray with a monochrome Linux symbolic icon, Wayland hide/restore + single-instance wake-up
 - Custom title-bar menus (Windows/Linux) and native `muda` menus (macOS)
 - Light / dark theme, persisted settings (`settings.json` in the selected profile)
-- Favicons in the vault list
+- Favicons for local/demo vaults; remote icon fetching stays disabled until account-scoped transport is wired
 - Packaging to `.app` / `.dmg` / `.msi` / `.deb` / `.pacman`
 
 ### Linux notes
@@ -91,11 +96,10 @@ existing nonempty directories.
 
 Full list lives in [docs/todo.md](docs/todo.md). The big ones:
 
-- **Real login command** — current flow only unlocks an existing local DB seeded by `fake-data`
-- **2FA / Registration / SSO / master-password-hint** screens
+- Registration, SSO, security-key 2FA and master-password-hint screens
 - **PIN unlock** and **biometrics** (Touch ID / Windows Hello / polkit)
 - **SSH agent** — opt-in Unix socket agent, active unlocked account, per-signature approvals and verified OpenSSH session binding; see [setup and limits](docs/ssh-agent-requirements.md).
 - **Browser integration**, **autotype**, native-messaging host
 - **Send**: swap in-memory map for the SDK's `Repository<Send>`, add file sends
-- **Right-click context menus** on text inputs
+- Broader OS integration and accessibility review
 - Many settings tabs are UI-only stubs that emit a "not supported yet" toast

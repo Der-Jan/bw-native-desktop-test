@@ -10,7 +10,7 @@
 //! - [`definitions`] — the static [`MENUS`] table + [`find_shortcut_action`].
 //! - [`native`] — [`NativeMenuHandle`] + muda menu construction.
 //!
-//! The custom title-bar renderer ([`crate::views::title_bar`]) and the native
+//! The custom title-bar renderer (the egui menu bar) and the native
 //! muda menu both consume the same [`MENUS`] tree; only one runs per platform
 //! (macOS → native; Win/Linux → custom; both with `DEV_BOTH_MENUS=1`).
 
@@ -21,14 +21,16 @@ mod shortcut;
 
 use std::sync::OnceLock;
 
-use iced::futures::Stream;
+use futures::Stream;
 use tokio::sync::broadcast;
 
 pub use definitions::menu_tree;
 pub use entry::{
     DynamicSubmenu, EnabledWhen, MenuAction, MenuChildren, MenuEntry, MenuState, MenuTree,
 };
-pub use native::{NativeMenuHandle, attach_menu};
+pub use native::NativeMenuHandle;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+pub use native::attach_menu;
 
 // ── Event forwarding (push callback → broadcast → iced subscription) ──────
 
@@ -49,8 +51,8 @@ pub fn install_event_handler() {
     }));
 }
 
-/// Iced-compatible stream of [`muda::MenuEvent`] values, one per muda-managed
-/// menu click. Use as a `fn` pointer with [`iced::Subscription::run`].
+/// Runtime-independent stream of [`muda::MenuEvent`] values, one per muda-managed
+/// menu click. Use as a `fn` pointer with the Core event dispatcher.
 pub fn muda_event_stream() -> impl Stream<Item = muda::MenuEvent> {
     super::broadcast_stream::from_once_lock(&MUDA_EVENTS, "muda")
 }

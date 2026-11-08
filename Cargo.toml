@@ -2,7 +2,7 @@
 members = ["crates/*", "bitwarden_license/*", "tools/*"]
 default-members = ["crates/*", "bitwarden_license/*"]
 resolver = "3"
-exclude = ["vendor/bitwarden-core", "vendor/iced-wgpu", "tools/egui-demo"]
+exclude = ["vendor/bitwarden-core", "tools/egui-demo"]
 
 [workspace.dependencies]
 async-trait = "0.1.89"
@@ -28,8 +28,6 @@ bitwarden-ssh = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b
 bitwarden-state = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
 bitwarden-vault = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
 
-iced = { git = "https://github.com/iced-rs/iced", rev = "0d12e964da8c3f0f7a02d3d731e3187eecfe5779", default-features = false }
-iced_test = { git = "https://github.com/iced-rs/iced", rev = "0d12e964da8c3f0f7a02d3d731e3187eecfe5779" }
 
 # Compile all dependencies with some optimizations when building this crate on debug
 # This slows down clean builds by about 50%, but the resulting binaries can be orders of magnitude faster
@@ -55,6 +53,3 @@ opt-level = 3
 
 [patch."https://github.com/bitwarden/sdk-internal"]
 bitwarden-core = { path = "vendor/bitwarden-core" }
-
-[patch."https://github.com/iced-rs/iced"]
-iced_wgpu = { path = "vendor/iced-wgpu" }

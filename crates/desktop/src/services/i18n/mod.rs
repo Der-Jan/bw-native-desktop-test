@@ -18,12 +18,12 @@
 //!
 //! ## Runtime locale
 //!
-//! [`init`] is called once from `main` before the iced daemon starts. It reads
+//! [`init`] is called once from `main` before the native window loop starts. It reads
 //! the OS locale via `DesktopLanguageRequester` and selects the best match from
 //! the embedded languages, falling back to English when none match.
 //!
 //! To change language at runtime, call [`set_language`] from a message handler.
-//! iced will re-render on the next frame and every `fl!()` call will return the
+//! egui will re-render on the next frame and every `fl!()` call will return the
 //! new translation — no restart required.
 
 use std::{collections::HashMap, sync::LazyLock};
@@ -57,7 +57,7 @@ pub fn init() {
     }
 }
 
-/// Switch to a specific language. iced re-renders on the next frame and every
+/// Switch to a specific language. egui re-renders on the next frame and every
 /// `fl!()` call picks up the new translation. Falls back to English (with a
 /// warning) if no matching `.ftl` file exists under `assets/i18n/`.
 pub fn set_language(lang: LanguageIdentifier) {

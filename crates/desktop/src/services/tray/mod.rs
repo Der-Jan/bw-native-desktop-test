@@ -1,6 +1,6 @@
 //! Platform tray adapters. Linux uses a real StatusNotifier service, independent
 //! of the Iced/winit event loop; macOS/Windows retain tray-icon's native adapter.
-use iced::futures::Stream;
+use futures::Stream;
 use std::sync::OnceLock;
 use tokio::sync::broadcast;
 #[cfg(target_os = "linux")]

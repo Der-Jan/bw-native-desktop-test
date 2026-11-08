@@ -1,5 +1,9 @@
 # SSH agent
 
+The production frontend now uses egui. The SSH backend and verified host-binding
+policy are retained; see [current native acceptance checks](egui-migration.md).
+Earlier Iced acceptance notes below describe the preserved checkpoint.
+
 Implemented for Unix sockets, validated on Linux. Windows named pipes are not
 implemented; that platform shows an explicit unavailable status. This is an
 application service, not a facility supplied by the Bitwarden SDK. The SDK provides

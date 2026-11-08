@@ -11,7 +11,7 @@
 //! iced [`Subscription::run`]-compatible stream that binds the listener and
 //! yields `()` per `"show"` signal received.
 
-use iced::futures::{SinkExt, Stream, channel::mpsc};
+use futures::{SinkExt, Stream, channel::mpsc};
 
 #[cfg(windows)]
 const PIPE_NAME: &str = r"\\.\pipe\bitwarden-desktop-next";
@@ -73,10 +73,10 @@ pub fn cleanup_stale_socket() {
     }
 }
 
-/// Iced-compatible stream that yields `()` per wake signal received. Feed to
-/// [`iced::Subscription::run`] with a `fn` pointer.
+/// Runtime-independent stream that yields `()` per wake signal received. Feed to
+/// the Core event dispatcher with a `fn` pointer.
 pub fn wake_stream() -> impl Stream<Item = ()> {
-    iced::stream::channel(16, |out: mpsc::Sender<()>| async move {
+    super::broadcast_stream::channel(16, |out: mpsc::Sender<()>| async move {
         #[cfg(unix)]
         {
             use tokio::net::UnixListener;

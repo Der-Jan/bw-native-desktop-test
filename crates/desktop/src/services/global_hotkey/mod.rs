@@ -3,7 +3,7 @@
 //! Currently used only by the Magnify launcher window (Ctrl+Shift+Space toggles
 //! it). Mirrors the broadcast-channel pattern used by `services::menu` and
 //! `services::tray`: a callback installed once at startup pushes events into a
-//! `tokio::sync::broadcast`, and iced subscribes via [`event_stream`].
+//! `tokio::sync::broadcast`, and Core subscribes via [`event_stream`].
 //!
 //! Wayland note: `global-hotkey` does not implement Wayland natively. Linux
 //! Wayland users see a warning at startup and the launcher is unreachable
@@ -11,11 +11,11 @@
 
 use std::sync::OnceLock;
 
+use futures::Stream;
 use global_hotkey::{
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
     hotkey::{Code, HotKey, Modifiers},
 };
-use iced::futures::Stream;
 use tokio::sync::broadcast;
 
 /// One unit value per hotkey press. Only `Pressed` transitions are forwarded.
@@ -71,7 +71,7 @@ pub fn install_event_handler() {
     std::mem::forget(manager);
 }
 
-/// Iced-compatible stream of [`MagnifyToggle`]s. If [`install_event_handler`]
+/// Runtime-independent stream of [`MagnifyToggle`]s. If [`install_event_handler`]
 /// failed (e.g. Wayland), the channel was never initialised and the stream
 /// terminates immediately — leaving the subscription idle.
 pub fn event_stream() -> impl Stream<Item = MagnifyToggle> {

@@ -1,5 +1,11 @@
 # Decisions
 
+> The production frontend migrated to egui on 2026-11-08. Historical Iced
+> implementation notes below describe the preserved checkpoint `0945673`.
+> Current architecture and supported behavior: [architecture](architecture.md)
+> and [migration](egui-migration.md).
+
+
 ## Framework: Iced 0.15
 
 **Decision**: Use Iced as the GUI framework, tracking its pre-release 0.15 via git pin.

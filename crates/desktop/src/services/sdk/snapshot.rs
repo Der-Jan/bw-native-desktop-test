@@ -26,6 +26,13 @@ pub(super) struct Persisted {
     local_account_id: UserId,
     pub downloaded_at: DateTime<Utc>,
     pub response: SyncResponseModel,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub local_edits: HashMap<String, LocalEdit>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub(super) struct LocalEdit {
+    pub cipher: Cipher,
+    pub base_revision: DateTime<Utc>,
 }
 bitwarden_state::register_setting_key!(pub(super) const CACHE:Persisted="native_encrypted_vault_snapshot_v1");
 pub(super) struct Snapshot {
@@ -59,6 +66,7 @@ impl Snapshot {
                 local_account_id,
                 downloaded_at,
                 response,
+                local_edits: HashMap::new(),
             },
             server_user_id,
             local_account_id,
@@ -69,7 +77,7 @@ impl Snapshot {
         expected: UserId,
         local_account_id: UserId,
     ) -> Result<Arc<Self>, String> {
-        if persisted.version != 1
+        if !matches!(persisted.version, 1 | 2)
             || persisted.server_user_id != expected
             || persisted.local_account_id != local_account_id
         {
@@ -161,6 +169,27 @@ impl Snapshot {
             }
             collections.push(collection);
         }
+        for (id, edit) in &persisted.local_edits {
+            let original = ciphers.get(id).ok_or("Local edit has no server entry")?;
+            if edit.cipher.id != original.id
+                || edit.cipher.organization_id != original.organization_id
+                || edit.cipher.collection_ids != original.collection_ids
+                || edit.cipher.r#type != original.r#type
+                || edit.base_revision != original.revision_date
+                || edit
+                    .cipher
+                    .folder_id
+                    .is_some_and(|id| !folders.contains_key(&id.to_string()))
+            {
+                return Err("Invalid local edit or account ownership".into());
+            }
+            let mut cipher = edit.cipher.clone();
+            cipher.edit = original.edit;
+            cipher.view_password = original.view_password;
+            cipher.permissions = original.permissions.clone();
+            cipher.organization_use_totp = original.organization_use_totp;
+            ciphers.insert(id.clone(), cipher);
+        }
         Ok(Arc::new(Self {
             persisted,
             ciphers,
@@ -168,6 +197,43 @@ impl Snapshot {
             organizations,
             collections,
         }))
+    }
+    pub fn with_edit(&self, cipher: Cipher) -> Result<Arc<Self>, String> {
+        let id = cipher
+            .id
+            .ok_or("Local edits require an existing entry")?
+            .to_string();
+        let original = self.ciphers.get(&id).ok_or("Item no longer exists")?;
+        let mut persisted = self.persisted.clone();
+        persisted.version = 2;
+        let base_revision = persisted
+            .local_edits
+            .get(&id)
+            .map_or(original.revision_date, |edit| edit.base_revision);
+        persisted.local_edits.insert(
+            id,
+            LocalEdit {
+                cipher,
+                base_revision,
+            },
+        );
+        Self::restore(
+            persisted,
+            self.persisted.server_user_id,
+            self.persisted.local_account_id,
+        )
+    }
+    pub fn without_edit(&self, id: bitwarden_vault::CipherId) -> Result<Arc<Self>, String> {
+        let mut persisted = self.persisted.clone();
+        persisted.version = 2;
+        if persisted.local_edits.remove(&id.to_string()).is_none() {
+            return Err("This item has no local changes".into());
+        }
+        Self::restore(
+            persisted,
+            self.persisted.server_user_id,
+            self.persisted.local_account_id,
+        )
     }
     pub fn collection_names(
         &self,

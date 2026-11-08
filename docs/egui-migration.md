@@ -19,7 +19,7 @@ No real credentials or certificates are copied into demo/test fixtures.
 | Vault | Real data, combined navigation/search, sorting, virtualized list, all detail types | Implemented and tested |
 | Keyboard | List-scoped arrows, Tab, page keys, Escape, text-field/dialog isolation | Implemented and tested |
 | Protected entries | Scoped password confirmation and retry, notes/custom fields | Implemented and tested |
-| Forms | Existing supported item/folder create/edit/delete flows; remote read-only gates | Implemented and tested |
+| Forms | Existing local item/folder create/edit/delete; encrypted local edits of server entries | Implemented and tested; no HTTP writes |
 | Generator | Password/passphrase/username, account-scoped history and clipboard rules | Implemented and tested |
 | Import/export | JSON/CSV/encrypted JSON, fresh scoped authorization and guarded staged exports; import remains the pre-existing backend stub | Implemented |
 | Sends | Existing local/demo Send workflows | Implemented and tested |
@@ -93,7 +93,7 @@ platform-specific API warnings.
 - Windows/macOS conditional integration code is retained but has not been run
   on those operating systems during this migration.
 
-Existing backend limits remain visible: synchronized vaults are read-only;
+Existing backend limits remain visible: server writes remain disabled;
 import and Send server publication are not implemented; PIN, biometrics and
 launch-at-login remain unsupported. This migration does not claim those as
 newly working features.
@@ -139,3 +139,17 @@ Username and History. History has its own content page; the menu's Generator
 history action selects it directly. Clipboard copies retain sensitive-data TTL
 handling, child-window interaction records activity, and screen-capture
 protection follows the configured preference on supported platforms.
+
+Settings now size themselves to the measured content height, capped below the
+monitor edges for desktop panels and window decorations. A scrollbar appears
+only if the content cannot fit (or the user shrinks the window). Generator
+history and zoom entries were removed from the menu; history remains a generator
+tab and zoom controls remain in Settings. Local Linux launchers use an absolute
+shield icon path so discovery does not depend on an icon-theme size directory.
+
+Synchronized entries now allow guarded local content edits, saved as encrypted
+snapshot overlays. They survive lock/restart and can be discarded individually.
+No server write occurs; downloads pause while changes are pending. The UI marks
+unsent changes and explains that logout deletes the local account data. New
+backend tests cover encrypted persistence, stale drafts, ownership, permissions,
+master-password grants, discard, organization-key reload and no HTTP writes.

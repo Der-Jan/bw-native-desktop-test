@@ -41,7 +41,7 @@ def main():
     entry.write_text(
         "[Desktop Entry]\nType=Application\nName=Bitwarden [Next]\n"
         f"Exec={quoted_executable}\n"
-        f"Icon={app_id}\nStartupWMClass={app_id}\n"
+        f"Icon={desktop_string(str(icon))}\nStartupWMClass={app_id}\n"
         "Categories=Utility;\nTerminal=false\nStartupNotify=true\n"
     )
     if shutil.which("update-desktop-database"):

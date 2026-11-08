@@ -34,3 +34,15 @@ the same app ID and shield. Installed packages provide their own desktop entry.
 
 The independent comparison demo can be tested separately:
 `cargo test --manifest-path tools/egui-demo/Cargo.toml`.
+
+Local-edit validation uses disposable mTLS accounts and real SDK SQLite storage:
+encrypted title/username/password persistence, lock/restart, stale revision
+rejection, metadata ownership checks, permission denial, one-shot password
+authorization, organization-key reload, read-sync pause and per-item discard.
+Request counts assert that saves and discards never contact the server.
+
+The 2026-11-08 follow-up passes 165 desktop tests and one fixture test (two
+existing OS tests ignored). Native synthetic-profile checks cover settings
+without a scrollbar at 1080px monitor height and with a scrollbar at 700px,
+independent tool windows, and editing a real-account cache followed by process
+restart with the modified name/username still present.

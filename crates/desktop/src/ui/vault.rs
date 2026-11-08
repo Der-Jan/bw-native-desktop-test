@@ -339,6 +339,16 @@ impl Application {
                 }
             }
         });
+        if let Some(count) = self
+            .core
+            .active
+            .map(|uid| self.core.manager.local_edit_count(&uid))
+            .filter(|count| *count > 0)
+        {
+            ui.weak(format!(
+                "{count} local changes — not uploaded; download sync paused"
+            ));
+        }
         let area = ui.available_rect_before_wrap();
         let list_id = Id::unique("vault-list-focus");
         let focus = ui.interact(area, list_id, Sense::focusable_noninteractive());

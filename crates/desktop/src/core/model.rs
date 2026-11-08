@@ -42,6 +42,7 @@ pub enum Request {
     Edit(CipherId),
     Save(Box<CipherView>),
     Delete(CipherId),
+    DiscardLocal(CipherId),
     Export {
         organization: Option<bitwarden_core::OrganizationId>,
         format: bitwarden_exporters::ExportFormat,
@@ -55,6 +56,7 @@ impl Request {
             | Self::CopyText(id, _)
             | Self::Copy(id, _)
             | Self::Edit(id)
+            | Self::DiscardLocal(id)
             | Self::Delete(id) => Some(*id),
             Self::Save(v) => v.id,
             Self::Export { .. } => None,
@@ -66,7 +68,7 @@ impl Request {
             Self::Read(_) => Action::Read,
             Self::Copy(..) | Self::CopyText(..) => Action::Copy,
             Self::Edit(_) => Action::Edit,
-            Self::Save(_) => Action::Write,
+            Self::Save(_) | Self::DiscardLocal(_) => Action::Write,
             Self::Delete(_) => Action::Delete,
             Self::Export { .. } => Action::Export,
         }

@@ -48,9 +48,6 @@ impl Core {
         let Some(scope) = self.scope() else {
             return;
         };
-        if self.remote() {
-            return;
-        }
         let source = self.editor.as_ref().map(|e| e.id);
         let epoch = self.clear_epoch;
         self.spawn_scoped(

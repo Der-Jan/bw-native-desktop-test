@@ -38,6 +38,10 @@ explicit `--demo` directory. Never use a real profile in tests or screenshots.
   ownership checks, clearing on lock, and protected-copy authorization.
 - Server writes, import, Send publication, PIN/biometric unlock and autostart
   remain unsupported. Do not show a stub as a working feature.
+- Server entries support encrypted local edits through `sdk/local_edits.rs`.
+  Keep original revisions, permission/reprompt checks and exclusive leases.
+  Read-sync must pause while overlays exist; do not bypass this gate before
+  implementing server conflict handling. Logout removes unsent local changes.
 - mTLS secrets remain in OS credential storage. Keep exact origin binding,
   certificate expiry errors, no redirects or permissive TLS fallbacks.
 - Preserve the fixed SSH socket, verified host binding and UUID-bound approvals.

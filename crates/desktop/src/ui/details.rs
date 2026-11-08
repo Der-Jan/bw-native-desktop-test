@@ -154,18 +154,28 @@ impl Application {
                 let mut copy = None;
                 let mut edit = false;
                 let mut delete = false;
+                let mut discard = false;
+                let local_edit = id.is_some_and(|id| self.core.active.is_some_and(|uid| self.core.manager.has_local_edit(&uid, id)));
                 egui::ScrollArea::vertical()
                     .id_salt(("details", id))
                     .show(ui, |ui| {
                         ui.style_mut().interaction.selectable_labels = false;
                         ui.heading(name);
                         ui.horizontal(|ui| {
+                            edit = ui.add_enabled(detail.edit && detail.view_password, egui::Button::new(super::labels::text("Edit"))).clicked();
                             ui.add_enabled_ui(!self.core.remote(), |ui| {
-                                edit = ui.button(super::labels::text("Edit")).clicked();
                                 delete = ui.button("Move to trash").clicked();
                             });
                             ui.checkbox(&mut self.reveal, super::labels::text("Reveal secrets"));
                         });
+                        if local_edit {
+                            ui.strong("Local changes — not uploaded");
+                            ui.weak("Locking and restarting preserve these edits. Logging out removes local account data, including these changes.");
+                            ui.collapsing("Discard local changes…", |ui| {
+                                ui.label("Restore this entry from the last downloaded server snapshot? Your local edits will be lost.");
+                                discard = ui.button("Confirm discard").clicked();
+                            });
+                        }
                         for (section, title, fields) in SECTIONS {
                             if data.get(*section).is_none_or(Value::is_null) {
                                 continue;
@@ -277,10 +287,17 @@ impl Application {
                     if delete {
                         self.core.request(Request::Delete(id));
                     }
+                    if discard {
+                        self.core.request(Request::DiscardLocal(id));
+                    }
                 }
             });
     }
     fn editor(&mut self, ui: &mut egui::Ui) {
+        let local_only = self.core.remote();
+        if local_only {
+            ui.weak("Changes are saved locally and are not uploaded to the server yet.");
+        }
         let folders = self
             .core
             .current_cache()
@@ -331,54 +348,60 @@ impl Application {
                         {
                             editor.data["reprompt"] = json!(if reprompt { 1 } else { 0 });
                         }
-                        let mut org = editor.data["organizationId"].as_str().map(str::to_owned);
-                        let previous_org = org.clone();
-                        egui::ComboBox::from_id_salt("item-vault")
-                            .selected_text(
-                                org.as_ref()
-                                    .and_then(|id| {
-                                        organizations.iter().find(|o| o.id.to_string() == *id)
-                                    })
-                                    .map(|o| o.name.as_str())
-                                    .unwrap_or("My vault"),
-                            )
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut org,
-                                    None,
-                                    super::labels::text("My vault"),
-                                );
-                                for o in &organizations {
-                                    ui.selectable_value(&mut org, Some(o.id.to_string()), &o.name);
-                                }
-                            });
-                        if org != previous_org {
-                            editor.data["organizationId"] = json!(org);
-                            editor.data["collectionIds"] = json!([]);
-                        }
-                        if let Some(org) = org {
-                            ui.collapsing("Collections", |ui| {
-                                let mut ids = editor.data["collectionIds"]
-                                    .as_array()
-                                    .cloned()
-                                    .unwrap_or_default();
-                                for collection in collections
-                                    .iter()
-                                    .filter(|c| c.organization_id.to_string() == org)
-                                {
-                                    let value = json!(collection.id);
-                                    let mut selected = ids.contains(&value);
-                                    if ui.checkbox(&mut selected, &collection.name).changed() {
-                                        if selected {
-                                            ids.push(value);
-                                        } else {
-                                            ids.retain(|id| id != &value);
+                        ui.add_enabled_ui(!local_only, |ui| {
+                            let mut org = editor.data["organizationId"].as_str().map(str::to_owned);
+                            let previous_org = org.clone();
+                            egui::ComboBox::from_id_salt("item-vault")
+                                .selected_text(
+                                    org.as_ref()
+                                        .and_then(|id| {
+                                            organizations.iter().find(|o| o.id.to_string() == *id)
+                                        })
+                                        .map(|o| o.name.as_str())
+                                        .unwrap_or("My vault"),
+                                )
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut org,
+                                        None,
+                                        super::labels::text("My vault"),
+                                    );
+                                    for o in &organizations {
+                                        ui.selectable_value(
+                                            &mut org,
+                                            Some(o.id.to_string()),
+                                            &o.name,
+                                        );
+                                    }
+                                });
+                            if org != previous_org {
+                                editor.data["organizationId"] = json!(org);
+                                editor.data["collectionIds"] = json!([]);
+                            }
+                            if let Some(org) = org {
+                                ui.collapsing("Collections", |ui| {
+                                    let mut ids = editor.data["collectionIds"]
+                                        .as_array()
+                                        .cloned()
+                                        .unwrap_or_default();
+                                    for collection in collections
+                                        .iter()
+                                        .filter(|c| c.organization_id.to_string() == org)
+                                    {
+                                        let value = json!(collection.id);
+                                        let mut selected = ids.contains(&value);
+                                        if ui.checkbox(&mut selected, &collection.name).changed() {
+                                            if selected {
+                                                ids.push(value);
+                                            } else {
+                                                ids.retain(|id| id != &value);
+                                            }
                                         }
                                     }
-                                }
-                                editor.data["collectionIds"] = json!(ids);
-                            });
-                        }
+                                    editor.data["collectionIds"] = json!(ids);
+                                });
+                            }
+                        });
                         let mut folder = editor.data["folderId"].as_str().map(str::to_owned);
                         egui::ComboBox::from_id_salt("item-folder")
                             .selected_text(

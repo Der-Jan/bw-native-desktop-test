@@ -116,15 +116,6 @@ pub fn menu_tree() -> MenuTree {
                 .key(cmd('g'))
                 .when(Unlocked)
                 .action(Generator),
-            item(fl!("menu-view-generator-history"))
-                .when(Unlocked)
-                .action(GeneratorHistory),
-            sep(),
-            // Bound to '=' rather than '+' so users on US/EU layouts hit the
-            // shortcut without holding shift — matches Firefox / Chrome.
-            item(fl!("menu-view-zoom-in")).key(cmd('=')).action(ZoomIn),
-            item(fl!("menu-view-zoom-out")).key(cmd('-')).action(ZoomOut),
-            item(fl!("menu-view-reset-zoom")).key(cmd('0')).action(ZoomReset),
         ]),
         section(fl!("menu-account"), vec![
             item(fl!("menu-account-change-password"))

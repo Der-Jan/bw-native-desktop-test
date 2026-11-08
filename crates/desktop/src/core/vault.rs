@@ -121,12 +121,7 @@ impl Core {
         let Some(scope) = self.scope() else {
             return;
         };
-        if self.remote()
-            && matches!(
-                request.action(),
-                Action::Write | Action::Edit | Action::Delete | Action::Export
-            )
-        {
+        if self.remote() && matches!(request.action(), Action::Delete | Action::Export) {
             self.notify("This synchronized vault is currently read-only.", true);
             return;
         }
@@ -298,7 +293,14 @@ impl Core {
                             core.detail_open = true;
                             core.editor = None;
                             core.load_vault();
-                            core.notify("Item saved", false);
+                            core.notify(
+                                if core.remote() {
+                                    "Saved locally — not uploaded"
+                                } else {
+                                    "Item saved"
+                                },
+                                false,
+                            );
                         }
                         Err(e) => {
                             if let Some(editor) =
@@ -308,6 +310,23 @@ impl Core {
                             }
                             core.notify(e, true);
                         }
+                    },
+                );
+            }
+            Request::DiscardLocal(id) => {
+                self.spawn_scoped(
+                    scope,
+                    client.discard_local(id),
+                    move |core, result| match result {
+                        Ok(()) => {
+                            if core.selected == Some(id) {
+                                core.close_details();
+                                core.selected = None;
+                            }
+                            core.load_vault();
+                            core.notify("Local changes discarded; server snapshot restored", false);
+                        }
+                        Err(error) => core.notify(error, true),
                     },
                 );
             }

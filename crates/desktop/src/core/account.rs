@@ -343,6 +343,10 @@ impl Core {
         let Some(uid) = self.active else {
             return;
         };
+        if self.manager.local_edit_count(&uid) > 0 {
+            self.notify("Download sync is paused while local changes exist.", false);
+            return;
+        }
         if !self.manager.is_unlocked(&uid) {
             return;
         }

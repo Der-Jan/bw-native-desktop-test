@@ -23,6 +23,14 @@ pub async fn synchronize(
     let session = client.session();
     let sequence = session.state.sync_sequence.load(Ordering::SeqCst);
     let _coordinator = session.state.sync_gate.lock().await;
+    if session
+        .state
+        .snapshot
+        .current()
+        .is_some_and(|s| !s.persisted.local_edits.is_empty())
+    {
+        return Err("Read synchronization is paused while local changes exist. Writing changes to the server is not implemented yet. Discard local changes to resume downloads.".into());
+    }
     if session.state.sync_sequence.load(Ordering::SeqCst) != sequence {
         let current = session.state.token();
         if current.generation == session.generation + 1 && current.ensure_unlocked().is_ok() {

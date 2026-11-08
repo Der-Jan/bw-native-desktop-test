@@ -1159,3 +1159,359 @@ async fn version_gated_ssh_sync_reaches_vault_list_and_agent_through_mtls() {
         super::transport::BITWARDEN_PROTOCOL_VERSION
     )));
 }
+
+#[tokio::test]
+async fn local_edits_are_encrypted_durable_revision_checked_and_never_uploaded() {
+    use crate::services::sdk::{ClientExt, test_support::encrypted_sync_response, vault_sync};
+    let f = Fixture::new();
+    let (mut manager, uid) = f.account().await;
+    *f.sync_response.lock().unwrap() = (
+        200,
+        encrypted_sync_response(&manager, uid, "Original server entry").await,
+    );
+    vault_sync::synchronize(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    let id = manager
+        .client_for(&uid)
+        .unwrap()
+        .list_ciphers()
+        .await
+        .unwrap()[0]
+        .id
+        .unwrap();
+    let mut draft = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    let stale = draft.clone();
+    let mut tampered = draft.clone();
+    tampered.edit = false;
+    assert!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .save_cipher(tampered)
+            .await
+            .is_err()
+    );
+    assert_eq!(manager.local_edit_count(&uid), 0);
+    draft.name = "Only local edited title".into();
+    draft.login.as_mut().unwrap().username = Some("local-user-only".into());
+    draft.login.as_mut().unwrap().password = Some("local-password-only".into());
+    let requests = f.requests.lock().unwrap().len();
+    let saved = manager
+        .client_for(&uid)
+        .unwrap()
+        .save_cipher(draft)
+        .await
+        .unwrap();
+    assert!(saved.revision_date > stale.revision_date);
+    assert!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .save_cipher(stale)
+            .await
+            .is_err()
+    );
+    assert_eq!(manager.local_edit_count(&uid), 1);
+    assert!(manager.has_local_edit(&uid, id));
+    assert!(
+        vault_sync::synchronize(
+            manager.client_for(&uid).unwrap(),
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .unwrap_err()
+        .contains("local changes")
+    );
+    assert_eq!(
+        f.requests.lock().unwrap().len(),
+        requests,
+        "Local save and paused sync must send no HTTP requests"
+    );
+    for suffix in [".sqlite", ".sqlite-wal"] {
+        if let Ok(bytes) = std::fs::read(f.root.join(format!("{uid}{suffix}"))) {
+            for secret in [
+                "Only local edited title",
+                "local-user-only",
+                "local-password-only",
+            ] {
+                assert!(
+                    !bytes.windows(secret.len()).any(|w| w == secret.as_bytes()),
+                    "Local plaintext persisted"
+                );
+            }
+        }
+    }
+    manager.lock(&uid).unwrap().finish().await;
+    drop(manager);
+    let restored = crate::services::sdk::production::test_load(&f.root, &f.store).await;
+    restored
+        .unlock_data_for(&uid)
+        .unwrap()
+        .unlock("synthetic-password".into())
+        .await
+        .unwrap();
+    let edited = restored
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    assert_eq!(edited.name, "Only local edited title");
+    assert_eq!(
+        edited.login.unwrap().password.as_deref(),
+        Some("local-password-only")
+    );
+    assert_eq!(restored.local_edit_count(&uid), 1);
+    assert_eq!(f.requests.lock().unwrap().len(), requests);
+    restored
+        .client_for(&uid)
+        .unwrap()
+        .discard_local(id)
+        .await
+        .unwrap();
+    assert_eq!(restored.local_edit_count(&uid), 0);
+    assert_eq!(
+        restored
+            .client_for(&uid)
+            .unwrap()
+            .full_cipher(id)
+            .await
+            .unwrap()
+            .name,
+        "Original server entry"
+    );
+    vault_sync::synchronize(
+        restored.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        f.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(r, _)| !r.starts_with("PUT ") && !r.starts_with("DELETE "))
+    );
+}
+
+#[tokio::test]
+async fn local_edit_requires_current_permissions_and_one_shot_password_authorization() {
+    use crate::services::sdk::{
+        Action, Authorization, ClientExt, test_support::encrypted_sync_response, vault_sync,
+    };
+    let f = Fixture::new();
+    let (manager, uid) = f.account().await;
+    let mut response = encrypted_sync_response(&manager, uid, "Protected entry").await;
+    response["ciphers"][0]["reprompt"] = serde_json::json!(1);
+    *f.sync_response.lock().unwrap() = (200, response.clone());
+    vault_sync::synchronize(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    let id = manager
+        .client_for(&uid)
+        .unwrap()
+        .list_ciphers()
+        .await
+        .unwrap()[0]
+        .id
+        .unwrap();
+    // A protected read requires its own, distinct grant.
+    let (client, envelope) = manager.validation_data_for(&uid).unwrap();
+    let revision = manager
+        .client_for(&uid)
+        .unwrap()
+        .list_ciphers()
+        .await
+        .unwrap()[0]
+        .revision_date;
+    client
+        .authorize_password(
+            envelope.clone(),
+            "synthetic-password".into(),
+            Authorization {
+                cipher: Some(id),
+                revision: Some(revision),
+                action: Action::Read,
+            },
+        )
+        .await
+        .unwrap();
+    let mut draft = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    draft.name = "Protected local edit".into();
+    assert!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .save_cipher(draft.clone())
+            .await
+            .is_err()
+    );
+    manager
+        .client_for(&uid)
+        .unwrap()
+        .authorize_password(
+            envelope,
+            "synthetic-password".into(),
+            Authorization {
+                cipher: Some(id),
+                revision: Some(revision),
+                action: Action::Write,
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .client_for(&uid)
+        .unwrap()
+        .save_cipher(draft.clone())
+        .await
+        .unwrap();
+    assert!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .save_cipher(draft)
+            .await
+            .is_err()
+    );
+    assert!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .discard_local(id)
+            .await
+            .is_err(),
+        "Discard also requires a fresh password grant"
+    );
+    let revision = manager
+        .client_for(&uid)
+        .unwrap()
+        .list_ciphers()
+        .await
+        .unwrap()[0]
+        .revision_date;
+    let (client, envelope) = manager.validation_data_for(&uid).unwrap();
+    client
+        .authorize_password(
+            envelope,
+            "synthetic-password".into(),
+            Authorization {
+                cipher: Some(id),
+                revision: Some(revision),
+                action: Action::Write,
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .client_for(&uid)
+        .unwrap()
+        .discard_local(id)
+        .await
+        .unwrap();
+    response["ciphers"][0]["edit"] = serde_json::json!(false);
+    *f.sync_response.lock().unwrap() = (200, response);
+    vault_sync::synchronize(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .full_cipher_for(id, Action::Edit)
+            .await
+            .is_err()
+    );
+    assert_eq!(manager.local_edit_count(&uid), 0);
+}
+
+#[tokio::test]
+async fn local_org_edits_keep_ownership_and_survive_key_reload() {
+    use crate::services::sdk::{ClientExt, test_support::encrypted_org_sync_response, vault_sync};
+    let f = Fixture::new();
+    let (mut manager, uid) = f.account().await;
+    let (mut response, org, id) = encrypted_org_sync_response(&manager, uid).await;
+    response["ciphers"][0]["edit"] = serde_json::json!(true);
+    response["collections"][0]["readOnly"] = serde_json::json!(false);
+    *f.sync_response.lock().unwrap() = (200, response);
+    vault_sync::synchronize(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    let mut draft = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    let mut moved = draft.clone();
+    moved.organization_id = None;
+    assert!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .save_cipher(moved)
+            .await
+            .is_err()
+    );
+    draft.name = "Locally edited organization entry".into();
+    manager
+        .client_for(&uid)
+        .unwrap()
+        .save_cipher(draft)
+        .await
+        .unwrap();
+    manager.lock(&uid).unwrap().finish().await;
+    drop(manager);
+    let restored = crate::services::sdk::production::test_load(&f.root, &f.store).await;
+    restored
+        .unlock_data_for(&uid)
+        .unwrap()
+        .unlock("synthetic-password".into())
+        .await
+        .unwrap();
+    let view = restored
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    assert_eq!(view.organization_id, Some(org));
+    assert_eq!(view.name, "Locally edited organization entry");
+    restored
+        .client_for(&uid)
+        .unwrap()
+        .discard_local(id)
+        .await
+        .unwrap();
+    assert_eq!(restored.local_edit_count(&uid), 0);
+}

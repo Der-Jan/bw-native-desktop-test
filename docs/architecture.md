@@ -65,3 +65,29 @@ until-lock grants and explicit UUID-bound approval decisions.
 
 See [security concept](security-concept.md), [mTLS](mtls-requirements.md),
 [login/sync](login-sync-requirements.md), and [SSH](ssh-agent-requirements.md).
+
+## Local edits before write synchronization
+
+Existing synchronized entries can be edited locally. The SDK encrypts each
+change before a single SQLite snapshot-setting transaction commits it. Snapshot
+version 2 keeps the original server response plus an encrypted per-item overlay
+and its original server revision. Version 1 snapshots remain readable. SDK
+repositories still reject arbitrary writes; only the guarded local-edit service
+can publish an overlay after durable storage succeeds.
+
+Local saves and discards share the sync coordinator and take an exclusive crypto
+lease. Every save rechecks current edit/view permissions, draft revision and any
+one-shot master-password Write grant. Ownership, collections, keys, attachments,
+type, permissions and lifecycle timestamps are immutable in this milestone;
+folder changes must target a cached folder. A new local revision invalidates
+stale drafts and approval grants. Organization entries retain their ownership and
+use the organization's existing key.
+
+No HTTP writes are made. Read-sync is paused in both Core and the backend while
+any local edits exist, avoiding accidental replacement by a fresh download.
+Per-item discard restores the last downloaded encrypted version and permits
+read-sync again once the last change is discarded. Lock/restart preserve local
+changes; logout deliberately removes the local account and its unsent changes.
+The UI states these limits. Server creation/deletion and ownership changes remain
+disabled. A future write-sync must add server revision/conflict checks and server
+permission revalidation before releasing this download pause.

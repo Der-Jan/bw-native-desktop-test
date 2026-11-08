@@ -29,6 +29,7 @@
 mod authorization;
 mod client_ext;
 mod loader;
+mod local_edits;
 pub mod production;
 pub mod refresh;
 mod removal;
@@ -253,6 +254,18 @@ impl ClientManager {
 
     pub fn is_remote(&self, uid: &UserId) -> bool {
         self.users.get(uid).is_some_and(|e| e.profile.is_some())
+    }
+    pub fn local_edit_count(&self, uid: &UserId) -> usize {
+        self.users
+            .get(uid)
+            .and_then(|e| e.session.snapshot.current())
+            .map_or(0, |s| s.persisted.local_edits.len())
+    }
+    pub fn has_local_edit(&self, uid: &UserId, id: bitwarden_vault::CipherId) -> bool {
+        self.users
+            .get(uid)
+            .and_then(|e| e.session.snapshot.current())
+            .is_some_and(|s| s.persisted.local_edits.contains_key(&id.to_string()))
     }
     pub fn last_sync(&self, uid: &UserId) -> Option<chrono::DateTime<chrono::Utc>> {
         self.users

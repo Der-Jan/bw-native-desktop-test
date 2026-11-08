@@ -19,6 +19,9 @@ impl Application {
             || self.core.new_folder_open
     }
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
+        if !self.core.settings_open {
+            ctx.data_mut(|data| data.remove::<f32>(Id::unique("settings-content-height")));
+        }
         self.profile_dialog(ctx);
         if self.core.settings_open {
             self.settings(ctx);
@@ -160,9 +163,11 @@ impl Application {
         let open =
             self.native_tool_window(ctx, "settings", "Settings", [640., 760.], |this, ui| {
                 let app = this;
-                egui::ScrollArea::vertical()
+                let scroll = egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                    .scroll_bar_visibility(
+                        egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
+                    )
                     .show(ui, |ui| {
                         ui.heading(super::labels::text("Appearance"));
                         let previous_language = app.core.settings.language.clone();
@@ -368,6 +373,26 @@ impl Application {
                             }
                         }
                     });
+                let height = scroll.content_size.y;
+                let height_id = Id::unique("settings-content-height");
+                let previous = ui.ctx().data(|data| data.get_temp::<f32>(height_id));
+                if previous.is_none_or(|value| (value - height).abs() > 1.) {
+                    let limit = ui
+                        .input(|i| {
+                            i.viewport()
+                                .monitor_size
+                                .map(|size| (size.y - 96.).max(350.))
+                        })
+                        .unwrap_or(1000.);
+                    let width = ui.max_rect().width() + 16.;
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                            width,
+                            (height + 24.).clamp(350., limit),
+                        )));
+                    ui.ctx()
+                        .data_mut(|data| data.insert_temp(height_id, height));
+                }
             });
         self.core.settings_open = open && !self.profile_open;
         if changed {

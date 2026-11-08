@@ -53,6 +53,9 @@ macro_rules! forward {
                 self.full_cipher_for(cipher_id,Action::Read).await
             }
             async fn save_cipher(self, cipher_view: CipherView) -> Result<CipherView,String> {
+                if !self.session.state.writable.load(std::sync::atomic::Ordering::SeqCst) {
+                    return self.save_local(cipher_view).await;
+                }
                 let session=self.session();
                 self.run(move |client|async move {
                     ensure_writable(&session)?;

@@ -1,0 +1,129 @@
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+use crate::{
+    endpoint::{Endpoint, Source},
+    serde_utils,
+};
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(test, derive(PartialEq))]
+#[bitwarden_ffi::wasm_object]
+/// An untyped IPC message to be sent to another endpoint.
+pub struct OutgoingMessage {
+    /// Serialized payload bytes.
+    #[cfg_attr(feature = "wasm", wasm_bindgen(getter_with_clone))]
+    pub payload: Vec<u8>,
+    /// Destination endpoint for this message.
+    #[cfg_attr(feature = "wasm", wasm_bindgen(getter_with_clone))]
+    pub destination: Endpoint,
+    /// Optional topic used for routing/dispatch.
+    #[cfg_attr(feature = "wasm", wasm_bindgen(getter_with_clone))]
+    pub topic: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(test, derive(PartialEq))]
+#[bitwarden_ffi::wasm_object]
+/// An untyped IPC message received from another endpoint.
+pub struct IncomingMessage {
+    /// Serialized payload bytes.
+    #[cfg_attr(feature = "wasm", wasm_bindgen(getter_with_clone))]
+    pub payload: Vec<u8>,
+    /// Destination endpoint that received this message.
+    #[cfg_attr(feature = "wasm", wasm_bindgen(getter_with_clone))]
+    pub destination: Endpoint,
+    /// Source that sent this message, with per-variant metadata.
+    #[cfg_attr(feature = "wasm", wasm_bindgen(getter_with_clone))]
+    pub source: Source,
+    /// Optional topic used for routing/dispatch.
+    #[cfg_attr(feature = "wasm", wasm_bindgen(getter_with_clone))]
+    pub topic: Option<String>,
+}
+
+/// A typed wrapper around [`OutgoingMessage`] that stores the payload as a deserialized type.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(test, derive(PartialEq))]
+pub struct TypedOutgoingMessage<Payload> {
+    /// The typed payload of this message.
+    pub payload: Payload,
+    /// Destination endpoint for this message.
+    pub destination: Endpoint,
+}
+
+impl<Payload> TryFrom<OutgoingMessage> for TypedOutgoingMessage<Payload>
+where
+    Payload: DeserializeOwned,
+{
+    type Error = serde_utils::SerializeError;
+
+    fn try_from(value: OutgoingMessage) -> Result<Self, Self::Error> {
+        Ok(Self {
+            payload: serde_utils::from_slice(&value.payload)?,
+            destination: value.destination,
+        })
+    }
+}
+
+impl<Payload> TryFrom<TypedOutgoingMessage<Payload>> for OutgoingMessage
+where
+    Payload: Serialize + PayloadTypeName,
+{
+    type Error = serde_utils::DeserializeError;
+
+    fn try_from(value: TypedOutgoingMessage<Payload>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            payload: serde_utils::to_vec(&value.payload)?,
+            destination: value.destination,
+            topic: Some(Payload::PAYLOAD_TYPE_NAME.to_owned()),
+        })
+    }
+}
+
+/// A typed wrapper around [`IncomingMessage`] that stores the payload as a deserialized type.
+#[derive(Clone, Debug)]
+#[cfg_attr(test, derive(PartialEq))]
+pub struct TypedIncomingMessage<Payload: PayloadTypeName> {
+    /// The typed payload of this message.
+    pub payload: Payload,
+    /// Destination endpoint that received this message.
+    pub destination: Endpoint,
+    /// Source that sent this message, with per-variant metadata.
+    pub source: Source,
+}
+
+/// This trait is used to ensure that the payload type has a topic associated with it.
+pub trait PayloadTypeName {
+    /// The topic name associated with this payload type, used for routing/dispatch.
+    const PAYLOAD_TYPE_NAME: &'static str;
+}
+
+impl<Payload> TryFrom<IncomingMessage> for TypedIncomingMessage<Payload>
+where
+    Payload: DeserializeOwned + PayloadTypeName,
+{
+    type Error = serde_utils::DeserializeError;
+
+    fn try_from(value: IncomingMessage) -> Result<Self, Self::Error> {
+        Ok(Self {
+            payload: serde_utils::from_slice(&value.payload)?,
+            destination: value.destination,
+            source: value.source,
+        })
+    }
+}
+
+impl<Payload> TryFrom<TypedIncomingMessage<Payload>> for IncomingMessage
+where
+    Payload: Serialize + PayloadTypeName,
+{
+    type Error = serde_utils::SerializeError;
+
+    fn try_from(value: TypedIncomingMessage<Payload>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            payload: serde_utils::to_vec(&value.payload)?,
+            destination: value.destination,
+            source: value.source,
+            topic: Some(Payload::PAYLOAD_TYPE_NAME.to_owned()),
+        })
+    }
+}

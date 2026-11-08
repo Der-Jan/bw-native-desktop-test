@@ -66,6 +66,12 @@ until-lock grants and explicit UUID-bound approval decisions.
 See [security concept](security-concept.md), [mTLS](mtls-requirements.md),
 [login/sync](login-sync-requirements.md), and [SSH](ssh-agent-requirements.md).
 
+Opt-in [browser integration](browser-integration.md) uses a separate native
+messaging proxy and an account-bound approval broker. It supports Helium first,
+with legacy encrypted messaging and the pinned SDK's Noise IPC. Browser key
+release requires an already unlocked desktop account; Polkit, biometric user
+verification and shared lock-state synchronization remain unsupported.
+
 ## Local edits before write synchronization
 
 Existing synchronized entries can be edited locally. The SDK encrypts each

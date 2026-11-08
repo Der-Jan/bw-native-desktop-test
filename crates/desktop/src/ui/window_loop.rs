@@ -14,6 +14,7 @@ use std::{
 pub enum Surface {
     Main,
     Approval,
+    BrowserApproval,
     Magnify,
 }
 #[derive(Default)]
@@ -69,11 +70,13 @@ pub fn run() -> eframe::Result {
         let size = match surface {
             Surface::Main => [1200., 840.],
             Surface::Approval => [500., 350.],
+            Surface::BrowserApproval => [580., 420.],
             Surface::Magnify => [600., 420.],
         };
         let title = match surface {
             Surface::Main => "Bitwarden",
             Surface::Approval => "Allow SSH authentication",
+            Surface::BrowserApproval => "Allow browser unlock",
             Surface::Magnify => "Bitwarden quick search",
         };
         let mut viewport = egui::ViewportBuilder::default()
@@ -113,6 +116,8 @@ pub fn run() -> eframe::Result {
                     app.restore_offset = Some(app.list_offset);
                     app.icon_textures.clear();
                     app.ssh_seen = None;
+                    app.browser_seen = None;
+                    app.browser_viewport_open = false;
                 }
                 let mut app_ref = shared.borrow_mut();
                 let app = app_ref.as_mut().unwrap();
@@ -156,6 +161,7 @@ pub fn run() -> eframe::Result {
                 }
                 if app.core.ready_to_quit() {
                     app.core.ssh_agent.stop();
+                    app.core.browser.stop();
                     return Ok(());
                 }
                 if app.core.quit_requested {
@@ -163,6 +169,9 @@ pub fn run() -> eframe::Result {
                 // Finish durable cleanup without reopening.
                 else if !app.core.hidden {
                     surface = Surface::Main;
+                    break;
+                } else if app.core.browser_approval.is_some() {
+                    surface = Surface::BrowserApproval;
                     break;
                 } else if app.core.ssh_approval.is_some() {
                     surface = Surface::Approval;

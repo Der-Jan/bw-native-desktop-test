@@ -45,6 +45,9 @@ explicit `--demo` directory. Never use a real profile in tests or screenshots.
 - mTLS secrets remain in OS credential storage. Keep exact origin binding,
   certificate expiry errors, no redirects or permissive TLS fallbacks.
 - Preserve the fixed SSH socket, verified host binding and UUID-bound approvals.
+- Browser integration is opt-in: preserve proxy/peer checks, account/session
+  fences and explicit approval before user-key release. Never claim biometric
+  verification; see `docs/browser-integration.md` for supported protocols/limits.
 - On Wayland, tray hiding destroys the native surface and retains Core. The
   daemon waits for worker/timer/tray events; no invisible helper window.
 - System fonts only in production, original outlined SVG wordmark; immediate

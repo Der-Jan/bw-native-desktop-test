@@ -1515,3 +1515,21 @@ async fn local_org_edits_keep_ownership_and_survive_key_reload() {
         .unwrap();
     assert_eq!(restored.local_edit_count(&uid), 0);
 }
+
+#[tokio::test]
+async fn browser_authority_uses_the_server_identity_and_revokes_on_lock() {
+    let f = Fixture::new();
+    let (mut manager, uid) = f.account().await;
+    let browser = manager.browser_session_for(&uid).unwrap();
+    assert_ne!(
+        browser.uid, browser.server_user_id,
+        "Local account IDs must not be used in browser messages"
+    );
+    assert!(browser.current());
+    assert!(browser.unlocked());
+    assert!(browser.approved_browser_key().await.is_ok());
+    manager.lock(&uid).unwrap().finish().await;
+    assert!(!browser.current());
+    assert!(!browser.unlocked());
+    assert!(browser.approved_browser_key().await.is_err());
+}

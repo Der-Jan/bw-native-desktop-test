@@ -12,11 +12,12 @@ copyright = "Copyright © Bitwarden Inc."
 category = "Utility"
 license-file = "LICENSE.txt"
 icons = ["assets/icon.icns", "assets/icon.ico", "assets/icon.png"]
-before-packaging-command = "cargo build --release"
+before-packaging-command = "cargo build --release --workspace"
 out-dir = "dist"
 binaries-dir = "target/release"
 binaries = [
-    { path = "bitwarden-desktop-next", main = true }
+    { path = "bitwarden-desktop-next", main = true },
+    { path = "bitwarden-browser-proxy", main = false }
 ]
 
 # [[deep-link-protocols]]

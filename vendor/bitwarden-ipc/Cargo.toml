@@ -1,0 +1,60 @@
+[package]
+name = "bitwarden-ipc"
+version = "4.0.0"
+authors = ["Bitwarden Inc"]
+edition = "2024"
+rust-version = "1.88.0"
+homepage = "https://bitwarden.com"
+repository = "https://github.com/bitwarden/sdk-internal"
+license = "GPL-3.0-only OR LicenseRef-Bitwarden-SDK"
+keywords = ["bitwarden"]
+
+[features]
+# Native Rust transport adapters; exports only, no cryptographic changes.
+native = []
+wasm = [
+    "dep:tsify",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:js-sys",
+    "bitwarden-error/wasm",
+    "bitwarden-ffi/wasm",
+    "bitwarden-threading/wasm",
+] # WASM support
+test-support = [] # Expose test utilities (InMemoryCommunicationBackend) for downstream crates
+
+[dependencies]
+async-trait = { version = ">=0.1.80, <0.2" }
+bitwarden-error = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-ffi = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-random = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6", features = ["snow"] }
+bitwarden-threading = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+ciborium = { version = ">=0.2.2, <0.3" }
+erased-serde = ">=0.4.6, <0.5"
+js-sys = { version = ">=0.3.72, <0.4", optional = true }
+rand = { version = ">=0.10.0, <0.11" }
+serde = { version = ">=1.0, <2.0", features = ["derive"] }
+serde_bytes = { version = ">=0.11.17, <0.12.0" }
+serde_json = { version = ">=1.0.96, <2.0" }
+snow = { version = "0.10.0", default-features = false, features = [
+    "default-resolver",
+    "default-resolver-crypto",
+    "risky-raw-split",
+    "use-p256",
+] }
+thiserror = { version = ">=1.0.40, <3" }
+tokio = { version = "1.36.0", features = ["macros", "sync", "time", "rt"] }
+tracing = { version = "0.1.41" }
+tsify = { version = ">=0.5.5, <0.5.7", features = ["js"], default-features = false, optional = true }
+uuid = { version = ">=1.3.3, <2.0", features = ["serde", "v4", "js"] }
+wasm-bindgen = { version = "=0.2.114", features = ["serde-serialize"], optional = true }
+wasm-bindgen-futures = { version = "0.4.64", optional = true }
+web-time = "1.1.0"
+zeroize = { version = ">=1.7.0, <2.0", features = ["zeroize_derive"] }
+
+[dev-dependencies]
+tokio = { version = "1.36.0", features = ["macros", "rt", "sync", "test-util", "time"] }
+
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("uniffi", "wasm"))', 'cfg(dylint_lib, values("bitwarden_lints"))', 'cfg(bitwarden_ensure_non_commercial)'] }

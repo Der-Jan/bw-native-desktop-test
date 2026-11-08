@@ -2,7 +2,7 @@
 members = ["crates/*", "bitwarden_license/*", "tools/*"]
 default-members = ["crates/*", "bitwarden_license/*"]
 resolver = "3"
-exclude = ["vendor/bitwarden-core", "tools/egui-demo"]
+exclude = ["vendor/bitwarden-core", "vendor/bitwarden-ipc", "tools/egui-demo"]
 
 [workspace.dependencies]
 async-trait = "0.1.89"
@@ -53,3 +53,4 @@ opt-level = 3
 
 [patch."https://github.com/bitwarden/sdk-internal"]
 bitwarden-core = { path = "vendor/bitwarden-core" }
+bitwarden-ipc = { path = "vendor/bitwarden-ipc" }

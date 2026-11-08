@@ -95,7 +95,7 @@ pub struct Settings {
     /// Stub (not wired) — shown in the Security tab.
     pub open_at_login: bool,
 
-    /// Integrations; SSH agent is implemented, browser integration remains a stub.
+    /// Opt-in local browser key release and SSH agent integrations.
     pub browser_integration: bool,
     pub browser_integration_fingerprint: bool,
     pub ssh_agent: bool,

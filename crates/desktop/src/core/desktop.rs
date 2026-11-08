@@ -8,6 +8,34 @@ use services::{
 };
 impl Core {
     pub(super) fn install_desktop_events(&mut self) {
+        self.listen(
+            services::broadcast_stream::from_receiver(
+                Some(self.browser.events().subscribe()),
+                "browser-integration",
+            ),
+            |core, event| {
+                use services::browser_integration::{Decision, Event};
+                match event {
+                    Event::Approval(approval) => {
+                        if !approval.current()
+                            || core.browser_approval.is_some()
+                            || core.ssh_approval.is_some()
+                            || core.prompt.is_some()
+                        {
+                            approval.respond(Decision::Deny);
+                        } else {
+                            core.browser_approval = Some(approval);
+                        }
+                    }
+                    Event::Dismiss(id) => {
+                        if core.browser_approval.as_ref().is_some_and(|a| a.id == id) {
+                            core.browser_approval = None;
+                        }
+                    }
+                    Event::Changed => {}
+                }
+            },
+        );
         self.listen(services::desktop_appearance::updates(), |core, color| {
             core.appearance = color
         });
@@ -75,7 +103,10 @@ impl Core {
             ),
             |core, event| match event {
                 UiEvent::Approval(approval) => {
-                    if !approval.current() || core.ssh_approval.is_some() {
+                    if !approval.current()
+                        || core.ssh_approval.is_some()
+                        || core.browser_approval.is_some()
+                    {
                         approval.respond(Decision::Deny);
                     } else {
                         core.cancel_prompt();
@@ -104,6 +135,17 @@ impl Core {
         });
     }
     pub fn refresh_agent(&mut self) {
+        self.browser
+            .configure(self.settings.browser_integration && !self.quit_requested);
+        self.browser.set_session(
+            self.active
+                .and_then(|uid| self.manager.browser_session_for(&uid)),
+        );
+        if self.browser_approval.as_ref().is_some_and(|a| !a.current())
+            && let Some(a) = self.browser_approval.take()
+        {
+            a.respond(services::browser_integration::Decision::Deny);
+        }
         self.ssh_agent
             .configure(self.settings.ssh_agent && !self.quit_requested);
         let session = self
@@ -119,6 +161,56 @@ impl Core {
         {
             a.respond(Decision::Deny);
         }
+    }
+    pub fn decide_browser(
+        &mut self,
+        id: uuid::Uuid,
+        decision: services::browser_integration::Decision,
+    ) {
+        if self.browser_approval.as_ref().is_some_and(|a| a.id == id)
+            && let Some(approval) = self.browser_approval.take()
+        {
+            approval.respond(decision);
+        }
+    }
+    pub fn register_browser(&mut self, browser: services::browser_integration::Browser) {
+        if self.browser_registration_busy || !self.settings.browser_integration {
+            return;
+        }
+        self.browser_registration_busy = true;
+        let path = self.browser.path().to_path_buf();
+        self.events.spawn(
+            tokio::task::spawn_blocking(move || {
+                services::browser_integration::register(browser, &path)
+            }),
+            |core, result| {
+                core.browser_registration_busy = false;
+                match result {
+                    Ok(Ok(message)) => core.notify(message, false),
+                    Ok(Err(error)) => core.notify(error, true),
+                    Err(_) => core.notify("Browser registration failed", true),
+                }
+            },
+        );
+    }
+    pub fn restore_browser_registration(&mut self) {
+        if self.browser_registration_busy {
+            return;
+        }
+        self.settings.browser_integration = false;
+        self.save_settings();
+        self.browser_registration_busy = true;
+        self.events.spawn(
+            tokio::task::spawn_blocking(services::browser_integration::restore_registration),
+            |core, result| {
+                core.browser_registration_busy = false;
+                match result {
+                    Ok(Ok(message)) => core.notify(message, false),
+                    Ok(Err(error)) => core.notify(error, true),
+                    Err(_) => core.notify("Browser registration restore failed", true),
+                }
+            },
+        );
     }
     pub fn decide_ssh(&mut self, id: uuid::Uuid, decision: Decision) {
         if self.ssh_approval.as_ref().is_some_and(|a| a.id == id)

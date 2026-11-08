@@ -160,6 +160,9 @@ pub struct Core {
     pub about_open: bool,
     pub fingerprint_open: bool,
     pub new_folder_open: bool,
+    pub browser: services::browser_integration::BrowserRuntime,
+    pub browser_approval: Option<Arc<services::browser_integration::Approval>>,
+    pub browser_registration_busy: bool,
     pub ssh_agent: services::ssh_agent::AgentRuntime,
     pub ssh_approval: Option<Arc<services::ssh_agent::Approval>>,
     pub clipboard: services::clipboard::ClipboardManager,
@@ -240,6 +243,9 @@ impl Core {
             about_open: false,
             fingerprint_open: false,
             new_folder_open: false,
+            browser: services::browser_integration::BrowserRuntime::new(),
+            browser_approval: None,
+            browser_registration_busy: false,
             ssh_agent: services::ssh_agent::AgentRuntime::new(),
             ssh_approval: None,
             clipboard: services::clipboard::ClipboardManager::new(),
@@ -334,6 +340,10 @@ impl Core {
         self.active.and_then(|uid| self.caches.get(&uid))
     }
     pub fn clear_presentation(&mut self) {
+        if let Some(approval) = self.browser_approval.take() {
+            approval.respond(services::browser_integration::Decision::Deny);
+        }
+        self.browser.set_session(None);
         self.generation = self
             .generation
             .checked_add(1)

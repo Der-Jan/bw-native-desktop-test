@@ -54,3 +54,13 @@ It uses only a synthetic in-memory account and closes its native windows after
 two seconds. Before the fix the native window stayed at 760px for 869px of
 content; after the fix it reaches 893px on the same desktop. This catches the
 Wayland behavior that the earlier X11/Xvfb checks did not reproduce.
+
+The browser integration checkpoint passes 178 desktop tests and one fixture
+test, with three OS-dependent tests ignored. It adds SDK Noise and legacy native
+messaging interoperation, approval/revocation, account identity and registration
+backup checks. The separate Helium/EGL synthetic native test passes approval,
+denial, until-lock reuse and disconnect on desktop lock. See
+[browser integration](browser-integration.md) for setup, acceptance scope and the
+unresolved raw-Xvfb GLX child-window limitation.
+The expanded Settings also passes the native Wayland sizing test: 1170px of
+actual height for 1146px of content on the 1878px logical monitor.

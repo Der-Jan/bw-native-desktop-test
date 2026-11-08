@@ -3,6 +3,7 @@ name = "bitwarden-desktop-next"
 version = "0.1.0"
 edition = "2024"
 license-file = "LICENSE.txt"
+default-run = "bitwarden-desktop-next"
 
 [features]
 default = []
@@ -48,7 +49,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 session-events = { path = "../session-events" }
 system-theme = "0.3"
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "io-util", "time", "fs", "sync"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "io-util", "io-std", "time", "fs", "sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 tray-icon = "0.24"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -71,6 +73,7 @@ bitwarden-send = { workspace = true }
 bitwarden-ssh = { workspace = true }
 bitwarden-state = { workspace = true }
 bitwarden-vault = { workspace = true }
+bitwarden-ipc = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6", features = ["native"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "5", default-features = false, features = ["tokio", "blocking-api"] }

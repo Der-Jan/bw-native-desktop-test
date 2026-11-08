@@ -55,6 +55,9 @@ pub struct Application {
     pub export_confirm: Zeroizing<String>,
     pub export_organization: Option<bitwarden_core::OrganizationId>,
     pub always_on_top: bool,
+    pub browser_seen: Option<uuid::Uuid>,
+    pub browser_viewport_open: bool,
+    pub browser_choice: services::browser_integration::Browser,
     pub ssh_seen: Option<uuid::Uuid>,
     pub ssh_viewport_open: bool,
     pub magnify_query: String,
@@ -114,6 +117,9 @@ impl Application {
             export_confirm: Zeroizing::default(),
             export_organization: None,
             always_on_top: false,
+            browser_seen: None,
+            browser_viewport_open: false,
+            browser_choice: services::browser_integration::Browser::Helium,
             ssh_seen: None,
             ssh_viewport_open: false,
             magnify_query: String::new(),
@@ -234,6 +240,8 @@ impl eframe::App for Application {
         if self.core.ready_to_quit()
             || (self.surface == window_loop::Surface::Main && self.core.hidden)
             || (self.surface == window_loop::Surface::Approval && self.core.ssh_approval.is_none())
+            || (self.surface == window_loop::Surface::BrowserApproval
+                && self.core.browser_approval.is_none())
             || (self.surface == window_loop::Surface::Magnify && !self.core.magnify_requested)
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);

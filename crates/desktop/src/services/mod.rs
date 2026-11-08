@@ -5,6 +5,7 @@
 
 pub mod accounts;
 pub mod broadcast_stream;
+pub mod browser_integration;
 pub mod clipboard;
 pub mod cursor_monitor;
 pub mod desktop_appearance;

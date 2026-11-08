@@ -5,6 +5,50 @@ use crate::{
 };
 impl Application {
     pub(super) fn auxiliary_windows(&mut self, ctx: &egui::Context) {
+        if let Some(approval) = self.core.browser_approval.clone().filter(|a| a.current()) {
+            let id = egui::ViewportId::from_hash_of("browser-approval");
+            let fresh = self.browser_seen != Some(approval.id);
+            self.browser_seen = Some(approval.id);
+            self.browser_viewport_open = true;
+            ctx.show_viewport_deferred(
+                id,
+                egui::ViewportBuilder::default()
+                    .with_title("Allow browser unlock")
+                    .with_app_id(crate::assets::DESKTOP_APP_ID)
+                    .with_icon(crate::assets::window_icon().unwrap_or_default())
+                    .with_inner_size([580., 420.])
+                    .with_always_on_top()
+                    .with_active(fresh),
+                move |ui, class| {
+                    let ctx = ui.ctx().clone();
+                    if !approval.current() {
+                        ctx.request_repaint_of(egui::ViewportId::ROOT);
+                        return;
+                    }
+                    let focus_id = Id::unique(("browser-approval-focused", approval.id));
+                    let fresh = !ctx.data(|data| data.get_temp::<bool>(focus_id).unwrap_or(false));
+                    ctx.data_mut(|data| data.insert_temp(focus_id, true));
+                    let mut decision = None;
+                    if class == egui::ViewportClass::EmbeddedWindow {
+                        decision = browser_content(ui, &approval, fresh);
+                    } else {
+                        egui::CentralPanel::default()
+                            .show(ui, |ui| decision = browser_content(ui, &approval, fresh));
+                    }
+                    if let Some(decision) = decision {
+                        approval.respond(decision);
+                        ctx.request_repaint_of(egui::ViewportId::ROOT);
+                    }
+                },
+            );
+        } else if self.browser_viewport_open {
+            ctx.send_viewport_cmd_to(
+                egui::ViewportId::from_hash_of("browser-approval"),
+                egui::ViewportCommand::Close,
+            );
+            self.browser_viewport_open = false;
+            self.browser_seen = None;
+        }
         if let Some(approval) = self.core.ssh_approval.clone().filter(|a| a.current()) {
             let ssh_id = egui::ViewportId::from_hash_of(("ssh-approval", approval.id));
             let fresh = self.ssh_seen != Some(approval.id);
@@ -70,6 +114,21 @@ impl Application {
     pub(super) fn standalone_auxiliary(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         match self.surface {
+            window_loop::Surface::BrowserApproval => {
+                if let Some(approval) = self.core.browser_approval.clone().filter(|a| a.current()) {
+                    let fresh = self.browser_seen != Some(approval.id);
+                    self.browser_seen = Some(approval.id);
+                    let mut decision = None;
+                    egui::CentralPanel::default()
+                        .show(ui, |ui| decision = browser_content(ui, &approval, fresh));
+                    if let Some(decision) = decision {
+                        self.core.decide_browser(approval.id, decision);
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                } else {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
             window_loop::Surface::Approval => {
                 if let Some(approval) = self.core.ssh_approval.clone().filter(|a| a.current()) {
                     let fresh = self.ssh_seen != Some(approval.id);
@@ -223,6 +282,58 @@ fn ssh_content(ui: &mut egui::Ui, approval: &Approval, fresh: bool) -> Option<De
             });
         }
         if ui.button(super::labels::text("Deny")).clicked() {
+            decision = Some(Decision::Deny);
+        }
+    });
+    if ui.input(|i| i.viewport().close_requested())
+        || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape))
+    {
+        decision = Some(Decision::Deny);
+    }
+    decision
+}
+
+fn browser_content(
+    ui: &mut egui::Ui,
+    approval: &services::browser_integration::Approval,
+    fresh: bool,
+) -> Option<services::browser_integration::Decision> {
+    use services::browser_integration::Decision;
+    ui.style_mut().interaction.selectable_labels = false;
+    if fresh {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
+                egui::UserAttentionType::Critical,
+            ));
+    }
+    egui::ScrollArea::vertical().max_height(290.).show(ui, |ui| {
+        ui.heading("Allow browser to unlock this vault?");
+        ui.strong(&approval.browser);
+        ui.label(&approval.email);
+        ui.label(&approval.server);
+        ui.separator();
+        ui.label("The Bitwarden extension receives this account’s vault key and can decrypt its own vault cache. Your master password is not sent.");
+        ui.label("Check that the browser is signed into this account on the same server.");
+        ui.weak("Approval uses the already unlocked desktop vault; no biometric verification is performed.");
+        ui.collapsing("Extension identity", |ui| { ui.monospace(&approval.extension); });
+    });
+    let mut decision = None;
+    ui.horizontal(|ui| {
+        let allow = ui.button("Allow once");
+        if fresh {
+            allow.request_focus();
+        }
+        if allow.clicked()
+            || ((allow.has_focus() || fresh)
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter)))
+        {
+            decision = Some(Decision::Once);
+        }
+        if ui.button("Allow until desktop locks").clicked() {
+            decision = Some(Decision::UntilLock);
+        }
+        if ui.button("Deny").clicked() {
             decision = Some(Decision::Deny);
         }
     });

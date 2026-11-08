@@ -27,6 +27,8 @@
 //! - [`user_entry`] — private `UserEntry` struct held by `ClientManager`.
 
 mod authorization;
+mod browser;
+pub use browser::BrowserSession;
 mod client_ext;
 mod loader;
 mod local_edits;

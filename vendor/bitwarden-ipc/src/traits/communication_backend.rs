@@ -1,0 +1,329 @@
+use std::fmt::Debug;
+
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    broadcast::BroadcastGroup,
+    endpoint::Endpoint,
+    error::IpcErrorKind,
+    message::{IncomingMessage, OutgoingMessage},
+};
+
+/// The platform's answer to "which endpoints are currently members of this [`BroadcastGroup`]?",
+/// returned by [`CommunicationBackend::resolve`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[bitwarden_ffi::wasm_record]
+pub enum BroadcastResolution {
+    /// Deliver the message to each of these endpoints. An empty list is a valid answer: the group
+    /// currently has no members, so nothing is sent.
+    Endpoints(Vec<Endpoint>),
+    /// Hand the message to this endpoint, which takes care of delivering it to the group.
+    ///
+    /// Reserved for hop-to-hop delivery. The IPC client does not support it yet and rejects the
+    /// send without delivering anything.
+    Delegate(Endpoint),
+    /// The platform cannot resolve this group. The IPC client rejects the broadcast without
+    /// delivering anything.
+    Unsupported,
+}
+
+/// This trait defines the interface that will be used to send and receive messages over IPC.
+/// It is up to the platform to implement this trait and any necessary thread synchronization and
+/// broadcasting.
+pub trait CommunicationBackend: Send + Sync + 'static {
+    /// Error returned by [`send`](Self::send), classified via [`IpcErrorKind`].
+    type SendError: Debug + Send + Sync + 'static + IpcErrorKind;
+    /// Receiver type returned by [`subscribe`](Self::subscribe).
+    type Receiver: CommunicationBackendReceiver;
+
+    /// Send a message to the destination specified in the message. This function may be called
+    /// from any thread at any time.
+    ///
+    /// Both recoverable and fatal errors may be returned, classified via
+    /// [`IpcErrorKind::kind()`]. A recoverable error (e.g. a transient transport failure) is
+    /// logged and the IPC client keeps running; a fatal error stops the client from processing any
+    /// further messages. Ambiguous cases should be classified as recoverable.
+    ///
+    /// The implementation of this trait needs to guarantee that:
+    ///     - Multiple concurrent receivers and senders can coexist.
+    fn send(
+        &self,
+        message: OutgoingMessage,
+    ) -> impl std::future::Future<Output = Result<(), Self::SendError>> + Send + Sync;
+
+    /// Resolve a [`BroadcastGroup`] into the endpoints that are currently its members. Called by
+    /// [`IpcClient::broadcast`](crate::IpcClient::broadcast), which rejects any resolved endpoint
+    /// that falls outside the group.
+    ///
+    /// The default implementation returns [`BroadcastResolution::Unsupported`], so a backend has
+    /// to opt in to broadcasting explicitly. Backends that track the connected members of a group
+    /// should override this.
+    fn resolve(
+        &self,
+        _group: &BroadcastGroup,
+    ) -> impl std::future::Future<Output = BroadcastResolution> + Send + Sync {
+        async { BroadcastResolution::Unsupported }
+    }
+
+    /// Subscribe to receive messages. This function will return a receiver that can be used to
+    /// receive messages asynchronously.
+    ///
+    /// The implementation of this trait needs to guarantee that:
+    ///     - Multiple concurrent receivers may be created.
+    ///     - All concurrent receivers will receive the same messages.
+    ///      - Multiple concurrent receivers and senders can coexist.
+    fn subscribe(&self) -> impl std::future::Future<Output = Self::Receiver> + Send + Sync;
+}
+
+/// This trait defines the interface for receiving messages from the communication backend.
+///
+/// The implementation of this trait needs to guarantee that:
+///     - The receiver buffers messages from the creation of the receiver until the first call to
+///       receive().
+///     - The receiver buffers messages between calls to receive().
+pub trait CommunicationBackendReceiver: Send + Sync + 'static {
+    /// Error returned by [`receive`](Self::receive), classified via [`IpcErrorKind`].
+    type ReceiveError: Debug + Send + Sync + 'static + IpcErrorKind;
+
+    /// Receive a message. This function will block asynchronously until a message is received.
+    ///
+    /// Both recoverable and fatal errors may be returned, classified via
+    /// [`IpcErrorKind::kind()`]. A recoverable error (e.g. the receiver lagging) is logged and
+    /// the IPC client's processing loop continues; a fatal error (e.g. the channel being closed)
+    /// stops the loop. Ambiguous cases should be classified as recoverable.
+    ///
+    /// Do not call this function from multiple threads at the same time. Use the subscribe function
+    /// to create one receiver per thread.
+    fn receive(
+        &self,
+    ) -> impl std::future::Future<Output = Result<IncomingMessage, Self::ReceiveError>> + Send + Sync;
+}
+
+pub(crate) mod noop {
+    use super::*;
+
+    /// A no-op implementation of the `CommunicationBackend` trait.
+    ///
+    /// Sending discards messages silently and receiving blocks forever (the future never resolves).
+    /// This is useful as a default backend for platforms that do not need IPC communication.
+    pub struct NoopCommunicationBackend;
+
+    /// Receiver for [`NoopCommunicationBackend`] that never yields a message.
+    pub struct NoopCommunicationBackendReceiver;
+
+    impl CommunicationBackend for NoopCommunicationBackend {
+        type SendError = std::convert::Infallible;
+        type Receiver = NoopCommunicationBackendReceiver;
+
+        async fn send(&self, _message: OutgoingMessage) -> Result<(), Self::SendError> {
+            Ok(())
+        }
+
+        async fn subscribe(&self) -> Self::Receiver {
+            NoopCommunicationBackendReceiver
+        }
+    }
+
+    impl CommunicationBackendReceiver for NoopCommunicationBackendReceiver {
+        type ReceiveError = std::convert::Infallible;
+
+        async fn receive(&self) -> Result<IncomingMessage, Self::ReceiveError> {
+            std::future::pending().await
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod test_support {
+    use std::sync::Arc;
+
+    use tokio::sync::{
+        Mutex, RwLock,
+        broadcast::{self, Receiver, Sender},
+    };
+
+    use super::*;
+
+    /// A test implementation of the `CommunicationBackend` trait. Provides methods to inject
+    /// incoming messages and inspect outgoing messages.
+    #[derive(Debug)]
+    pub struct TestCommunicationBackend {
+        outgoing_tx: Sender<OutgoingMessage>,
+        outgoing_rx: Receiver<OutgoingMessage>,
+        outgoing: Arc<RwLock<Vec<OutgoingMessage>>>,
+        incoming_tx: Sender<IncomingMessage>,
+        incoming_rx: Receiver<IncomingMessage>,
+        resolution: Arc<RwLock<Option<BroadcastResolution>>>,
+    }
+
+    impl Clone for TestCommunicationBackend {
+        fn clone(&self) -> Self {
+            TestCommunicationBackend {
+                outgoing_tx: self.outgoing_tx.clone(),
+                outgoing_rx: self.outgoing_rx.resubscribe(),
+                outgoing: self.outgoing.clone(),
+                incoming_tx: self.incoming_tx.clone(),
+                incoming_rx: self.incoming_rx.resubscribe(),
+                resolution: self.resolution.clone(),
+            }
+        }
+    }
+
+    impl Default for TestCommunicationBackend {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    /// Receiver for [`TestCommunicationBackend`].
+    #[derive(Debug)]
+    pub struct TestCommunicationBackendReceiver(RwLock<Receiver<IncomingMessage>>);
+
+    impl TestCommunicationBackend {
+        /// Create a new test communication backend.
+        pub fn new() -> Self {
+            let (outgoing_tx, outgoing_rx) = broadcast::channel(10);
+            let (incoming_tx, incoming_rx) = broadcast::channel(10);
+            TestCommunicationBackend {
+                outgoing_tx,
+                outgoing_rx,
+                outgoing: Arc::new(RwLock::new(Vec::new())),
+                incoming_tx,
+                incoming_rx,
+                resolution: Arc::new(RwLock::new(None)),
+            }
+        }
+
+        /// Make [`resolve`](CommunicationBackend::resolve) return `resolution` for every group.
+        /// Until this is called, every group resolves to [`BroadcastResolution::Unsupported`],
+        /// like the trait's default.
+        pub async fn set_resolution(&self, resolution: BroadcastResolution) {
+            *self.resolution.write().await = Some(resolution);
+        }
+
+        /// Inject a message as if it were received from a remote endpoint.
+        pub fn push_incoming(&self, message: IncomingMessage) {
+            self.incoming_tx
+                .send(message)
+                .expect("Failed to send incoming message");
+        }
+
+        /// Get a copy of all the outgoing messages that have been sent.
+        pub async fn outgoing(&self) -> Vec<OutgoingMessage> {
+            self.outgoing.read().await.clone()
+        }
+
+        /// Drain all outgoing messages, returning them and clearing the internal buffer.
+        pub async fn drain_outgoing(&self) -> Vec<OutgoingMessage> {
+            self.outgoing.write().await.drain(..).collect()
+        }
+    }
+
+    impl CommunicationBackend for TestCommunicationBackend {
+        type SendError = ();
+        type Receiver = TestCommunicationBackendReceiver;
+
+        async fn send(&self, message: OutgoingMessage) -> Result<(), Self::SendError> {
+            self.outgoing.write().await.push(message);
+            Ok(())
+        }
+
+        async fn resolve(&self, _group: &BroadcastGroup) -> BroadcastResolution {
+            self.resolution
+                .read()
+                .await
+                .clone()
+                .unwrap_or(BroadcastResolution::Unsupported)
+        }
+
+        async fn subscribe(&self) -> Self::Receiver {
+            TestCommunicationBackendReceiver(RwLock::new(self.incoming_rx.resubscribe()))
+        }
+    }
+
+    impl CommunicationBackendReceiver for TestCommunicationBackendReceiver {
+        type ReceiveError = ();
+
+        async fn receive(&self) -> Result<IncomingMessage, Self::ReceiveError> {
+            Ok(self
+                .0
+                .write()
+                .await
+                .recv()
+                .await
+                .expect("Failed to receive incoming message"))
+        }
+    }
+
+    #[allow(unused)]
+    #[derive(Clone)]
+    pub struct TestTwoWayCommunicationBackend {
+        outgoing: broadcast::Sender<OutgoingMessage>,
+        receiver: TestTwoWayCommunicationBackendReceiver,
+    }
+
+    #[allow(unused)]
+    #[derive(Clone)]
+    pub struct TestTwoWayCommunicationBackendReceiver {
+        incoming: Arc<Mutex<broadcast::Receiver<OutgoingMessage>>>,
+    }
+
+    impl CommunicationBackendReceiver for TestTwoWayCommunicationBackendReceiver {
+        type ReceiveError = ();
+
+        async fn receive(&self) -> Result<IncomingMessage, Self::ReceiveError> {
+            let mut incoming = self.incoming.lock().await;
+            let message = incoming
+                .recv()
+                .await
+                .expect("Failed to receive incoming message");
+            Ok(IncomingMessage {
+                payload: message.payload,
+                destination: message.destination,
+                source: crate::endpoint::Source::DesktopMain,
+                topic: message.topic,
+            })
+        }
+    }
+
+    impl TestTwoWayCommunicationBackend {
+        #[allow(unused)]
+        pub fn new() -> (Self, Self) {
+            let (outgoing0, incoming0) = broadcast::channel(128);
+            let (outgoing1, incoming1) = broadcast::channel(128);
+            let one = TestTwoWayCommunicationBackend {
+                outgoing: outgoing0,
+                receiver: TestTwoWayCommunicationBackendReceiver {
+                    incoming: Arc::new(Mutex::new(incoming1)),
+                },
+            };
+            let two = TestTwoWayCommunicationBackend {
+                outgoing: outgoing1,
+                receiver: TestTwoWayCommunicationBackendReceiver {
+                    incoming: Arc::new(Mutex::new(incoming0)),
+                },
+            };
+            (one, two)
+        }
+    }
+
+    impl CommunicationBackend for TestTwoWayCommunicationBackend {
+        type SendError = ();
+        type Receiver = TestTwoWayCommunicationBackendReceiver;
+
+        async fn send(&self, message: OutgoingMessage) -> Result<(), Self::SendError> {
+            self.outgoing
+                .send(message)
+                .expect("Failed to send outgoing message");
+            Ok(())
+        }
+
+        async fn subscribe(&self) -> Self::Receiver {
+            TestTwoWayCommunicationBackendReceiver {
+                incoming: Arc::new(Mutex::new(
+                    self.receiver.incoming.lock().await.resubscribe(),
+                )),
+            }
+        }
+    }
+}

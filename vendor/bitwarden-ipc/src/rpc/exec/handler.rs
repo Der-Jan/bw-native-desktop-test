@@ -1,0 +1,114 @@
+use std::future::Future;
+
+use erased_serde::Serialize as ErasedSerialize;
+
+use crate::{
+    endpoint::Source,
+    rpc::{error::RpcError, request::RpcRequest, request_message::RpcRequestPayload},
+    serde_utils,
+};
+
+/// Information about an incoming RPC request that is not part of the request itself.
+///
+/// The IPC client fills this in from the message that carried the request. The source is the one
+/// reported by the [`CommunicationBackend`](crate::traits::CommunicationBackend), so how far it can
+/// be trusted for decisions such as checking which endpoint sent the request depends on that
+/// backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RpcRequestInfo {
+    /// The endpoint that sent the request, including per-variant metadata such as the origin of
+    /// a web page.
+    pub source: Source,
+}
+
+/// Trait defining a handler for RPC requests.
+/// These can registered with the IPC client and will be used to handle incoming RPC requests.
+pub trait RpcHandler {
+    /// The request type that this handler can process.
+    type Request: RpcRequest;
+
+    /// Handle the request. Any errors that occur should be defined as part of the `RpcRequest`
+    /// type. `info` describes where the request came from, see [`RpcRequestInfo`].
+    fn handle(
+        &self,
+        request: Self::Request,
+        info: RpcRequestInfo,
+    ) -> impl Future<Output = <Self::Request as RpcRequest>::Response> + Send;
+}
+
+pub(crate) trait RpcHandlerExt {
+    type Request: RpcRequest;
+
+    fn serialize_request(&self, request: Self::Request) -> Result<Vec<u8>, RpcError>;
+
+    fn deserialize_request(&self, request: Vec<u8>) -> Result<Self::Request, RpcError>;
+
+    fn serialize_response(
+        &self,
+        request: <Self::Request as RpcRequest>::Response,
+    ) -> Result<Vec<u8>, RpcError>;
+
+    fn deserialize_response(
+        &self,
+        request: Vec<u8>,
+    ) -> Result<<Self::Request as RpcRequest>::Response, RpcError>;
+}
+
+impl<T: RpcHandler> RpcHandlerExt for T
+where
+    T: RpcHandler,
+{
+    type Request = T::Request;
+
+    fn serialize_request(&self, request: Self::Request) -> Result<Vec<u8>, RpcError> {
+        serde_utils::to_vec(&request).map_err(|e| RpcError::RequestSerialization(e.to_string()))
+    }
+
+    fn deserialize_request(&self, request: Vec<u8>) -> Result<Self::Request, RpcError> {
+        serde_utils::from_slice(&request)
+            .map_err(|e| RpcError::RequestDeserialization(e.to_string()))
+    }
+
+    fn serialize_response(
+        &self,
+        request: <Self::Request as RpcRequest>::Response,
+    ) -> Result<Vec<u8>, RpcError> {
+        serde_utils::to_vec(&request).map_err(|e| RpcError::ResponseSerialization(e.to_string()))
+    }
+
+    fn deserialize_response(
+        &self,
+        request: Vec<u8>,
+    ) -> Result<<Self::Request as RpcRequest>::Response, RpcError> {
+        serde_utils::from_slice(&request)
+            .map_err(|e| RpcError::ResponseDeserialization(e.to_string()))
+    }
+}
+
+#[doc(hidden)]
+#[async_trait::async_trait]
+pub trait ErasedRpcHandler: Send + Sync {
+    async fn handle(
+        &self,
+        serialized_request: &RpcRequestPayload,
+        info: RpcRequestInfo,
+    ) -> Result<Box<dyn ErasedSerialize>, RpcError>;
+}
+
+#[async_trait::async_trait]
+impl<H> ErasedRpcHandler for H
+where
+    H: RpcHandler + Send + Sync,
+{
+    async fn handle(
+        &self,
+        serialized_request: &RpcRequestPayload,
+        info: RpcRequestInfo,
+    ) -> Result<Box<dyn ErasedSerialize>, RpcError> {
+        let request: H::Request = serialized_request.deserialize_full()?.request;
+
+        let response = self.handle(request, info).await;
+
+        Ok(Box::new(response) as Box<dyn ErasedSerialize>)
+    }
+}

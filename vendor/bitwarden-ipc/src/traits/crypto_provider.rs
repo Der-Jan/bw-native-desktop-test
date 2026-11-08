@@ -1,0 +1,99 @@
+use std::fmt::Debug;
+
+#[cfg(any(test, feature = "test-support"))]
+use super::CommunicationBackendReceiver;
+use super::{CommunicationBackend, SessionRepository};
+use crate::{
+    error::IpcErrorKind,
+    message::{IncomingMessage, OutgoingMessage},
+};
+
+pub trait CryptoProvider<Com, Ses>: Send + Sync + 'static
+where
+    Com: CommunicationBackend,
+    Ses: SessionRepository<Self::Session>,
+{
+    type Session: Send + Sync + 'static;
+    type SendError: Debug + Send + Sync + 'static + IpcErrorKind;
+    type ReceiveError: Debug + Send + Sync + 'static + IpcErrorKind;
+
+    /// Largest payload [`send`](Self::send) accepts in a single message. The IPC client fragments
+    /// larger payloads into messages of at most this size.
+    fn max_payload_len(&self) -> usize;
+
+    /// Send a message.
+    ///
+    /// Calling this function may result in multiple messages being sent, depending on the
+    /// implementation of the trait. For example, if the destination does not have a
+    /// session, the function may first send a message to establish a session and then send the
+    /// original message. The implementation of this function should handle this logic.
+    ///
+    /// Both recoverable and fatal errors may be returned, classified via
+    /// [`IpcErrorKind::kind()`]. A recoverable error (e.g. a handshake timeout or a transient
+    /// transport failure) is logged and the IPC client keeps running; a fatal error (e.g. the
+    /// session storage being inaccessible) stops the client from processing any further messages.
+    /// Ambiguous cases should be classified as recoverable.
+    fn send(
+        &self,
+        communication: &Com,
+        sessions: &Ses,
+        message: OutgoingMessage,
+    ) -> impl std::future::Future<Output = Result<(), Self::SendError>> + Send + Sync;
+
+    /// Receive a message.
+    ///
+    /// Calling this function may also result in messages being sent, depending on the trait
+    /// implementation. For example, if an encrypted message is received from a destination that
+    /// does not have a session. The function may then try to establish a session and then
+    /// re-request the original message. The implementation of this function should handle this
+    /// logic.
+    ///
+    /// Both recoverable and fatal errors may be returned, classified via
+    /// [`IpcErrorKind::kind()`]. A recoverable error (e.g. a malformed frame from one peer or a
+    /// transient transport failure) is logged and the IPC client's processing loop continues; a
+    /// fatal error (e.g. the session storage being inaccessible) stops the loop. Ambiguous cases
+    /// should be classified as recoverable.
+    fn receive(
+        &self,
+        receiver: &Com::Receiver,
+        communication: &Com,
+        sessions: &Ses,
+    ) -> impl std::future::Future<Output = Result<IncomingMessage, Self::ReceiveError>> + Send + Sync;
+}
+
+/// A no-op crypto provider that performs no encryption and simply passes messages through as-is.
+#[cfg(any(test, feature = "test-support"))]
+pub struct NoEncryptionCryptoProvider;
+
+#[cfg(any(test, feature = "test-support"))]
+impl<Com, Ses> CryptoProvider<Com, Ses> for NoEncryptionCryptoProvider
+where
+    Com: CommunicationBackend,
+    Ses: SessionRepository<()>,
+{
+    type Session = ();
+    type SendError = Com::SendError;
+    type ReceiveError = <Com::Receiver as CommunicationBackendReceiver>::ReceiveError;
+
+    fn max_payload_len(&self) -> usize {
+        usize::MAX
+    }
+
+    async fn send(
+        &self,
+        communication: &Com,
+        _sessions: &Ses,
+        message: OutgoingMessage,
+    ) -> Result<(), Self::SendError> {
+        communication.send(message).await
+    }
+
+    async fn receive(
+        &self,
+        receiver: &Com::Receiver,
+        _communication: &Com,
+        _sessions: &Ses,
+    ) -> Result<IncomingMessage, Self::ReceiveError> {
+        receiver.receive().await
+    }
+}

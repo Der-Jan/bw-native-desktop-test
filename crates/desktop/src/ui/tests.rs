@@ -223,3 +223,33 @@ async fn clicking_the_item_name_selects_it_and_opens_details() {
     );
     assert!(app.core.detail_open);
 }
+
+#[tokio::test]
+async fn unlock_cleanup_preserves_typography_and_system_light_palette() {
+    use crate::services::desktop_appearance::{Appearance, Palette};
+    let (ctx, mut app) = setup();
+    let palette = Palette::fallback(false, [61, 174, 233]);
+    app.core.appearance = Appearance {
+        accent: palette.selection,
+        system_dark: Some(false),
+        palette: Some(palette),
+    };
+    ctx.style_mut_of(egui::Theme::Light, |s| {
+        s.text_styles
+            .insert(egui::TextStyle::Body, egui::FontId::proportional(13.));
+    });
+    frame(&ctx, &mut app, vec![]);
+    app.password = Zeroizing::new("synthetic secret".into());
+    app.core.lock_all();
+    frame(&ctx, &mut app, vec![]);
+    assert!(app.password.is_empty());
+    assert_eq!(ctx.theme(), egui::Theme::Light);
+    assert_eq!(
+        ctx.global_style().text_styles[&egui::TextStyle::Body].size,
+        13.
+    );
+    assert_eq!(
+        ctx.global_style().visuals.panel_fill,
+        egui::Color32::from_rgb(239, 240, 241)
+    );
+}

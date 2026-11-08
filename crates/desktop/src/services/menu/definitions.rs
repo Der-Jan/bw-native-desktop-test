@@ -64,7 +64,7 @@ pub fn menu_tree() -> MenuTree {
             sep(),
             item(fl!("menu-file-settings"))
                 .key(cmd(','))
-                .when(Unlocked)
+                .when(Always)
                 .action(Settings),
             item(fl!("menu-file-lock-vault"))
                 .when(HasLockable)

@@ -73,6 +73,7 @@ bitwarden-state = { workspace = true }
 bitwarden-vault = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false, features = ["tokio", "blocking-api"] }
 ksni = { version = "=0.3.7", default-features = false, features = ["tokio", "blocking"] }
 
 [target.'cfg(unix)'.dependencies]

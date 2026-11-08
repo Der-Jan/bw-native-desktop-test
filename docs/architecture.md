@@ -40,10 +40,13 @@ only from that focus target. Text fields retain their own keyboard behavior.
 Escape cancels a modal first or closes details while preserving the list cursor.
 There are no application fade or shadow animations.
 
-Desktop accent updates reach Core through an asynchronous appearance stream.
-Linux uses portal change notifications and a KDE selection-color fallback. The
-frontend applies the accent to both themes and new native surfaces, with readable
-selection text and focus/link contrast. SVG branding retains its original colors.
+Desktop appearance updates reach Core through an asynchronous stream. Linux
+reads effective KDE window, view, button, text and interaction color roles through
+the host portal, with a local color-scheme fallback. This also works with a
+separate application profile/XDG_CONFIG_HOME. In System mode the actual KDE
+palette determines light/dark mode; explicit Light/Dark overrides remain available.
+Widget cleanup retains appearance/font options while discarding input, undo and
+layout state. SVG branding retains its original colors.
 
 ## Security boundaries
 

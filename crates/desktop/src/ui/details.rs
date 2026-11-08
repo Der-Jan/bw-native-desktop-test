@@ -119,10 +119,13 @@ const SECTIONS: &[SectionSchema] = &[
 impl Application {
     pub(super) fn details_panel(&mut self, ui: &mut egui::Ui) {
         egui::Panel::right("item-details")
+            .frame(egui::Frame::side_top_panel(ui.style()).fill(ui.visuals().extreme_bg_color))
             .default_size(390.)
             .min_size(280.)
             .resizable(true)
             .show(ui, |ui| {
+                ui.style_mut().visuals.override_text_color =
+                    Some(super::accent::view_text(ui.ctx(), self.core.appearance));
                 ui.horizontal(|ui| {
                     ui.heading(if self.core.editor.is_some() {
                         "Edit item"

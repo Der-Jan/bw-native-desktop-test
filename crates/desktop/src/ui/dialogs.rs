@@ -212,15 +212,18 @@ impl Application {
                             ui.weak("Screen capture exclusion is unavailable on Linux.");
                         }
 
+                        ui.label(crate::fl!("settings-appearance-theme-heading"));
                         egui::ComboBox::from_id_salt("theme")
-                            .selected_text(format!("{:?}", self.core.settings.theme))
+                            .selected_text(super::labels::text(
+                                &self.core.settings.theme.to_string(),
+                            ))
                             .show_ui(ui, |ui| {
                                 for theme in crate::theme::ThemePreference::ALL {
                                     changed |= ui
                                         .selectable_value(
                                             &mut self.core.settings.theme,
                                             theme,
-                                            format!("{theme:?}"),
+                                            super::labels::text(&theme.to_string()),
                                         )
                                         .changed();
                                 }

@@ -15,6 +15,8 @@ impl Application {
                 ssh_id,
                 egui::ViewportBuilder::default()
                     .with_title("Allow SSH authentication")
+                    .with_app_id(crate::assets::DESKTOP_APP_ID)
+                    .with_icon(crate::assets::window_icon().unwrap_or_default())
                     .with_inner_size([500., 350.])
                     .with_resizable(false)
                     .with_always_on_top()
@@ -48,6 +50,8 @@ impl Application {
                 egui::ViewportId::from_hash_of("magnify"),
                 egui::ViewportBuilder::default()
                     .with_title("Bitwarden quick search")
+                    .with_app_id(crate::assets::DESKTOP_APP_ID)
+                    .with_icon(crate::assets::window_icon().unwrap_or_default())
                     .with_inner_size([600., 420.])
                     .with_always_on_top(),
                 |ui, _| {

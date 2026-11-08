@@ -127,7 +127,11 @@ pub fn install(ctx: &egui::Context) -> Result<String, String> {
             style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
         });
     }
-    super::accent::apply(ctx, crate::services::desktop_appearance::FALLBACK_ACCENT);
+    super::accent::apply(
+        ctx,
+        crate::services::desktop_appearance::Appearance::default(),
+        crate::theme::ThemePreference::System,
+    );
     Ok(description.clone())
 }
 

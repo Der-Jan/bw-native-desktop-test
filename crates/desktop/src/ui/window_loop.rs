@@ -78,7 +78,7 @@ pub fn run() -> eframe::Result {
         };
         let mut viewport = egui::ViewportBuilder::default()
             .with_title(title)
-            .with_app_id("com.bitwarden.desktop.next")
+            .with_app_id(crate::assets::DESKTOP_APP_ID)
             .with_inner_size(size)
             .with_icon(crate::assets::window_icon().unwrap_or_default());
         if surface == Surface::Main {

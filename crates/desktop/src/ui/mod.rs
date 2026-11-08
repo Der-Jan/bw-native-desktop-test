@@ -144,7 +144,11 @@ impl Application {
             self.prompt_seen = None;
             self.list_offset = 0.;
             self.restore_offset = None;
-            ctx.memory_mut(|m| *m = egui::Memory::default());
+            ctx.memory_mut(|m| {
+                let options = m.options.clone();
+                *m = egui::Memory::default();
+                m.options = options;
+            });
             // Layout caches can contain plaintext glyph strings from the previous session.
             ctx.set_font_providers(vec![]);
         }
@@ -241,7 +245,8 @@ impl Application {
         let ctx = ui.ctx().clone();
         self.core.poll();
         self.cleanup(&ctx);
-        accent::apply(&ctx, self.core.accent);
+        accent::apply(&ctx, self.core.appearance, self.core.settings.theme);
+        ui.set_style(ctx.global_style());
         if let Some(action) = self.core.window_action.take() {
             self.action(&ctx, action);
         }
@@ -268,11 +273,6 @@ impl Application {
             self.close();
         }
         ctx.set_zoom_factor(self.core.settings.zoom_factor.scale());
-        ctx.set_theme(match self.core.settings.theme {
-            crate::theme::ThemePreference::System => egui::ThemePreference::System,
-            crate::theme::ThemePreference::Light => egui::ThemePreference::Light,
-            crate::theme::ThemePreference::Dark => egui::ThemePreference::Dark,
-        });
         if !self.any_modal() {
             let action = ctx.input(|i| {
                 i.events.iter().find_map(|event| {
@@ -303,10 +303,16 @@ impl Application {
             if self.core.detail_open {
                 self.details_panel(ui);
             }
-            egui::CentralPanel::default().show(ui, |ui| match self.core.screen {
-                Screen::Send => self.sends(ui),
-                _ => self.vault(ui),
-            });
+            egui::CentralPanel::default()
+                .frame(egui::Frame::central_panel(ui.style()).fill(ui.visuals().extreme_bg_color))
+                .show(ui, |ui| {
+                    ui.style_mut().visuals.override_text_color =
+                        Some(accent::view_text(ui.ctx(), self.core.appearance));
+                    match self.core.screen {
+                        Screen::Send => self.sends(ui),
+                        _ => self.vault(ui),
+                    }
+                });
         } else {
             egui::CentralPanel::default().show(ui, |ui| self.login(ui));
         }
@@ -318,7 +324,7 @@ impl Application {
                 .show(&ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         if error {
-                            ui.colored_label(egui::Color32::from_rgb(200, 65, 65), text);
+                            ui.colored_label(ui.visuals().error_fg_color, text);
                         } else {
                             ui.label(text);
                         }

@@ -49,7 +49,13 @@ routine technical choices. No questions blocked implementation.
   Escape closes details while preserving selection. No double-click/Enter gate.
   List labels do not intercept row clicks; a rendered-label pointer test covers
   clicking the item name itself, alongside the existing keyboard tests.
-- Selection, focus, links and button interaction states follow the desktop
+- System mode follows the complete KDE window/view/button/text palette and
+  its light/dark mode, in addition to selection, focus and link colors.
+  Explicit Light and Dark modes remain available in Settings, including while
+  locked or before login. KDE role colors take precedence over a conflicting
+  generic GTK/native color-scheme hint. Appearance options and typography survive
+  secret-widget cleanup on lock/unlock; secret inputs and undo state still clear.
+  Selection, focus, links and button interaction states follow the desktop
   accent. On Linux, the appearance portal supplies startup values and live change
   notifications; KDE's selection color is the fallback when no portal accent is
   available. Config/portal access runs off the UI thread. The Bitwarden wordmark
@@ -108,3 +114,19 @@ the same two environment-dependent tests remain ignored. Release build,
 formatting and clippy succeed with the retained helper warnings. A native
 synthetic-vault run confirms KDE-colored selections, readable selected labels,
 working item-name clicks and the unchanged SVG wordmark.
+
+## Full system palette and desktop icon follow-up
+
+The full KDE palette (window, view, button and text roles) now comes from the
+host settings portal, even when the preview uses isolated XDG profile paths.
+System mode follows KDE's light/dark palette; explicit Light and Dark remain
+available in Settings before and after unlock. Secret-widget cleanup retains
+only appearance/font options while resetting widget memory. The workspace suite
+passes 161 desktop tests and one fixture-generator test, with the same two
+environment-dependent tests ignored. Synthetic native screenshots verify the
+window/view colors before and after unlock in System, Light and Dark modes.
+
+Window app IDs now match the packager's desktop entry basename. The local-build
+desktop registration helper supplies the existing blue Bitwarden shield; the
+yellow/white W was KDE's Wayland fallback for an unresolved desktop entry.
+Auxiliary windows share the app ID and cached shield image.

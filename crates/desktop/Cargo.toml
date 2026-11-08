@@ -76,6 +76,9 @@ bitwarden-vault = { workspace = true }
 zbus = { version = "5", default-features = false, features = ["tokio", "blocking-api"] }
 ksni = { version = "=0.3.7", default-features = false, features = ["tokio", "blocking"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+winit = { version = "=0.30.13", default-features = false, features = ["wayland", "x11"] }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

@@ -8,8 +8,9 @@ Backend tests cover mTLS login/sync against disposable TLS servers, invalid and
 expired certificates, origin permissions, encrypted SQLite snapshot commit and
 restart, revocation/leases, durable logout, staged exports, one-shot protected
 operations, clipboard ownership/TTL, timeout calculations, SSH signing/session
-binding, socket permissions and tray protocol behavior. Two OS-dependent tests
-are ignored by default (a real OpenSSH server and a desktop StatusNotifier host).
+binding, socket permissions and tray protocol behavior. Three OS-dependent tests
+are ignored by default (a real OpenSSH server, a desktop StatusNotifier host and
+a native Wayland/OpenGL settings-size test).
 
 `core/tests.rs` covers presentation/session revocation, late workers, plaintext
 cleanup, protected prompt persistence/cancellation/retry and all eight SDK draft
@@ -42,7 +43,14 @@ authorization, organization-key reload, read-sync pause and per-item discard.
 Request counts assert that saves and discards never contact the server.
 
 The 2026-11-08 follow-up passes 165 desktop tests and one fixture test (two
-existing OS tests ignored). Native synthetic-profile checks cover settings
+existing OS tests ignored at that checkpoint). Native synthetic-profile checks cover settings
 without a scrollbar at 1080px monitor height and with a scrollbar at 700px,
 independent tool windows, and editing a real-account cache followed by process
 restart with the modified name/username still present.
+
+The settings-size regression additionally runs on the real Wayland compositor:
+`cargo test --workspace native_wayland_settings_fit_the_available_screen -- --ignored --nocapture`.
+It uses only a synthetic in-memory account and closes its native windows after
+two seconds. Before the fix the native window stayed at 760px for 869px of
+content; after the fix it reaches 893px on the same desktop. This catches the
+Wayland behavior that the earlier X11/Xvfb checks did not reproduce.

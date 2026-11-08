@@ -20,7 +20,10 @@ impl Application {
     }
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
         if !self.core.settings_open {
-            ctx.data_mut(|data| data.remove::<f32>(Id::unique("settings-content-height")));
+            ctx.data_mut(|data| {
+                data.remove::<f32>(Id::unique("settings-content-height"));
+                data.remove::<(f32, Option<egui::Vec2>, u8)>(Id::unique("settings-resize-state"));
+            });
         }
         self.profile_dialog(ctx);
         if self.core.settings_open {
@@ -160,8 +163,23 @@ impl Application {
     }
     fn settings(&mut self, ctx: &egui::Context) {
         let mut changed = false;
-        let open =
-            self.native_tool_window(ctx, "settings", "Settings", [640., 760.], |this, ui| {
+        let monitor = ctx
+            .input_for(
+                egui::ViewportId::from_hash_of(("tool-window", "settings")),
+                |i| i.viewport().monitor_size,
+            )
+            .or_else(|| ctx.input_for(egui::ViewportId::ROOT, |i| i.viewport().monitor_size));
+        let previous_height =
+            ctx.data(|data| data.get_temp::<f32>(Id::unique("settings-content-height")));
+        let initial_height = previous_height
+            .map(|height| settings_height(height, monitor))
+            .unwrap_or(760.);
+        let open = self.native_tool_window(
+            ctx,
+            "settings",
+            "Settings",
+            [640., initial_height],
+            |this, ui| {
                 let app = this;
                 let scroll = egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -375,25 +393,37 @@ impl Application {
                     });
                 let height = scroll.content_size.y;
                 let height_id = Id::unique("settings-content-height");
-                let previous = ui.ctx().data(|data| data.get_temp::<f32>(height_id));
-                if previous.is_none_or(|value| (value - height).abs() > 1.) {
-                    let limit = ui
-                        .input(|i| {
-                            i.viewport()
-                                .monitor_size
-                                .map(|size| (size.y - 96.).max(350.))
-                        })
-                        .unwrap_or(1000.);
-                    let width = ui.max_rect().width() + 16.;
+                let resize_id = Id::unique("settings-resize-state");
+                // Wayland can supply monitor/configure information after the
+                // first pass. Also keep the builder's size consistent with the
+                // requested size instead of resetting it to the initial 760px.
+                let monitor = ui.input(|i| i.viewport().monitor_size).or(monitor);
+                let target = settings_height(height, monitor);
+                let actual = ui.ctx().viewport_rect().size();
+                let previous = ui
+                    .ctx()
+                    .data(|data| data.get_temp::<(f32, Option<egui::Vec2>, u8)>(resize_id));
+                let mut attempts = previous
+                    .filter(|(h, m, _)| (height - *h).abs() <= 1. && *m == monitor)
+                    .map_or(0, |(_, _, attempts)| attempts);
+                if actual.y + 1. < target && attempts < 3 {
                     ui.ctx()
                         .send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
-                            width,
-                            (height + 24.).clamp(350., limit),
+                            actual.x, target,
                         )));
                     ui.ctx()
-                        .data_mut(|data| data.insert_temp(height_id, height));
+                        .request_repaint_after(std::time::Duration::from_millis(32));
+                    ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                    attempts += 1;
+                } else if actual.y + 1. >= target {
+                    attempts = 0;
                 }
-            });
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(height_id, height);
+                    data.insert_temp(resize_id, (height, monitor, attempts));
+                });
+            },
+        );
         self.core.settings_open = open && !self.profile_open;
         if changed {
             self.core.save_settings();
@@ -665,4 +695,10 @@ fn duration(ui: &mut egui::Ui, label: &str, value: &mut DurationSecs, presets: &
                 }
             });
     });
+}
+
+/// Leave room for desktop panels and native window decorations.
+fn settings_height(content_height: f32, monitor: Option<egui::Vec2>) -> f32 {
+    let limit = monitor.map_or(content_height + 24., |size| (size.y - 96.).max(350.));
+    (content_height + 24.).clamp(350., limit.max(350.))
 }

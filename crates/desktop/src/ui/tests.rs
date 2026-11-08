@@ -253,3 +253,91 @@ async fn unlock_cleanup_preserves_typography_and_system_light_palette() {
         egui::Color32::from_rgb(239, 240, 241)
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Requires a live Wayland compositor and OpenGL"]
+fn native_wayland_settings_fit_the_available_screen() {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    use winit::platform::wayland::EventLoopBuilderExtWayland;
+    assert!(std::env::var_os("WAYLAND_DISPLAY").is_some());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let _entered = runtime.enter();
+    let result = Arc::new(Mutex::new(None));
+    type Measurements = (f32, f32, Option<egui::Vec2>);
+    struct Probe {
+        app: Application,
+        started: Instant,
+        result: Arc<Mutex<Option<Measurements>>>,
+        finished: bool,
+    }
+    impl eframe::App for Probe {
+        fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
+            let ctx = ui.ctx().clone();
+            if self.finished {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            }
+            self.app.show(ui);
+            ctx.request_repaint_after(Duration::from_millis(30));
+            if self.started.elapsed() > Duration::from_secs(2) {
+                let id = egui::ViewportId::from_hash_of(("tool-window", "settings"));
+                let (height, monitor) = ctx.input_for(id, |i| {
+                    (i.viewport_rect().height(), i.viewport().monitor_size)
+                });
+                let content = ctx
+                    .data(|d| d.get_temp::<f32>(Id::unique("settings-content-height")))
+                    .unwrap_or(0.);
+                *self.result.lock().unwrap() = Some((height, content, monitor));
+                self.finished = true;
+                ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+    let options = eframe::NativeOptions {
+        renderer: eframe::Renderer::Glow,
+        viewport: egui::ViewportBuilder::default()
+            .with_title("Synthetic Wayland settings size test")
+            .with_inner_size([1000., 800.]),
+        event_loop_builder: Some(Box::new(|builder| {
+            builder.with_wayland().with_any_thread(true);
+        })),
+        ..Default::default()
+    };
+    let output = result.clone();
+    eframe::run_native(
+        "bw-settings-size-test",
+        options,
+        Box::new(move |cc| {
+            crate::test_support::init();
+            let uid = UserId::new_v4();
+            let mut app = Application::from_core(
+                Core::test(unlocked_manager(uid)),
+                typography::install(&cc.egui_ctx)?,
+            );
+            egui_extras::install_image_loaders(&cc.egui_ctx);
+            app.core.settings_open = true;
+            Ok(Box::new(Probe {
+                app,
+                started: Instant::now(),
+                result: output,
+                finished: false,
+            }))
+        }),
+    )
+    .unwrap();
+    let (height, content, monitor) = result
+        .lock()
+        .unwrap()
+        .take()
+        .expect("Settings probe completed");
+    eprintln!("Native Wayland settings: actual={height}, content={content}, monitor={monitor:?}");
+    assert!(content > 0.);
+    let limit = monitor.map_or(content + 24., |m| (m.y - 96.).max(350.));
+    assert!(
+        height + 1. >= (content + 16.).min(limit),
+        "Settings are scrollable despite available screen space"
+    );
+}

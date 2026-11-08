@@ -1132,6 +1132,7 @@ dependencies = [
  "url",
  "uuid",
  "windows-sys 0.61.2",
+ "winit",
  "zbus 5.19.0",
  "zeroize",
 ]

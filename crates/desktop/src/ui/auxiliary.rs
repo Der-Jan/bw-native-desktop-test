@@ -10,37 +10,37 @@ impl Application {
             let fresh = self.browser_seen != Some(approval.id);
             self.browser_seen = Some(approval.id);
             self.browser_viewport_open = true;
-            ctx.show_viewport_deferred(
-                id,
-                egui::ViewportBuilder::default()
-                    .with_title("Allow browser unlock")
-                    .with_app_id(crate::assets::DESKTOP_APP_ID)
-                    .with_icon(crate::assets::window_icon().unwrap_or_default())
-                    .with_inner_size([580., 420.])
-                    .with_always_on_top()
-                    .with_active(fresh),
-                move |ui, class| {
-                    let ctx = ui.ctx().clone();
-                    if !approval.current() {
-                        ctx.request_repaint_of(egui::ViewportId::ROOT);
-                        return;
-                    }
-                    let focus_id = Id::unique(("browser-approval-focused", approval.id));
-                    let fresh = !ctx.data(|data| data.get_temp::<bool>(focus_id).unwrap_or(false));
-                    ctx.data_mut(|data| data.insert_temp(focus_id, true));
-                    let mut decision = None;
-                    if class == egui::ViewportClass::EmbeddedWindow {
-                        decision = browser_content(ui, &approval, fresh);
-                    } else {
-                        egui::CentralPanel::default()
-                            .show(ui, |ui| decision = browser_content(ui, &approval, fresh));
-                    }
-                    if let Some(decision) = decision {
-                        approval.respond(decision);
-                        ctx.request_repaint_of(egui::ViewportId::ROOT);
-                    }
-                },
-            );
+            let mut viewport = egui::ViewportBuilder::default()
+                .with_title("Allow browser unlock")
+                .with_app_id(crate::assets::DESKTOP_APP_ID)
+                .with_icon(crate::assets::window_icon().unwrap_or_default())
+                .with_min_inner_size([580., 420.])
+                .with_always_on_top()
+                .with_active(fresh);
+            if fresh {
+                viewport = viewport.with_inner_size([580., 420.]);
+            }
+            ctx.show_viewport_deferred(id, viewport, move |ui, class| {
+                let ctx = ui.ctx().clone();
+                if !approval.current() {
+                    ctx.request_repaint_of(egui::ViewportId::ROOT);
+                    return;
+                }
+                let focus_id = Id::unique(("browser-approval-focused", approval.id));
+                let fresh = !ctx.data(|data| data.get_temp::<bool>(focus_id).unwrap_or(false));
+                ctx.data_mut(|data| data.insert_temp(focus_id, true));
+                let mut decision = None;
+                if class == egui::ViewportClass::EmbeddedWindow {
+                    decision = browser_content(ui, &approval, fresh);
+                } else {
+                    egui::CentralPanel::default()
+                        .show(ui, |ui| decision = browser_content(ui, &approval, fresh));
+                }
+                if let Some(decision) = decision {
+                    approval.respond(decision);
+                    ctx.request_repaint_of(egui::ViewportId::ROOT);
+                }
+            });
         } else if self.browser_viewport_open {
             ctx.send_viewport_cmd_to(
                 egui::ViewportId::from_hash_of("browser-approval"),
@@ -293,6 +293,32 @@ fn ssh_content(ui: &mut egui::Ui, approval: &Approval, fresh: bool) -> Option<De
     decision
 }
 
+fn browser_shield(ui: &mut egui::Ui) {
+    let id = Id::unique("browser-approval-shield");
+    let mut texture = ui
+        .ctx()
+        .data(|data| data.get_temp::<egui::TextureHandle>(id));
+    if texture.is_none()
+        && let Some(icon) = crate::assets::window_icon()
+    {
+        let image = egui::ColorImage::from_rgba_unmultiplied(
+            [icon.width as usize, icon.height as usize],
+            &icon.rgba,
+        );
+        let handle = ui.ctx().load_texture(
+            "browser-approval-shield",
+            image,
+            egui::TextureOptions::LINEAR,
+        );
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(id, handle.clone()));
+        texture = Some(handle);
+    }
+    if let Some(texture) = texture {
+        ui.image((texture.id(), egui::vec2(40., 40.)));
+    }
+}
+
 fn browser_content(
     ui: &mut egui::Ui,
     approval: &services::browser_integration::Approval,
@@ -307,35 +333,70 @@ fn browser_content(
                 egui::UserAttentionType::Critical,
             ));
     }
-    egui::ScrollArea::vertical().max_height(290.).show(ui, |ui| {
-        ui.heading("Allow browser to unlock this vault?");
-        ui.strong(&approval.browser);
-        ui.label(&approval.email);
-        ui.label(&approval.server);
-        ui.separator();
-        ui.label("The Bitwarden extension receives this account’s vault key and can decrypt its own vault cache. Your master password is not sent.");
-        ui.label("Check that the browser is signed into this account on the same server.");
-        ui.weak("Approval uses the already unlocked desktop vault; no biometric verification is performed.");
-        ui.collapsing("Extension identity", |ui| { ui.monospace(&approval.extension); });
-    });
     let mut decision = None;
-    ui.horizontal(|ui| {
-        let allow = ui.button("Allow once");
-        if fresh {
-            allow.request_focus();
+    egui::Frame::new().inner_margin(20.).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 12.;
+        ui.horizontal(|ui| {
+            browser_shield(ui);
+            ui.add_space(8.);
+            ui.vertical(|ui| {
+                ui.heading(format!("Connect {}", approval.browser));
+                ui.weak("Bitwarden browser extension");
+            });
+        });
+        egui::Frame::new().fill(ui.visuals().faint_bg_color).corner_radius(8.).inner_margin(14.).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.strong(&approval.email);
+            ui.add(egui::Label::new(&approval.server).wrap());
+        });
+        ui.label("Allow the extension to unlock this account while your desktop vault is unlocked.");
+        let choice_id = Id::unique(("browser-permission-duration", approval.id));
+        let mut choice = ui.ctx().data(|d| d.get_temp::<Decision>(choice_id)).unwrap_or(Decision::Always);
+        ui.horizontal(|ui| {
+            ui.label("Permission");
+            egui::ComboBox::from_id_salt("browser-permission-duration").width(230.)
+                .selected_text(match choice {
+                    Decision::Always => "Always allow",
+                    Decision::UntilLock => "Until desktop locks",
+                    _ => "Just this once",
+                }).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut choice, Decision::Always, "Always allow");
+                    ui.selectable_value(&mut choice, Decision::UntilLock, "Until desktop locks");
+                    ui.selectable_value(&mut choice, Decision::Once, "Just this once");
+                });
+        });
+        ui.ctx().data_mut(|d| d.insert_temp(choice_id, choice));
+        let details = egui::CollapsingHeader::new("Connection details").id_salt(("browser-details", approval.id)).show(ui, |ui| {
+            ui.label("The extension receives this account’s vault key, never your master password. Check that both apps use this account and server.");
+            ui.weak("Desktop approval only; no biometric verification.");
+            ui.add(egui::Label::new(&approval.extension).wrap());
+        });
+        if details.header_response.clicked() {
+            let id = Id::unique(("browser-details-expanded", approval.id));
+            let expanded = !ui.ctx().data(|data| data.get_temp::<bool>(id).unwrap_or(false));
+            ui.ctx().data_mut(|data| data.insert_temp(id, expanded));
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                ui.ctx().input(|input| input.viewport_rect().width()),
+                if expanded { 560. } else { 420. },
+            )));
         }
-        if allow.clicked()
-            || ((allow.has_focus() || fresh)
-                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter)))
-        {
-            decision = Some(Decision::Once);
-        }
-        if ui.button("Allow until desktop locks").clicked() {
-            decision = Some(Decision::UntilLock);
-        }
-        if ui.button("Deny").clicked() {
-            decision = Some(Decision::Deny);
-        }
+        ui.horizontal(|ui| { ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let text = match choice {
+                Decision::Always => "Always allow",
+                Decision::UntilLock => "Allow until lock",
+                _ => "Allow once",
+            };
+            let allow = ui.add(egui::Button::new(egui::RichText::new(text).color(ui.visuals().selection.stroke.color))
+                .fill(ui.visuals().selection.bg_fill).min_size(egui::vec2(150., 36.)));
+            if fresh { allow.request_focus(); }
+            if allow.clicked() || ((allow.has_focus() || fresh) && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter))) {
+                decision = Some(choice);
+            }
+            if ui.add(egui::Button::new("Deny").min_size(egui::vec2(80., 36.))).clicked() {
+                decision = Some(Decision::Deny);
+            }
+        }); });
+        ui.weak("You can remove saved approvals in Settings.");
     });
     if ui.input(|i| i.viewport().close_requested())
         || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape))
@@ -405,5 +466,62 @@ mod tests {
             assert_eq!(run(Some(Key::Escape), false), Some(Decision::Deny));
             approval.respond(Decision::Deny);
         }
+    }
+    #[test]
+    fn browser_pairing_defaults_to_always_with_enter_and_escape() {
+        use crate::services::browser_integration::{self, Decision as BrowserDecision};
+        let (_runtime, _manager, approval, _response) = browser_integration::test_ui_approval();
+        let ctx = egui::Context::default();
+        let mut fonts = egui::FontDefinitions::empty();
+        fonts.font_data.insert(
+            "test".into(),
+            egui::FontData::from_static(crate::assets::FONT_MEDIUM).into(),
+        );
+        fonts
+            .families
+            .insert(egui::FontFamily::Proportional, vec!["test".into()]);
+        ctx.set_fonts(fonts);
+        let run = |key: Option<Key>, fresh: bool| {
+            let mut decision = None;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(580., 420.),
+                    )),
+                    events: key
+                        .into_iter()
+                        .map(|key| egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default()
+                        .show(ui, |ui| decision = browser_content(ui, &approval, fresh));
+                },
+            );
+            output.textures_delta.clear();
+            decision
+        };
+        assert!(run(None, true).is_none());
+        assert!(ctx.memory(|m| m.focused()).is_some());
+        assert!(run(Some(Key::Enter), false) == Some(BrowserDecision::Always));
+        for choice in [BrowserDecision::Once, BrowserDecision::UntilLock] {
+            ctx.data_mut(|d| {
+                d.insert_temp(
+                    Id::unique(("browser-permission-duration", approval.id)),
+                    choice,
+                )
+            });
+            run(None, true);
+            assert!(run(Some(Key::Enter), false) == Some(choice));
+        }
+        assert!(run(Some(Key::Escape), false) == Some(BrowserDecision::Deny));
     }
 }

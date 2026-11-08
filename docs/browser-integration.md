@@ -15,8 +15,9 @@ targets in this milestone.
    is inherited from its native messaging protocol: this application asks for
    desktop approval and performs no biometric or Polkit verification.
 4. Lock the extension and request an unlock. The desktop opens a focused native
-   approval window. Enter selects **Allow once**; Escape or closing denies it.
-   **Allow until desktop locks** remembers permission for this connection only.
+   approval window. **Always allow** is selected by default; Enter confirms it.
+   Escape or closing denies the request. The duration selector also offers
+   **Just this once** and **Until desktop locks**.
 
 Desktop unlock does not perform the extension's initial login, synchronize its
 cache or configure its server/mTLS transport. The extension still manages those
@@ -64,11 +65,24 @@ the object and checks its fields before SDK decryption.
 ## Key release and limits
 
 Only the selected account's user key is released, after an explicit current
-approval and backend session checks. The master password and OAuth tokens are
+approval or a saved permanent pairing, plus backend session checks. The master password and OAuth tokens are
 never sent. The request must use the server account UUID, which can differ from
 the local account ID. Lock, logout, account switch, session replacement, disable
-and disconnect revoke the connection and remembered permission. Approval is
+and disconnect revoke the connection and its until-lock permission. Approval is
 bound to a connection, session and UUID and expires after 50 seconds.
+
+**Always allow** saves a pairing bound to the canonical browser executable path,
+exact extension origin, local account ID, server account UUID and desktop server
+URL. It survives reconnect, lock/unlock and application restart; the desktop must
+still be unlocked, and all live session fences remain enforced. It applies to
+that browser's extension across profiles using the same account. The private
+`browser-host/trusted-browsers.json` stores identity digests only, never keys or
+passwords. A failed durable save denies key release. Invalid/oversized storage
+loads without permissions. **Forget saved approvals** in Settings clears all
+saved pairings and disconnects live peers so even until-lock grants stop working.
+A storage failure during revocation is reported and must be resolved to make the
+removal durable across restart.
+
 
 The approval identifies the browser, extension, desktop email and server. The
 biometric RPC identifies an account UUID but does not attest the browser's

@@ -145,7 +145,7 @@ async fn serve(shared: Arc<Shared>, mut stream: tokio::net::UnixStream) -> Resul
     let hello: Hello = serde_json::from_slice(&hello).map_err(|_| "Invalid browser identity")?;
     let valid = hello.origin == wire::FIREFOX_ID
         || wire::extension_origin(std::slice::from_ref(&hello.origin)).is_some();
-    if !valid || ((browser == "Firefox") != (hello.origin == wire::FIREFOX_ID)) {
+    if !valid || ((browser.label == "Firefox") != (hello.origin == wire::FIREFOX_ID)) {
         return Err("Browser extension does not match its browser".into());
     }
     let connection = {
@@ -155,7 +155,8 @@ async fn serve(shared: Arc<Shared>, mut stream: tokio::net::UnixStream) -> Resul
             shared: shared.clone(),
             session,
             epoch: state.epoch,
-            browser,
+            browser: browser.label,
+            browser_executable: browser.executable,
             origin: hello.origin,
             alive: AtomicBool::new(true),
             remembered: AtomicBool::new(false),

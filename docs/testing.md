@@ -64,3 +64,12 @@ denial, until-lock reuse and disconnect on desktop lock. See
 unresolved raw-Xvfb GLX child-window limitation.
 The expanded Settings also passes the native Wayland sizing test: 1170px of
 actual height for 1146px of content on the 1878px logical monitor.
+
+Permanent browser pairing passes 181 desktop tests and one fixture test. Added
+coverage includes restart/reconnect reuse, lock and wrong-account rejection,
+all browser/extension/account/server identity fields, durable revocation,
+storage failure and invalidated approvals. Actual egui frames verify the default
+Always action, alternate durations, Enter focus and Escape denial. A synthetic
+Helium run confirms that Enter pairs once and the next request needs no prompt;
+Light and Dark native views and expanded details were inspected. The expanded
+Settings passes the Wayland sizing test (1206px window, 1182px content).

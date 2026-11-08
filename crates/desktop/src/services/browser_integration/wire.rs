@@ -59,7 +59,12 @@ pub fn extension_origin(args: &[String]) -> Option<String> {
     }
 }
 #[cfg(target_os = "linux")]
-pub fn browser_process(pid: u32) -> Option<String> {
+pub struct BrowserProcess {
+    pub label: String,
+    pub executable: std::path::PathBuf,
+}
+#[cfg(target_os = "linux")]
+pub fn browser_process(pid: u32) -> Option<BrowserProcess> {
     use std::os::unix::fs::MetadataExt;
     let proc = std::path::PathBuf::from(format!("/proc/{pid}"));
     let stat = std::fs::read_to_string(proc.join("stat")).ok()?;
@@ -78,14 +83,18 @@ pub fn browser_process(pid: u32) -> Option<String> {
     if metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
         return None;
     }
-    match exe.file_name()?.to_str()? {
-        "firefox" | "firefox-bin" | "firefox-esr" => Some("Firefox".into()),
-        "chrome" | "chromium" | "chromium-browser" => Some("Chrome / Chromium".into()),
-        "brave" | "brave-browser" => Some("Brave".into()),
-        "vivaldi-bin" => Some("Vivaldi".into()),
-        "msedge" => Some("Microsoft Edge".into()),
-        "helium" => Some("Helium".into()),
-        "opera" => Some("Opera".into()),
-        _ => None,
-    }
+    let label = match exe.file_name()?.to_str()? {
+        "firefox" | "firefox-bin" | "firefox-esr" => "Firefox",
+        "chrome" | "chromium" | "chromium-browser" => "Chrome / Chromium",
+        "brave" | "brave-browser" => "Brave",
+        "vivaldi-bin" => "Vivaldi",
+        "msedge" => "Microsoft Edge",
+        "helium" => "Helium",
+        "opera" => "Opera",
+        _ => return None,
+    };
+    Some(BrowserProcess {
+        label: label.into(),
+        executable: exe,
+    })
 }

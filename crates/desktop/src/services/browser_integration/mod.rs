@@ -1,9 +1,10 @@
 //! Opt-in browser bridge. Native peers are process-checked and each key release
-//! requires a current, account-bound foreground approval. No OS biometrics here.
+//! requires a current, account-bound approval or saved pairing. No OS biometrics here.
 mod legacy;
 mod registration;
 mod sdk_ipc;
 mod server;
+mod trust;
 pub mod wire;
 use crate::services::sdk::BrowserSession;
 pub use registration::{Browser, install as register, restore as restore_registration};
@@ -22,6 +23,7 @@ pub enum Decision {
     Deny,
     Once,
     UntilLock,
+    Always,
 }
 #[derive(Clone)]
 pub enum Event {
@@ -73,6 +75,7 @@ struct Shared {
     changes: watch::Sender<u64>,
     events: broadcast::Sender<Event>,
     prompt: Arc<Semaphore>,
+    trust: Mutex<trust::Store>,
 }
 pub struct BrowserRuntime {
     shared: Arc<Shared>,
@@ -81,6 +84,13 @@ pub struct BrowserRuntime {
 }
 impl BrowserRuntime {
     pub fn new() -> Self {
+        #[cfg(not(test))]
+        let trust_path = Some(crate::paths::data_dir().join("browser-host/trusted-browsers.json"));
+        #[cfg(test)]
+        let trust_path = None;
+        Self::with_trust_path(trust_path)
+    }
+    fn with_trust_path(trust_path: Option<PathBuf>) -> Self {
         let (changes, _) = watch::channel(0);
         let (events, _) = broadcast::channel(16);
         Self {
@@ -94,6 +104,7 @@ impl BrowserRuntime {
                 changes,
                 events,
                 prompt: Arc::new(Semaphore::new(1)),
+                trust: Mutex::new(trust::Store::load(trust_path)),
             }),
             path: socket_path(),
             task: None,
@@ -107,6 +118,27 @@ impl BrowserRuntime {
     }
     pub fn path(&self) -> &std::path::Path {
         &self.path
+    }
+    pub fn permanent_approvals(&self) -> usize {
+        // Never block an egui frame on a worker's durable write.
+        self.shared.trust.try_lock().map_or(0, |store| store.len())
+    }
+    pub fn revoke_permanent(
+        &self,
+    ) -> impl std::future::Future<Output = Result<(), String>> + Send + 'static {
+        let shared = self.shared.clone();
+        async move {
+            tokio::task::spawn_blocking(move || {
+                let mut trust = shared.trust.lock().unwrap();
+                let result = trust.clear();
+                let mut state = shared.state.lock().unwrap();
+                state.epoch += 1;
+                shared.changes.send_replace(state.epoch);
+                result
+            })
+            .await
+            .map_err(|_| "Could not revoke browser approvals")?
+        }
     }
     pub fn configure(&mut self, enabled: bool) {
         let mut state = self.shared.state.lock().unwrap();
@@ -160,6 +192,7 @@ struct Connection {
     session: BrowserSession,
     epoch: u64,
     browser: String,
+    browser_executable: PathBuf,
     origin: String,
     alive: AtomicBool,
     remembered: AtomicBool,
@@ -185,7 +218,9 @@ impl Connection {
         if self.status(Some(id)) != 0 {
             return false;
         }
-        if self.remembered.load(Ordering::SeqCst) {
+        if self.remembered.load(Ordering::SeqCst)
+            || self.shared.trust.lock().unwrap().contains(self)
+        {
             return self.current() && self.session.unlocked();
         }
         let Ok(_slot) = self.shared.prompt.clone().try_acquire_owned() else {
@@ -228,6 +263,22 @@ impl Connection {
         }
         if decision == Decision::UntilLock {
             self.remembered.store(true, Ordering::SeqCst);
+        }
+        if decision == Decision::Always {
+            let connection = self.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                connection.shared.trust.lock().unwrap().approve(&connection)
+            })
+            .await;
+            if !matches!(result, Ok(Ok(()))) {
+                self.shared.state.lock().unwrap().status =
+                    "Could not save permanent browser approval".into();
+                let _ = self.shared.events.send(Event::Changed);
+                return false;
+            }
+        }
+        if !self.current() || !self.session.unlocked() {
+            return false;
         }
         decision != Decision::Deny
     }
@@ -289,6 +340,7 @@ fn test_fixture() -> (
         session,
         epoch,
         browser: "Helium".into(),
+        browser_executable: PathBuf::from("/usr/lib64/helium-browser-bin/helium"),
         origin: format!("chrome-extension://{}", wire::CHROMIUM_IDS[0]),
         alive: AtomicBool::new(true),
         remembered: AtomicBool::new(false),
@@ -297,3 +349,25 @@ fn test_fixture() -> (
 }
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) fn test_ui_approval() -> (
+    BrowserRuntime,
+    crate::services::sdk::ClientManager,
+    Arc<Approval>,
+    oneshot::Receiver<Decision>,
+) {
+    let (runtime, manager, connection) = test_fixture();
+    let (tx, rx) = oneshot::channel();
+    let approval = Arc::new(Approval {
+        id: Uuid::new_v4(),
+        browser: connection.browser.clone(),
+        email: connection.session.email.clone(),
+        server: connection.session.server.clone(),
+        extension: connection.origin.clone(),
+        connection,
+        response: Mutex::new(Some(tx)),
+        deadline: Instant::now() + Duration::from_secs(50),
+    });
+    (runtime, manager, approval, rx)
+}

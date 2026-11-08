@@ -356,7 +356,7 @@ impl Application {
                         ui.separator();
                         ui.heading(super::labels::text("Browser integration"));
                         changed |= ui.checkbox(&mut app.core.settings.browser_integration, "Allow browser unlock from this desktop app").changed();
-                        ui.weak("Requires an unlocked desktop vault and explicit approval. No Polkit or biometric verification.");
+                        ui.weak("An unlocked desktop vault is required. Pair a browser once to allow future unlocks.");
                         ui.label(app.core.browser.status());
                         egui::ComboBox::from_id_salt("browser-registration")
                             .selected_text(app.browser_choice.label()).show_ui(ui, |ui| {
@@ -367,6 +367,8 @@ impl Application {
                         ui.add_enabled_ui(!app.core.browser_registration_busy, |ui| {
                             if ui.add_enabled(app.core.settings.browser_integration, egui::Button::new("Register selected browser")).clicked() { app.core.register_browser(app.browser_choice); }
                             if ui.button("Restore previous browser registration").clicked() { app.core.restore_browser_registration(); }
+                            let count = app.core.browser.permanent_approvals();
+                            if ui.add_enabled(count > 0, egui::Button::new(format!("Forget saved approvals ({count})"))).clicked() { app.core.revoke_browser_approvals(); }
                         });
                         ui.weak("In the official extension, enable ‘Unlock with biometrics’. This build uses desktop approval for key release; OS verification requests are not supported.");
                         ui.separator();

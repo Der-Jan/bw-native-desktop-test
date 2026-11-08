@@ -212,6 +212,21 @@ impl Core {
             },
         );
     }
+    pub fn revoke_browser_approvals(&mut self) {
+        if self.browser_registration_busy {
+            return;
+        }
+        self.browser_registration_busy = true;
+        self.events
+            .spawn(self.browser.revoke_permanent(), |core, result| {
+                core.browser_registration_busy = false;
+                match result {
+                    Ok(()) => core.notify("Saved browser approvals removed", false),
+                    Err(error) => core.notify(error, true),
+                }
+                core.refresh_agent();
+            });
+    }
     pub fn decide_ssh(&mut self, id: uuid::Uuid, decision: Decision) {
         if self.ssh_approval.as_ref().is_some_and(|a| a.id == id)
             && let Some(a) = self.ssh_approval.take()

@@ -24,7 +24,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let socket = PathBuf::from(&args[1]);
     let expected_app = PathBuf::from(&args[3]).canonicalize()?;
     let origin = wire::extension_origin(&args[4..]).ok_or("Unrecognized browser extension")?;
-    wire::browser_process(std::process::id()).ok_or("Unrecognized browser parent")?;
+    let browser = wire::browser_process(std::process::id()).ok_or("Unrecognized browser parent")?;
+    if browser.label.is_empty() || !browser.executable.is_absolute() {
+        return Err("Invalid browser identity".into());
+    }
     let uid = unsafe { libc::geteuid() };
     let parent = std::fs::symlink_metadata(socket.parent().ok_or("Invalid socket")?)?;
     if !parent.is_dir() || parent.uid() != uid || parent.mode() & 0o077 != 0 {

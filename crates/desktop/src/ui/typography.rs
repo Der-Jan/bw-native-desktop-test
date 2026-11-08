@@ -122,13 +122,12 @@ pub fn install(ctx: &egui::Context) -> Result<String, String> {
             } else {
                 egui::Color32::from_rgb(225, 229, 237)
             });
-            style.visuals.selection.bg_fill = egui::Color32::from_rgb(22, 92, 225);
-            style.visuals.selection.stroke = egui::Stroke::new(1., egui::Color32::WHITE);
             style.animation_time = 0.0;
             style.visuals.window_shadow = egui::epaint::Shadow::NONE;
             style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
         });
     }
+    super::accent::apply(ctx, crate::services::desktop_appearance::FALLBACK_ACCENT);
     Ok(description.clone())
 }
 

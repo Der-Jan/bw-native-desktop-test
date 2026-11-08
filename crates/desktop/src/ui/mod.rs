@@ -1,4 +1,5 @@
 //! Native egui frontend. Account authority and asynchronous work live in Core.
+mod accent;
 mod account;
 mod auxiliary;
 mod details;
@@ -240,6 +241,7 @@ impl Application {
         let ctx = ui.ctx().clone();
         self.core.poll();
         self.cleanup(&ctx);
+        accent::apply(&ctx, self.core.accent);
         if let Some(action) = self.core.window_action.take() {
             self.action(&ctx, action);
         }

@@ -175,3 +175,51 @@ async fn tray_surface_close_is_not_cancelled_as_a_user_close() {
     assert!(!app.core.quit_requested);
     output.textures_delta.clear();
 }
+
+#[tokio::test]
+async fn clicking_the_item_name_selects_it_and_opens_details() {
+    let (ctx, mut app) = setup();
+    frame(&ctx, &mut app, vec![]);
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1250., 840.),
+            )),
+            ..Default::default()
+        },
+        |ui| app.show(ui),
+    );
+    let label = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "First" => {
+                Some(text.pos + text.galley.rect.center().to_vec2())
+            }
+            _ => None,
+        })
+        .expect("first list label rendered");
+    output.textures_delta.clear();
+    let first = app.core.current_cache().unwrap().visible[0].id;
+    for pressed in [true, false] {
+        frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(label),
+                egui::Event::PointerButton {
+                    pos: label,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert_eq!(
+        app.core.selected, first,
+        "clicking text must reach the row selection"
+    );
+    assert!(app.core.detail_open);
+}

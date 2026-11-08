@@ -120,6 +120,7 @@ pub struct Core {
     pub manager: ClientManager,
     pub active: Option<UserId>,
     pub settings: Settings,
+    pub accent: services::desktop_appearance::Accent,
     pub screen: Screen,
     pub generation: u64,
     /// UI must discard input/undo/layout state whenever this epoch changes.
@@ -200,6 +201,7 @@ impl Core {
             manager: ClientManager::empty(),
             active: None,
             settings,
+            accent: services::desktop_appearance::FALLBACK_ACCENT,
             screen: Screen::Loading,
             generation: 0,
             clear_epoch: 0,

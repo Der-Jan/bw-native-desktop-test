@@ -288,6 +288,8 @@ impl Application {
         parts.join(" / ")
     }
     pub(super) fn vault(&mut self, ui: &mut egui::Ui) {
+        // Labels must not steal row clicks or offer an unscoped copy path.
+        ui.style_mut().interaction.selectable_labels = false;
         ui.horizontal(|ui| {
             ui.heading(self.filter_title());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -455,7 +457,8 @@ impl Application {
                     .body(|body| {
                         body.rows(36., items.len(), |mut row| {
                             let item = &items[row.index()];
-                            row.set_selected(item.id == selected);
+                            let chosen = item.id == selected;
+                            row.set_selected(chosen);
                             row.col(|ui| {
                                 ui.horizontal(|ui| {
                                     let mark = match kind(&item.r#type) {
@@ -490,7 +493,11 @@ impl Application {
                                         shown = true;
                                     }
                                     if !shown {
-                                        ui.weak(mark);
+                                        if chosen {
+                                            ui.label(mark);
+                                        } else {
+                                            ui.weak(mark);
+                                        }
                                     }
                                     ui.vertical(|ui| {
                                         ui.add(egui::Label::new(&item.name).truncate());
@@ -498,9 +505,11 @@ impl Application {
                                             && let Some(username) = &login.username
                                         {
                                             ui.add(
-                                                egui::Label::new(
-                                                    egui::RichText::new(username).small().weak(),
-                                                )
+                                                egui::Label::new(if chosen {
+                                                    egui::RichText::new(username).small()
+                                                } else {
+                                                    egui::RichText::new(username).small().weak()
+                                                })
                                                 .truncate(),
                                             );
                                         }

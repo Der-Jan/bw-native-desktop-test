@@ -40,6 +40,11 @@ only from that focus target. Text fields retain their own keyboard behavior.
 Escape cancels a modal first or closes details while preserving the list cursor.
 There are no application fade or shadow animations.
 
+Desktop accent updates reach Core through an asynchronous appearance stream.
+Linux uses portal change notifications and a KDE selection-color fallback. The
+frontend applies the accent to both themes and new native surfaces, with readable
+selection text and focus/link contrast. SVG branding retains its original colors.
+
 ## Security boundaries
 
 Lock, logout, account switch and sync authority replacement revoke old results.

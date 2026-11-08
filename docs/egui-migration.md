@@ -43,17 +43,24 @@ No real credentials or certificates are copied into demo/test fixtures.
 Collect product questions here as they arise. Do not interrupt the migration for
 routine technical choices. No questions blocked implementation.
 
-### Collected review questions
+### Accepted review decisions
 
-- Open details on a single selection, as implemented now, or require double-click
-  / Enter? The current implementation preserves selection-driven details on the
-  right and closes them with Escape.
-- Should a later pass make the theme follow the KDE accent palette as well as
-  the desktop font and light/dark preference? The migration uses Bitwarden blue.
-- Previously unsupported features remain explicit: remote writes, Send server
-  publication, import, autostart, PIN and biometric unlock. Prioritize these
-  together after reviewing the migrated UI.
+- Details open on single selection and follow the list's arrow-key cursor.
+  Escape closes details while preserving selection. No double-click/Enter gate.
+  List labels do not intercept row clicks; a rendered-label pointer test covers
+  clicking the item name itself, alongside the existing keyboard tests.
+- Selection, focus, links and button interaction states follow the desktop
+  accent. On Linux, the appearance portal supplies startup values and live change
+  notifications; KDE's selection color is the fallback when no portal accent is
+  available. Config/portal access runs off the UI thread. The Bitwarden wordmark
+  retains its existing blue/white branding. Selection text and focus/link colors
+  adapt for contrast with bright and dark accents.
 
+### Remaining review question
+
+- Prioritization of the already unsupported backend features is still open:
+  remote writes, Send server publication, import, autostart, PIN and biometrics.
+  Approval of the interaction and appearance decisions does not start this work.
 
 ## Validation record (2026-11-08)
 
@@ -89,3 +96,15 @@ The existing `device-id` file is reused for password login. mTLS/credential-stor
 transport preparation runs on blocking workers, so certificate/keyring access
 cannot stall the UI event thread. Certificate settings for an existing account
 edit its bound profile rather than the prelogin default.
+
+
+## Approved review follow-up
+
+The single-selection interaction is retained and now also covered by a rendered
+item-name pointer test (previously the label's text selection intercepted it).
+Desktop accent parsing and selection/focus contrast add four focused tests.
+The workspace suite passes 158 desktop tests and one fixture-generator test;
+the same two environment-dependent tests remain ignored. Release build,
+formatting and clippy succeed with the retained helper warnings. A native
+synthetic-vault run confirms KDE-colored selections, readable selected labels,
+working item-name clicks and the unchanged SVG wordmark.

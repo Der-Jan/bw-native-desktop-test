@@ -8,6 +8,10 @@ use services::{
 };
 impl Core {
     pub(super) fn install_desktop_events(&mut self) {
+        self.listen(
+            services::desktop_appearance::accent_updates(),
+            |core, color| core.accent = color,
+        );
         services::menu::install_event_handler();
         services::tray::install_event_handler();
         services::global_hotkey::install_event_handler();

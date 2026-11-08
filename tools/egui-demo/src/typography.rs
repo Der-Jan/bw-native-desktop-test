@@ -1,0 +1,113 @@
+use eframe::egui::{self, FontData, FontDefinitions, FontFamily, FontId, TextStyle};
+
+pub fn install(ctx: &egui::Context) -> Result<String, String> {
+    let (family, points) = kde_font().unwrap_or_else(|| ("sans-serif".into(), 11.0));
+    let mut db = fontdb::Database::new();
+    db.load_system_fonts();
+    let families = [fontdb::Family::Name(&family), fontdb::Family::SansSerif];
+    let id = db
+        .query(&fontdb::Query {
+            families: &families,
+            ..Default::default()
+        })
+        .or_else(|| db.faces().next().map(|f| f.id))
+        .ok_or("Keine installierte Systemschrift gefunden")?;
+    let data = db
+        .with_face_data(id, |bytes, index| {
+            let mut data = FontData::from_owned(bytes.to_vec());
+            data.index = index;
+            data
+        })
+        .ok_or("Systemschrift konnte nicht gelesen werden")?;
+    let mut fonts = FontDefinitions::empty();
+    fonts.font_data.insert("desktop".into(), data.into());
+    fonts
+        .families
+        .insert(FontFamily::Proportional, vec!["desktop".into()]);
+    fonts
+        .families
+        .insert(FontFamily::Monospace, vec!["desktop".into()]);
+    // Keep desktop text metrics, but let installed symbol fonts supply arrows
+    // and other UI glyphs absent from some Noto Sans builds.
+    if let Some(symbols) = db.query(&fontdb::Query {
+        families: &[
+            fontdb::Family::Name("DejaVu Sans"),
+            fontdb::Family::Name("Noto Sans Symbols"),
+            fontdb::Family::Name("Noto Sans Symbols 2"),
+        ],
+        ..Default::default()
+    }) && symbols != id
+        && let Some(data) = db.with_face_data(symbols, |bytes, index| {
+            let mut data = FontData::from_owned(bytes.to_vec());
+            data.index = index;
+            data
+        })
+    {
+        fonts.font_data.insert("system-symbols".into(), data.into());
+        for family in fonts.families.values_mut() {
+            family.push("system-symbols".into());
+        }
+    }
+    ctx.set_fonts(fonts);
+    // Same compact whole-point hierarchy as the current Iced preview.
+    let body = (points * 0.9).round().max(9.0) * 96.0 / 72.0;
+    ctx.style_mut_of(egui::Theme::Light, |style| {
+        style
+            .text_styles
+            .insert(TextStyle::Body, FontId::proportional(body));
+        style
+            .text_styles
+            .insert(TextStyle::Button, FontId::proportional(body));
+        style
+            .text_styles
+            .insert(TextStyle::Small, FontId::proportional(12.0));
+        style
+            .text_styles
+            .insert(TextStyle::Heading, FontId::proportional(24.0));
+        style
+            .text_styles
+            .insert(TextStyle::Monospace, FontId::monospace(body));
+        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+        style.spacing.button_padding = egui::vec2(10.0, 6.0);
+        style.animation_time = 0.0;
+        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
+    });
+    Ok(format!("{family} · {:.0} pt", body * 72.0 / 96.0))
+}
+
+fn kde_font() -> Option<(String, f32)> {
+    if !std::env::var("XDG_CURRENT_DESKTOP")
+        .is_ok_and(|v| v.split(':').any(|s| s.eq_ignore_ascii_case("KDE")))
+    {
+        return None;
+    }
+    for command in ["kreadconfig6", "kreadconfig5"] {
+        let Ok(output) = std::process::Command::new(command)
+            .args([
+                "--file",
+                "kdeglobals",
+                "--group",
+                "General",
+                "--key",
+                "font",
+            ])
+            .output()
+        else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let Ok(value) = std::str::from_utf8(&output.stdout) else {
+            continue;
+        };
+        let mut parts = value.trim().split(',');
+        let family = parts.next()?.trim();
+        let points: f32 = parts.next()?.parse().ok()?;
+        if !family.is_empty() && points.is_finite() && (6.0..=96.0).contains(&points) {
+            return Some((family.into(), points));
+        }
+    }
+    None
+}

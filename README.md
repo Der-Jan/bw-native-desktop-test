@@ -20,6 +20,15 @@ Proposed hardening and server integration requirements:
 
 The first hardening slice implements revocable SDK sessions, plaintext UI cleanup on lock, guarded task results, private staged exports, and explicit demo profiles. Local demo logout now survives restart and recovers interrupted deletion. The next slice adds single-use protected-action grants, encrypted credentials backed by the OS credential store, password login and scoped mTLS. See the login/mTLS documents for the implemented subset and remaining gates.
 
+## egui comparison demo
+
+A separate [egui demo](tools/egui-demo/README.md) compares virtualized lists,
+scrolling, combined filters and keyboard navigation using synthetic data:
+
+```bash
+cargo run --manifest-path tools/egui-demo/Cargo.toml --release
+```
+
 ## Running it
 
 ```bash

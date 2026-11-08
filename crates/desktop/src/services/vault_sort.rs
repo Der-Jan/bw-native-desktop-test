@@ -6,6 +6,7 @@ use std::{borrow::Cow, cmp::Ordering, collections::HashMap, sync::Arc};
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SortColumn {
+    Username,
     LastChanged,
     BaseUrl,
     #[default]
@@ -45,6 +46,7 @@ impl VaultSort {
 #[derive(Clone)]
 pub struct SortKey {
     name: String,
+    username: Option<String>,
     base_url: Option<String>,
 }
 impl SortKey {
@@ -59,6 +61,14 @@ impl SortKey {
         };
         Self {
             name: item.name.to_lowercase(),
+            username: match &item.r#type {
+                CipherListViewType::Login(login) => login
+                    .username
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_lowercase),
+                _ => None,
+            },
             base_url,
         }
     }
@@ -99,12 +109,18 @@ pub fn sort_items(
         let primary = match sort.column {
             SortColumn::Name => directed(natural_cmp(&ka.name, &kb.name)),
             SortColumn::LastChanged => directed(a.revision_date.cmp(&b.revision_date)),
-            SortColumn::BaseUrl => match (&ka.base_url, &kb.base_url) {
-                (Some(a), Some(b)) => directed(natural_cmp(a, b)),
-                (Some(_), None) => Ordering::Less,
-                (None, Some(_)) => Ordering::Greater,
-                (None, None) => Ordering::Equal,
-            },
+            SortColumn::Username | SortColumn::BaseUrl => {
+                match if sort.column == SortColumn::Username {
+                    (&ka.username, &kb.username)
+                } else {
+                    (&ka.base_url, &kb.base_url)
+                } {
+                    (Some(a), Some(b)) => directed(natural_cmp(a, b)),
+                    (Some(_), None) => Ordering::Less,
+                    (None, Some(_)) => Ordering::Greater,
+                    (None, None) => Ordering::Equal,
+                }
+            }
         };
         primary
             .then_with(|| natural_cmp(&ka.name, &kb.name))
@@ -258,6 +274,40 @@ mod sorting_tests {
         assert_eq!(rows[2].name, "Empty");
     }
     #[test]
+    fn usernames_sort_naturally_and_keep_missing_values_last_in_both_directions() {
+        let mut rows: Vec<_> = [
+            ("Ten", Some("User10")),
+            ("Two", Some("user2")),
+            ("Empty", Some("")),
+            ("Missing", None),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (name, username))| {
+            let mut row = item(name, None, index as u128 + 1, 0);
+            if let CipherListViewType::Login(login) = &mut Arc::get_mut(&mut row).unwrap().r#type {
+                login.username = username.map(str::to_owned);
+            }
+            row
+        })
+        .collect();
+        let keys = prepare_keys(&rows);
+        let sort = VaultSort::default().clicked(SortColumn::Username);
+        sort_items(&mut rows, sort, &keys);
+        assert_eq!(
+            rows.iter().map(|v| v.name.as_str()).collect::<Vec<_>>(),
+            ["Two", "Ten", "Empty", "Missing"]
+        );
+        sort_items(&mut rows, sort.clicked(SortColumn::Username), &keys);
+        assert_eq!(
+            rows.iter().map(|v| v.name.as_str()).collect::<Vec<_>>(),
+            ["Ten", "Two", "Empty", "Missing"]
+        );
+        let restored: VaultSort =
+            serde_json::from_value(serde_json::to_value(sort).unwrap()).unwrap();
+        assert_eq!(restored, sort);
+    }
+    #[test]
     fn equal_values_use_name_then_stable_id_and_numeric_runs_do_not_overflow() {
         let mut rows = vec![
             item("SAME", Some("example.com"), 20, 0),
@@ -266,6 +316,7 @@ mod sorting_tests {
         let keys = prepare_keys(&rows);
         for column in [
             SortColumn::Name,
+            SortColumn::Username,
             SortColumn::LastChanged,
             SortColumn::BaseUrl,
         ] {

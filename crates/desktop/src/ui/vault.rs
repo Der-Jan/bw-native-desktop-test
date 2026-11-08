@@ -9,6 +9,8 @@ use crate::{
 use bitwarden_vault::{CipherListViewType, CipherType};
 use egui::{Modifiers, Sense};
 use egui_extras::{Column, TableBuilder};
+const ROW_HEIGHT: f32 = 30.;
+
 pub const TYPES: &[(CipherType, &str)] = &[
     (CipherType::Login, "Logins"),
     (CipherType::SecureNote, "Secure notes"),
@@ -379,7 +381,8 @@ impl Application {
                     .iter()
                     .position(|v| v.id == self.core.selected)
                     .unwrap_or(0);
-                let page = (area.height() / 42.).max(1.) as usize;
+                let page =
+                    (area.height() / (ROW_HEIGHT + ui.spacing().item_spacing.y)).max(1.) as usize;
                 let next = if down {
                     current.saturating_add(page)
                 } else {
@@ -413,12 +416,14 @@ impl Application {
             .id_salt("vault-horizontal")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.set_width(area.width().max(620.));
+                ui.set_width(area.width().max(760.));
                 let mut table = TableBuilder::new(ui)
-                    .id_salt("vault-table")
+                    .id_salt("vault-table-username")
                     .resizable(true)
                     .sense(Sense::CLICK)
+                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     .column(Column::remainder().at_least(180.).clip(true))
+                    .column(Column::initial(180.).clip(true))
                     .column(Column::initial(145.).clip(true))
                     .column(Column::initial(220.).clip(true))
                     .auto_shrink([false, false]);
@@ -432,6 +437,7 @@ impl Application {
                     .header(28., |mut header| {
                         for (label, column) in [
                             ("Name", SortColumn::Name),
+                            ("Username", SortColumn::Username),
                             ("Last changed", SortColumn::LastChanged),
                             ("Base URL", SortColumn::BaseUrl),
                         ] {
@@ -446,7 +452,13 @@ impl Application {
                                     ""
                                 };
                                 if ui
-                                    .add(egui::Button::new(format!("{label}{suffix}")).frame(false))
+                                    .add(
+                                        egui::Button::new(format!(
+                                            "{}{suffix}",
+                                            super::labels::text(label)
+                                        ))
+                                        .frame(false),
+                                    )
                                     .clicked()
                                 {
                                     sort = Some(column);
@@ -455,7 +467,7 @@ impl Application {
                         }
                     })
                     .body(|body| {
-                        body.rows(36., items.len(), |mut row| {
+                        body.rows(ROW_HEIGHT, items.len(), |mut row| {
                             let item = &items[row.index()];
                             let chosen = item.id == selected;
                             row.set_selected(chosen);
@@ -489,7 +501,7 @@ impl Application {
                                                 egui::TextureOptions::LINEAR,
                                             )
                                         });
-                                        ui.image((texture.id(), egui::vec2(26., 26.)));
+                                        ui.image((texture.id(), egui::vec2(22., 22.)));
                                         shown = true;
                                     }
                                     if !shown {
@@ -499,22 +511,15 @@ impl Application {
                                             ui.weak(mark);
                                         }
                                     }
-                                    ui.vertical(|ui| {
-                                        ui.add(egui::Label::new(&item.name).truncate());
-                                        if let CipherListViewType::Login(login) = &item.r#type
-                                            && let Some(username) = &login.username
-                                        {
-                                            ui.add(
-                                                egui::Label::new(if chosen {
-                                                    egui::RichText::new(username).small()
-                                                } else {
-                                                    egui::RichText::new(username).small().weak()
-                                                })
-                                                .truncate(),
-                                            );
-                                        }
-                                    });
+                                    ui.add(egui::Label::new(&item.name).truncate());
                                 });
+                            });
+                            row.col(|ui| {
+                                if let CipherListViewType::Login(login) = &item.r#type
+                                    && let Some(username) = &login.username
+                                {
+                                    ui.add(egui::Label::new(username).truncate());
+                                }
                             });
                             row.col(|ui| {
                                 ui.small(

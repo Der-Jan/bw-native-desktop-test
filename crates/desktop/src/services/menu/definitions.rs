@@ -17,7 +17,7 @@ use super::{
     MenuAction::{self, *},
     MenuChildren, MenuEntry, MenuState, MenuTree,
     entry::{item, lit, section, sep},
-    shortcut::{cmd, cmd_shift, fkey},
+    shortcut::{cmd, cmd_shift},
 };
 use crate::fl;
 
@@ -125,8 +125,6 @@ pub fn menu_tree() -> MenuTree {
             item(fl!("menu-view-zoom-in")).key(cmd('=')).action(ZoomIn),
             item(fl!("menu-view-zoom-out")).key(cmd('-')).action(ZoomOut),
             item(fl!("menu-view-reset-zoom")).key(cmd('0')).action(ZoomReset),
-            sep(),
-            item(fl!("menu-view-toggle-fullscreen")).key(fkey(11)).action(ToggleFullScreen),
         ]),
         section(fl!("menu-account"), vec![
             item(fl!("menu-account-change-password"))
@@ -238,7 +236,7 @@ fn find_in_entries(
 mod tests {
     use super::*;
     use crate::services::menu::{EnabledWhen, shortcut::ShortcutKey};
-    use iced::keyboard::{Key, Modifiers, key::Named};
+    use iced::keyboard::{Key, Modifiers};
 
     fn key_char(c: &str) -> Key {
         Key::Character(c.into())
@@ -336,15 +334,6 @@ mod tests {
             action,
             Some(MenuAction::NewItem(bitwarden_vault::CipherType::SecureNote))
         );
-    }
-
-    #[test]
-    fn fkey_shortcut_with_no_modifiers_resolves() {
-        let tree = menu_tree();
-        // F11 → ToggleFullScreen, always-enabled.
-        let action =
-            tree.find_shortcut_action(&Key::Named(Named::F11), Modifiers::empty(), &unlocked());
-        assert_eq!(action, Some(MenuAction::ToggleFullScreen));
     }
 
     #[test]

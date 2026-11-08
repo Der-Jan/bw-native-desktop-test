@@ -57,14 +57,14 @@ pub fn view<'a>(
             column![
                 ssh,
                 ssh_prompt,
-                iced::widget::text(agent.status()).size(14),
-                iced::widget::text(agent.path().display().to_string()).size(12),
+                iced::widget::text(agent.status()).size(crate::text_size(14)),
+                iced::widget::text(agent.path().display().to_string()).size(crate::text_size(12)),
                 crate::components::buttons::secondary(text(fl!("ssh-agent-copy-socket")))
                     .on_press(SettingChange::CopySshSocket),
-                text(agent.shell_setup()).size(12),
+                text(agent.shell_setup()).size(crate::text_size(12)),
                 crate::components::buttons::secondary(text(fl!("ssh-agent-copy-setup")))
                     .on_press(SettingChange::CopySshSetup),
-                iced::widget::text(fl!("ssh-agent-help")).size(12),
+                iced::widget::text(fl!("ssh-agent-help")).size(crate::text_size(12)),
                 iced::widget::text(
                     if snap.prefs.ssh_prompt_behavior == SshPromptBehavior::Never {
                         fl!("ssh-agent-unattended")
@@ -72,7 +72,7 @@ pub fn view<'a>(
                         fl!("ssh-agent-protected")
                     }
                 )
-                .size(12),
+                .size(crate::text_size(12)),
             ]
             .spacing(16),
             colors,

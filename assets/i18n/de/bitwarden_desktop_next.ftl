@@ -319,7 +319,6 @@ menu-view-generator-history = Generator-Verlauf
 menu-view-zoom-in = Vergrößern
 menu-view-zoom-out = Verkleinern
 menu-view-reset-zoom = Zoom zurücksetzen
-menu-view-toggle-fullscreen = Vollbild umschalten
 
 ## Menu — Account
 menu-account-change-password = Master-Passwort ändern

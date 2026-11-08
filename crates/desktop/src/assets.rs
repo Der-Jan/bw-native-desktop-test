@@ -1,6 +1,8 @@
 //! Compile-time embedded assets. All binary resources in one place.
 
+#[cfg(test)]
 pub const FONT_MEDIUM: &[u8] = include_bytes!("../../../assets/Inter/static/Inter_18pt-Medium.ttf");
+#[cfg(test)]
 pub const FONT_BOLD: &[u8] = include_bytes!("../../../assets/Inter/static/Inter_18pt-Bold.ttf");
 // Mirrored from the pinned `clients` submodule at
 // `libs/angular/src/scss/bwicons/fonts/bwi-font.ttf`. To refresh: bump the
@@ -30,6 +32,7 @@ pub const LOCK_ICON: &[u8] = include_bytes!("../../../assets/lock-icon.svg");
 pub const VAULT_ICON: &[u8] = include_bytes!("../../../assets/vault-icon.svg");
 pub const WAVE_ICON: &[u8] = include_bytes!("../../../assets/wave-icon.svg");
 pub const BITWARDEN_SHIELD: &[u8] = include_bytes!("../../../assets/bitwarden-shield.svg");
+// Original outlined Bitwarden wordmark; independent of UI/system fonts.
 pub const PASSWORD_MANAGER_LOGO: &[u8] =
     include_bytes!("../../../assets/password-manager-logo.svg");
 

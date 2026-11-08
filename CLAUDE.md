@@ -21,7 +21,7 @@ DEV_BOTH_MENUS=1 cargo run                                            # Native +
 RUST_LOG=bitwarden_desktop_next=debug,bitwarden_core=debug cargo run  # Full SDK tracing
 ```
 
-Rendering uses tiny-skia on the CPU. There is no GPU feature or hardware-acceleration setting. Image codecs are selected explicitly in `crates/desktop/Cargo.toml`; keep Iced on `image-without-codecs` so it does not re-enable OpenEXR or TIFF through image defaults.
+Rendering defaults to wgpu with automatic tiny-skia CPU fallback, following the user’s renewed priority on scrolling responsiveness. Use `ICED_BACKEND=tiny-skia cargo run` for a CPU comparison or `cargo run --no-default-features` for a CPU-only build. Keep dialogs immediate and shadow-free. Image codecs are selected explicitly in `crates/desktop/Cargo.toml`; keep Iced on `image-without-codecs` so it does not re-enable OpenEXR or TIFF through image defaults.
 
 ## Docs (READ BEFORE CHANGES)
 
@@ -48,7 +48,7 @@ Rendering uses tiny-skia on the CPU. There is no GPU feature or hardware-acceler
 - Radii (`RADIUS_SM/MD/LG/PILL`) are structural constants, not theme-dependent.
 - In `.style()` closures: `theme.colors.xxx`. For `text().color()` / `icon.render()`: pass `&AppColors`.
 - Sidebar-specific tokens: `nav_text` (white in both themes) and `nav_item_hover`.
-- Font sizes: 5 values — 12, 14, 16, 18, 28.
+- Text size roles use `crate::text_size(12 | 14 | 16 | 18 | 28)`: compact, rounded point sizes with a 9 pt minimum. Icon sizes remain separate.
 - Prefer builder form: `Border::default().rounded(r).color(c).width(w)` and `container::Style::default().background(c).border(b)` over `{ ..Default::default() }` struct literals.
 
 ### Button Components

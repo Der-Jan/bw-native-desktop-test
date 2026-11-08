@@ -13,7 +13,7 @@
 
 use iced::{
     Element, Fill, Length,
-    widget::{Column, Scrollable, Space, container, scrollable},
+    widget::{Scrollable, Space, container, scrollable},
 };
 
 use crate::theme::AppTheme;
@@ -45,6 +45,13 @@ impl ScrollState {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum RowKey<Key> {
+    TopSpacer,
+    Item(Key),
+    BottomSpacer,
+}
+
 /// Minimum overscan in rows so quick scrolls on small viewports don't pop.
 const MIN_OVERSCAN: usize = 5;
 
@@ -57,15 +64,18 @@ const OVERSCAN_RATIO: f32 = 0.3;
 /// constructed. Top/bottom `Space` fillers preserve the scroll thumb ratio.
 /// Each row is wrapped in a fixed-height container so callers can return
 /// any Element without enforcing the height invariant themselves.
-pub fn view<'a, T, Msg, F, G>(
+pub fn view<'a, T, Key, Msg, F, G, K>(
     items: &'a [T],
     scroll: ScrollState,
     row_height: f32,
+    key_for_row: K,
     render_row: F,
     on_scroll: G,
 ) -> Scrollable<'a, Msg, AppTheme>
 where
     Msg: 'a,
+    Key: Copy + Eq + 'static,
+    K: Fn(usize, &'a T) -> Key,
     F: Fn(usize, &'a T) -> Element<'a, Msg, AppTheme>,
     G: Fn(scrollable::Viewport) -> Msg + 'a,
 {
@@ -90,28 +100,128 @@ where
     let last = (first_fully_visible + visible_rows + overscan).min(total);
 
     let window_len = last - first;
-    let mut children: Vec<Element<'a, Msg, AppTheme>> = Vec::with_capacity(window_len + 2);
+    let mut children: Vec<(RowKey<Key>, Element<'a, Msg, AppTheme>)> =
+        Vec::with_capacity(window_len + 2);
 
     let top_h = (first as f32) * row_height;
     if top_h > 0.0 {
-        children.push(Space::new().height(Length::Fixed(top_h)).into());
+        children.push((
+            RowKey::TopSpacer,
+            Space::new().height(Length::Fixed(top_h)).into(),
+        ));
     }
 
     for (offset, item) in items[first..last].iter().enumerate() {
         let i = first + offset;
         let row = render_row(i, item);
-        children.push(
+        children.push((
+            RowKey::Item(key_for_row(i, item)),
             container(row)
                 .width(Fill)
                 .height(Length::Fixed(row_height))
                 .into(),
-        );
+        ));
     }
 
     let bottom_h = ((total - last) as f32) * row_height;
     if bottom_h > 0.0 {
-        children.push(Space::new().height(Length::Fixed(bottom_h)).into());
+        children.push((
+            RowKey::BottomSpacer,
+            Space::new().height(Length::Fixed(bottom_h)).into(),
+        ));
     }
 
-    scrollable(Column::with_children(children)).on_scroll(on_scroll)
+    scrollable(super::keyed_rows::KeyedRows::new(children)).on_scroll(on_scroll)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced::{
+        Length, Rectangle, Renderer, Size,
+        advanced::{
+            Layout, Widget, layout, mouse, renderer,
+            widget::{Tree, tree},
+        },
+    };
+    use std::rc::Rc;
+
+    struct Marker(usize);
+    struct RowState {
+        index: usize,
+        identity: Rc<()>,
+    }
+    impl Widget<(), AppTheme, Renderer> for Marker {
+        fn size(&self) -> Size<Length> {
+            Size::new(Length::Fill, Length::Fixed(40.0))
+        }
+        fn tag(&self) -> tree::Tag {
+            tree::Tag::of::<RowState>()
+        }
+        fn state(&self) -> tree::State {
+            tree::State::new(RowState {
+                index: self.0,
+                identity: Rc::new(()),
+            })
+        }
+        fn layout(
+            &mut self,
+            _tree: &mut Tree,
+            _renderer: &Renderer,
+            _limits: &layout::Limits,
+        ) -> layout::Node {
+            layout::Node::new(Size::new(100.0, 40.0))
+        }
+        fn draw(
+            &self,
+            _tree: &Tree,
+            _renderer: &mut Renderer,
+            _theme: &AppTheme,
+            _style: &renderer::Style,
+            _layout: Layout<'_>,
+            _cursor: mouse::Cursor,
+            _viewport: &Rectangle,
+        ) {
+        }
+    }
+    fn rows(tree: &Tree) -> Vec<(usize, Rc<()>)> {
+        if tree.tag == tree::Tag::of::<RowState>() {
+            let state = tree.state.downcast_ref::<RowState>();
+            return vec![(state.index, state.identity.clone())];
+        }
+        tree.children.iter().flat_map(rows).collect()
+    }
+    #[test]
+    fn viewport_shift_keeps_surviving_rows_and_their_state_attached_to_the_right_item() {
+        let items = vec![(); 100];
+        let build = |offset_y| -> Element<'_, (), AppTheme> {
+            view(
+                &items,
+                ScrollState {
+                    offset_y,
+                    viewport_height: 200.0,
+                },
+                40.0,
+                |i, _| i,
+                |i, _| Element::new(Marker(i)),
+                |_| (),
+            )
+            .into()
+        };
+        let first = build(0.0);
+        let mut tree = Tree::new(&first);
+        let before = rows(&tree);
+        let survivor = before.iter().find(|(i, _)| *i == 7).unwrap().1.clone();
+        let next = build(400.0);
+        tree.diff(next.as_widget());
+        let after = rows(&tree);
+        assert_eq!(
+            after.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+            (5..20).collect::<Vec<_>>()
+        );
+        assert!(Rc::ptr_eq(
+            &survivor,
+            &after.iter().find(|(i, _)| *i == 7).unwrap().1
+        ));
+    }
 }

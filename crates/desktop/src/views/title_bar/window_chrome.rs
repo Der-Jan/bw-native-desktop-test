@@ -44,7 +44,7 @@ pub fn chrome_button<'a, M: Clone + 'a>(
     hover_color: iced::Color,
     message: M,
 ) -> Element<'a, M, AppTheme> {
-    let icon = container(text(glyph).font(font).size(12))
+    let icon = container(text(glyph).font(font).size(crate::text_size(12)))
         .width(Fill)
         .height(Fill)
         .align_x(Alignment::Center)

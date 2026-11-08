@@ -457,11 +457,11 @@ impl View for ImportView {
         );
 
         let file_row = row![
-            buttons::secondary(text(fl!("import-modal-choose-file")).size(14))
+            buttons::secondary(text(fl!("import-modal-choose-file")).size(crate::text_size(14)))
                 .on_press(ImportMessage::ChooseFile)
                 .padding([8, 16]),
             text(fl!("import-modal-no-file"))
-                .size(14)
+                .size(crate::text_size(14))
                 .color(ctx.colors.text_secondary),
         ]
         .spacing(12)
@@ -481,7 +481,7 @@ impl View for ImportView {
             column![
                 format_picker,
                 text(fl!("import-modal-file-helper"))
-                    .size(12)
+                    .size(crate::text_size(12))
                     .color(ctx.colors.text_secondary),
                 file_row,
                 paste_field,
@@ -586,8 +586,8 @@ fn section_card<'a>(
 ) -> Element<'a, ImportMessage, AppTheme> {
     let inner = column![
         text(heading)
-            .size(14)
-            .font(crate::APP_FONT_BOLD)
+            .size(crate::text_size(14))
+            .font(crate::app_font_bold())
             .color(colors.accent),
         body,
     ]

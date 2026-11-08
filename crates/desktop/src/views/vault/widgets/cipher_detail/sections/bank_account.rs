@@ -91,7 +91,7 @@ pub(in super::super) fn bank_account_card<'a>(
     if fields.is_empty() {
         fields.push(
             text(fl!("detail-empty-bank-account"))
-                .size(14)
+                .size(crate::text_size(14))
                 .color(colors.text_muted)
                 .into(),
         );

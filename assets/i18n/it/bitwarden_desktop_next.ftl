@@ -319,7 +319,6 @@ menu-view-generator-history = Cronologia generatore
 menu-view-zoom-in = Aumenta zoom
 menu-view-zoom-out = Riduci zoom
 menu-view-reset-zoom = Reimposta zoom
-menu-view-toggle-fullscreen = Attiva/disattiva schermo intero
 
 ## Menu — Account
 menu-account-change-password = Cambia password principale

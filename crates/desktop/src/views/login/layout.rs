@@ -132,8 +132,12 @@ pub fn icon_title_card<'a>(
     card: Element<'a, LoginMessage, AppTheme>,
     colors: &'a AppColors,
 ) -> Element<'a, LoginMessage, AppTheme> {
-    let title_el = text(title.into()).size(28).color(colors.text_primary);
-    let email_el = text(email).size(16).color(colors.text_secondary);
+    let title_el = text(title.into())
+        .size(crate::text_size(28))
+        .color(colors.text_primary);
+    let email_el = text(email)
+        .size(crate::text_size(16))
+        .color(colors.text_secondary);
     column![icon, title_el, email_el, Space::new().height(12), card]
         .spacing(8)
         .align_x(Alignment::Center)

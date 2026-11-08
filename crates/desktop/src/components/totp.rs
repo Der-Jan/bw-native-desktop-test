@@ -61,7 +61,7 @@ pub fn view<'a, Message: 'a + Clone>(
     colors: &'a AppColors,
 ) -> Element<'a, Message, AppTheme> {
     let label = text(fl!("detail-field-totp"))
-        .size(12)
+        .size(crate::text_size(12))
         .color(colors.text_muted);
 
     let field: Element<'a, Message, AppTheme> = Element::new(CountdownField {
@@ -221,7 +221,7 @@ where
                     size: CODE_FONT_SIZE.into(),
                     align_x: iced_text::Alignment::Left,
                     align_y: iced_alignment::Vertical::Center,
-                    font: crate::APP_FONT_BOLD,
+                    font: crate::app_font_bold(),
                     ..Default::default()
                 });
 
@@ -265,10 +265,10 @@ where
                     content: format!("{rem}"),
                     position: center,
                     color: code_color,
-                    size: 12.into(),
+                    size: crate::text_size(12).into(),
                     align_x: iced::advanced::text::Alignment::Center,
                     align_y: iced_alignment::Vertical::Center,
-                    font: crate::APP_FONT_BOLD,
+                    font: crate::app_font_bold(),
                     ..Default::default()
                 });
             }
@@ -279,7 +279,7 @@ where
                     content: fl!("detail-totp-invalid"),
                     position: Point::new(0.0, bounds.height / 2.0),
                     color: self.colors.text_muted,
-                    size: 14.into(),
+                    size: crate::text_size(14).into(),
                     align_x: iced::advanced::text::Alignment::Left,
                     align_y: iced_alignment::Vertical::Center,
                     font: iced::Font::DEFAULT,

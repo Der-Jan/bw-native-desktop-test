@@ -30,7 +30,7 @@ pub const LIST_ID: iced::widget::Id = iced::widget::Id::new("vault-item-list");
 /// scroll thumb ratio and cause rows to pop in or out at the wrong spot.
 /// The row itself is `content_height + button padding (8+8) = 48`, plus a
 /// 1px separator rendered as part of each row to keep the unit uniform.
-const ROW_HEIGHT: f32 = 49.0;
+pub(in crate::views::vault) const ROW_HEIGHT: f32 = 49.0;
 const TABLE_MIN_WIDTH: f32 = 720.0;
 const CHANGED_WIDTH: f32 = 128.0;
 const ACTIONS_WIDTH: f32 = 90.0;
@@ -129,7 +129,10 @@ fn table_view<'a>(
         };
         buttons::ghost(
             row![
-                text(label).size(14).color(color).font(crate::APP_FONT_BOLD),
+                text(label)
+                    .size(crate::text_size(14))
+                    .color(color)
+                    .font(crate::app_font_bold()),
                 arrow.render(11.0, color)
             ]
             .spacing(4)
@@ -157,9 +160,9 @@ fn table_view<'a>(
                 .width(Length::FillPortion(2)),
             container(
                 text(fl!("vault-column-options"))
-                    .size(14)
+                    .size(crate::text_size(14))
                     .color(ctx.colors.table_header)
-                    .font(crate::APP_FONT_BOLD)
+                    .font(crate::app_font_bold())
             )
             .width(ACTIONS_WIDTH)
             .align_x(Alignment::End),
@@ -179,12 +182,30 @@ fn table_view<'a>(
         items,
         scroll,
         ROW_HEIGHT,
+        |i, item| {
+            (
+                ctx.active_user,
+                item.id,
+                if item.id.is_none() { i } else { 0 },
+            )
+        },
         |i, item| row_element(ctx, i, item, selected_index == Some(i)),
         ItemListMessage::Scrolled,
     )
     .height(Fill)
     .id(LIST_ID)
     .style(components::rail_scroll_style);
+
+    let list = components::smooth_scroll::SmoothScroll::new(
+        list,
+        LIST_ID,
+        (
+            items.as_ptr() as usize,
+            items.len(),
+            ctx.sort.column as u8,
+            ctx.sort.direction as u8,
+        ),
+    );
 
     // Share a single horizontal viewport between header and body. The inner
     // vertical list stays virtualized when a detail pane narrows the table.
@@ -259,12 +280,12 @@ fn row_element<'a>(
 
     let info = column![
         text(&item.name)
-            .size(14)
+            .size(crate::text_size(14))
             .color(ctx.colors.text_primary)
             .wrapping(Wrapping::None)
             .ellipsis(Ellipsis::End),
         text(subtitle)
-            .size(14)
+            .size(crate::text_size(14))
             .color(ctx.colors.text_secondary)
             .wrapping(Wrapping::None)
             .ellipsis(Ellipsis::End),
@@ -284,7 +305,7 @@ fn row_element<'a>(
         actions.push(
             tooltip(
                 action_icon(icons::COPY, ItemListMessage::CopyUsername(id), ctx.colors),
-                text(fl!("menu-edit-copy-username")).size(12),
+                text(fl!("menu-edit-copy-username")).size(crate::text_size(12)),
                 tooltip::Position::Top,
             )
             .into(),
@@ -301,7 +322,7 @@ fn row_element<'a>(
                 )
                 .padding([4, 6])
                 .on_press(ItemListMessage::CopyPassword(id)),
-                text(fl!("menu-edit-copy-password")).size(12),
+                text(fl!("menu-edit-copy-password")).size(crate::text_size(12)),
                 tooltip::Position::Top,
             )
             .into(),
@@ -313,10 +334,10 @@ fn row_element<'a>(
     let changed = item.revision_date.with_timezone(&chrono::Local);
     let changed_cell = column![
         text(changed.format("%Y-%m-%d").to_string())
-            .size(12)
+            .size(crate::text_size(12))
             .color(ctx.colors.text_primary),
         text(changed.format("%H:%M").to_string())
-            .size(12)
+            .size(crate::text_size(12))
             .color(ctx.colors.text_secondary),
     ]
     .spacing(2)
@@ -330,7 +351,7 @@ fn row_element<'a>(
         _ => None,
     };
     let url_cell = text(base_url.unwrap_or_else(|| "—".into()))
-        .size(14)
+        .size(crate::text_size(14))
         .color(ctx.colors.text_secondary)
         .wrapping(Wrapping::None)
         .ellipsis(Ellipsis::End)
@@ -390,15 +411,287 @@ fn initial_circle<'a>(name: &str, colors: &'a AppColors) -> Element<'a, ItemList
         .to_uppercase()
         .to_string();
     let circle_color = initial_color(name);
-    container(text(initial).size(14).color(colors.text_primary))
-        .width(32)
-        .height(32)
-        .center_x(32)
-        .center_y(32)
-        .style(move |_theme: &AppTheme| {
-            container::Style::default()
-                .background(circle_color)
-                .border(iced::border::rounded(16))
-        })
-        .into()
+    container(
+        text(initial)
+            .size(crate::text_size(14))
+            .color(colors.text_primary),
+    )
+    .width(32)
+    .height(32)
+    .center_x(32)
+    .center_y(32)
+    .style(move |_theme: &AppTheme| {
+        container::Style::default()
+            .background(circle_color)
+            .border(iced::border::rounded(16))
+    })
+    .into()
+}
+
+#[cfg(test)]
+mod scroll_profile {
+    use super::*;
+
+    #[tokio::test]
+    async fn pixel_scroll_keeps_position_and_extent_when_virtual_rows_are_replaced() {
+        use crate::test_support::fixtures::{CipherSpec, make_cipher};
+        use iced::advanced::{layout, widget::Tree};
+        let app = crate::app::App::test();
+        let items: Vec<_> = (0..100)
+            .map(|_| make_cipher(CipherSpec::default()))
+            .collect();
+        let ctx = ListContext {
+            sort: VaultSort::default(),
+            active_user: crate::domain::UserId::new_v4(),
+            colors: &app.theme.current.colors,
+            show_favicons: false,
+            favicon: &app.favicon,
+        };
+        let renderer = <iced::Renderer as iced::advanced::renderer::Headless>::new(
+            iced::advanced::renderer::Settings::default(),
+            Some("tiny-skia"),
+        )
+        .await
+        .unwrap();
+        let mut tree = Tree::empty();
+        let mut scroll = virtual_list::ScrollState {
+            offset_y: 0.0,
+            viewport_height: 600.0,
+        };
+        let limits = layout::Limits::new(iced::Size::ZERO, iced::Size::new(900.0, 650.0));
+        for pixel in 1..=1200 {
+            let mut element = table_view(ctx, &items, None, scroll, 900.0);
+            tree.diff(element.as_widget());
+            let node = element
+                .as_widget_mut()
+                .layout(&mut tree, &renderer, &limits);
+            let mut messages = Vec::new();
+            element.as_widget_mut().update(
+                &mut tree,
+                &iced::Event::Mouse(iced::mouse::Event::WheelScrolled {
+                    delta: iced::mouse::ScrollDelta::Pixels { x: 0.0, y: -1.0 },
+                }),
+                iced::advanced::Layout::new(&node),
+                iced::mouse::Cursor::Available(iced::Point::new(400.0, 300.0)),
+                &renderer,
+                &mut iced::advanced::Shell::new(&mut messages),
+                &iced::Rectangle::with_size(iced::Size::new(900.0, 650.0)),
+            );
+            let viewport = messages
+                .into_iter()
+                .find_map(|m| match m {
+                    ItemListMessage::Scrolled(v) => Some(v),
+                    _ => None,
+                })
+                .expect("pixel input must publish viewport");
+            assert_eq!(
+                viewport.absolute_offset().y,
+                pixel as f32,
+                "scroll reversed or jumped"
+            );
+            assert_eq!(
+                viewport.content_bounds().height,
+                100.0 * ROW_HEIGHT,
+                "virtual extent changed"
+            );
+            scroll.track(viewport);
+        }
+        // Exercise the real wheel wrapper, rebuilding the virtualized table
+        // on every intermediate frame, rather than just testing Motion alone.
+        let started = iced::time::Instant::now();
+        let mut intermediate = 0;
+        for frame in 0..=20 {
+            let mut element = table_view(ctx, &items, None, scroll, 900.0);
+            tree.diff(element.as_widget());
+            let node = element
+                .as_widget_mut()
+                .layout(&mut tree, &renderer, &limits);
+            let event = if frame == 0 {
+                iced::Event::Mouse(iced::mouse::Event::WheelScrolled {
+                    delta: iced::mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 },
+                })
+            } else {
+                iced::Event::Window(iced::window::Event::RedrawRequested(
+                    started + std::time::Duration::from_millis(frame * 5),
+                ))
+            };
+            let mut messages = Vec::new();
+            element.as_widget_mut().update(
+                &mut tree,
+                &event,
+                iced::advanced::Layout::new(&node),
+                iced::mouse::Cursor::Available(iced::Point::new(400.0, 300.0)),
+                &renderer,
+                &mut iced::advanced::Shell::new(&mut messages),
+                &iced::Rectangle::with_size(iced::Size::new(900.0, 650.0)),
+            );
+            for message in messages {
+                if let ItemListMessage::Scrolled(viewport) = message {
+                    let y = viewport.absolute_offset().y;
+                    assert!(y >= scroll.offset_y, "single wheel notch moved backwards");
+                    assert!(y <= 1260.01, "single wheel notch overshot");
+                    assert_eq!(viewport.content_bounds().height, 100.0 * ROW_HEIGHT);
+                    if y > 1201.0 && y < 1260.0 {
+                        intermediate += 1;
+                    }
+                    scroll.track(viewport);
+                }
+            }
+        }
+        assert!((scroll.offset_y - 1260.0).abs() < 0.01);
+        assert!(
+            intermediate >= 5,
+            "wheel step lacked intermediate pixel positions"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "manual layout/raster benchmark; excludes compositor and input latency"]
+    async fn profile_scrolling_layout() {
+        use crate::test_support::fixtures::{CipherSpec, login_kind, make_cipher};
+        use iced::advanced::{layout, widget::Tree};
+        let mut app = crate::app::App::test();
+        let mut items = Vec::new();
+        for i in 0..10_000 {
+            let mut item = make_cipher(CipherSpec {
+                kind: login_kind(Some("https://example.invalid/path")),
+                ..Default::default()
+            });
+            let view = Arc::get_mut(&mut item).unwrap();
+            view.name = format!("Synthetic login {i:05}");
+            view.subtitle = format!("synthetic-user-{i}");
+            view.id = Some(bitwarden_vault::CipherId::new_v4());
+            items.push(item);
+        }
+        let full_window = std::env::var_os("BW_SCROLL_PROFILE_FULL_WINDOW").is_some();
+        let uid = crate::domain::UserId::new_v4();
+        if full_window {
+            app.client_manager = crate::services::sdk::test_support::unlocked_manager(uid);
+            app.active_user = Some(uid);
+            app.screen = crate::domain::Screen::Vault;
+            app.refresh_accounts_cache();
+            app.views.vault.items.insert(
+                uid,
+                crate::views::vault::state::ItemCache {
+                    all: items.clone(),
+                    cached: items.clone(),
+                    ..Default::default()
+                },
+            );
+        }
+        {
+            let mut fonts = iced::advanced::graphics::text::font_system()
+                .write()
+                .unwrap();
+            for bytes in [
+                crate::assets::FONT_MEDIUM,
+                crate::assets::FONT_BOLD,
+                crate::assets::BWI_FONT,
+                crate::components::icons::FONT_BYTES,
+            ] {
+                fonts.load_font(std::borrow::Cow::Borrowed(bytes));
+            }
+        }
+        let size = if full_window {
+            crate::app::MAIN_WINDOW_SIZE
+        } else {
+            iced::Size::new(900.0, 650.0)
+        };
+        let mut renderer = <iced::Renderer as iced::advanced::renderer::Headless>::new(
+            iced::advanced::renderer::Settings::default(),
+            Some("tiny-skia"),
+        )
+        .await
+        .expect("CPU benchmark renderer");
+        let mut tree = Tree::empty();
+        let limits = layout::Limits::new(iced::Size::ZERO, size);
+        let mut samples = Vec::new();
+        let draw_frames = std::env::var_os("BW_SCROLL_PROFILE_DRAW").is_some();
+        let mut raster = Vec::new();
+        for frame in 0..330 {
+            let started = std::time::Instant::now();
+            let scroll = virtual_list::ScrollState {
+                offset_y: frame as f32 * 7.0,
+                viewport_height: size.height - 130.0,
+            };
+            app.views.vault.list_scroll = scroll;
+            let mut element = if full_window {
+                app.view(app.main_window)
+            } else {
+                table_view(
+                    ListContext {
+                        sort: VaultSort::default(),
+                        active_user: uid,
+                        colors: &app.theme.current.colors,
+                        show_favicons: false,
+                        favicon: &app.favicon,
+                    },
+                    &items,
+                    None,
+                    scroll,
+                    size.width,
+                )
+                .map(|m| {
+                    crate::app::Message::View(crate::app::ViewMessage::Vault(
+                        crate::views::vault::VaultMessage::ItemList(m),
+                    ))
+                })
+            };
+            tree.diff(element.as_widget());
+            let node = element
+                .as_widget_mut()
+                .layout(&mut tree, &renderer, &limits);
+            if frame >= 30 {
+                samples.push(started.elapsed().as_secs_f64() * 1000.0);
+            }
+            if draw_frames {
+                use iced::advanced::renderer::{Headless as _, Renderer as _};
+                let mut scroll = iced::advanced::widget::operation::scrollable::scroll_to::<()>(
+                    LIST_ID,
+                    scrollable::AbsoluteOffset {
+                        x: None,
+                        y: Some(frame as f32 * 7.0),
+                    },
+                );
+                element.as_widget_mut().operate(
+                    &mut tree,
+                    iced::advanced::Layout::new(&node),
+                    &renderer,
+                    &mut scroll,
+                );
+                let bounds = iced::Rectangle::with_size(size);
+                let started = std::time::Instant::now();
+                renderer.reset(bounds);
+                element.as_widget().draw(
+                    &tree,
+                    &mut renderer,
+                    &app.theme.current,
+                    &iced::advanced::renderer::Style::default(),
+                    iced::advanced::Layout::new(&node),
+                    iced::advanced::mouse::Cursor::Unavailable,
+                    &bounds,
+                );
+                let _rgba = renderer.screenshot(
+                    iced::Size::new((size.width * 1.5) as u32, (size.height * 1.5) as u32),
+                    1.5,
+                    iced::Color::WHITE,
+                );
+                if frame >= 30 {
+                    raster.push(started.elapsed().as_secs_f64() * 1000.0);
+                }
+            }
+        }
+        if !raster.is_empty() {
+            raster.sort_by(f64::total_cmp);
+            println!(
+                "raster (full_window={full_window}) at 1.5x: median={:.3}ms p95={:.3}ms",
+                raster[150], raster[285]
+            );
+        }
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "scroll construction+diff+layout: median={:.3}ms p95={:.3}ms max={:.3}ms",
+            samples[150], samples[285], samples[299]
+        );
+    }
 }

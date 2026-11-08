@@ -106,6 +106,23 @@ impl VaultView {
         }
     }
 
+    pub fn list_keyboard_enabled(&self) -> bool {
+        self.selection.form.is_none()
+    }
+
+    pub fn scroll_page_task<M: Send + 'static>(&self, down: bool) -> Task<M> {
+        // Leave one row of overlap to maintain visual orientation.
+        let row_height = super::widgets::item_list::ROW_HEIGHT;
+        let distance = (self.list_scroll.viewport_height - row_height).max(row_height);
+        iced::widget::operation::scroll_by(
+            super::widgets::item_list::LIST_ID,
+            iced::widget::scrollable::AbsoluteOffset {
+                x: 0.0,
+                y: if down { distance } else { -distance },
+            },
+        )
+    }
+
     pub fn selected_id(&self) -> Option<CipherId> {
         self.selection.id
     }

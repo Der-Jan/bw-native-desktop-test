@@ -107,8 +107,8 @@ where
 {
     row![
         text(title_text.into())
-            .size(20)
-            .font(crate::APP_FONT_BOLD)
+            .size(crate::text_size(20))
+            .font(crate::app_font_bold())
             .color(colors.text_primary),
         Space::new().width(Fill),
         buttons::ghost_icon(
@@ -135,11 +135,12 @@ pub fn footer_actions<'a, M>(
 where
     M: Clone + 'a,
 {
-    let mut primary_btn = buttons::primary(text(primary_label.into()).size(14)).padding([8, 20]);
+    let mut primary_btn =
+        buttons::primary(text(primary_label.into()).size(crate::text_size(14))).padding([8, 20]);
     if let Some(msg) = on_primary {
         primary_btn = primary_btn.on_press(msg);
     }
-    let secondary_btn = buttons::secondary(text(secondary_label.into()).size(14))
+    let secondary_btn = buttons::secondary(text(secondary_label.into()).size(crate::text_size(14)))
         .on_press(on_secondary)
         .padding([8, 20]);
 
@@ -204,9 +205,9 @@ where
         });
 
     let title = text(title_text.into())
-        .size(16)
+        .size(crate::text_size(16))
         .color(colors.text_primary)
-        .font(crate::APP_FONT_BOLD);
+        .font(crate::app_font_bold());
 
     let title_and_body = column![title, body.into()]
         .spacing(8)
@@ -258,15 +259,17 @@ where
     M: Clone + 'a,
 {
     let title = text(title_text.into())
-        .size(18)
+        .size(crate::text_size(18))
         .color(colors.text_primary)
-        .font(crate::APP_FONT_BOLD);
-    let body = text(body_text.into()).size(14).color(colors.text_primary);
+        .font(crate::app_font_bold());
+    let body = text(body_text.into())
+        .size(crate::text_size(14))
+        .color(colors.text_primary);
 
-    let cancel_btn = buttons::secondary(text(cancel_label.into()).size(14))
+    let cancel_btn = buttons::secondary(text(cancel_label.into()).size(crate::text_size(14)))
         .on_press(on_cancel.clone())
         .padding([8, 20]);
-    let confirm_btn = buttons::primary(text(confirm_label.into()).size(14))
+    let confirm_btn = buttons::primary(text(confirm_label.into()).size(crate::text_size(14)))
         .on_press(on_confirm)
         .padding([8, 20]);
 

@@ -187,7 +187,7 @@ fn tab_button<'a>(
 
     let label = container(
         text(kind.label())
-            .size(13)
+            .size(crate::text_size(13))
             .color(label_color)
             .align_x(Alignment::Center),
     )
@@ -216,7 +216,7 @@ fn value_card<'a>(
     colors: &'a AppColors,
 ) -> Element<'a, GeneratorMessage, AppTheme> {
     let value_text = text(value.to_string())
-        .size(16)
+        .size(crate::text_size(16))
         .font(iced::Font::MONOSPACE)
         .color(colors.text_primary);
 
@@ -248,9 +248,9 @@ fn value_card<'a>(
 fn history_entry_row<'a>(colors: &'a AppColors) -> Element<'a, GeneratorMessage, AppTheme> {
     let row_content = row![
         text(fl!("generator-history-open"))
-            .size(14)
+            .size(crate::text_size(14))
             .color(colors.accent)
-            .font(crate::APP_FONT_BOLD),
+            .font(crate::app_font_bold()),
         Space::new().width(Fill),
         icons::CHEVRON_RIGHT.render(14.0, colors.accent),
     ]

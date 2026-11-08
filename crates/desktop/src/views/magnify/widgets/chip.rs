@@ -40,7 +40,11 @@ pub fn keybind_text<'a>(
     label: &'static str,
     colors: &'a AppColors,
 ) -> Element<'a, MagnifyMessage, AppTheme> {
-    keybind(text(label).size(12).color(colors.text_primary))
+    keybind(
+        text(label)
+            .size(crate::text_size(12))
+            .color(colors.text_primary),
+    )
 }
 
 /// One inline hint: keybind chip + plain-text description, used by the
@@ -53,7 +57,9 @@ pub fn hint<'a>(
 ) -> Element<'a, MagnifyMessage, AppTheme> {
     row![
         chip,
-        text(description).size(12).color(colors.text_secondary),
+        text(description)
+            .size(crate::text_size(12))
+            .color(colors.text_secondary),
     ]
     .spacing(6)
     .align_y(Alignment::Center)

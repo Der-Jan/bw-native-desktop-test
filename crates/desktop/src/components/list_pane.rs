@@ -30,7 +30,7 @@ pub fn new_item_button<'a, M: 'a + Clone>(
     buttons::primary(
         row![
             icons::PLUS.render(14.0, colors.card_bg),
-            text(label.into()).size(14),
+            text(label.into()).size(crate::text_size(14)),
         ]
         .spacing(6)
         .align_y(Alignment::Center),
@@ -57,9 +57,9 @@ pub fn layout<'a, M: 'a>(
     colors: &'a AppColors,
 ) -> Element<'a, M, AppTheme> {
     let title_el = text(title.into())
-        .size(28)
+        .size(crate::text_size(28))
         .color(colors.text_primary)
-        .font(crate::APP_FONT_BOLD);
+        .font(crate::app_font_bold());
 
     layout_with_heading(title_el.into(), new_button, avatar, search, body)
 }

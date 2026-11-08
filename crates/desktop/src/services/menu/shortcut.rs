@@ -5,7 +5,6 @@
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ShortcutKey {
     Char(char),
-    F(u8),
 }
 
 #[derive(Clone, Copy)]
@@ -32,14 +31,6 @@ pub(super) const fn cmd_shift(key: char) -> Shortcut {
     }
 }
 
-pub(super) const fn fkey(n: u8) -> Shortcut {
-    Shortcut {
-        ctrl_cmd: false,
-        shift: false,
-        key: ShortcutKey::F(n),
-    }
-}
-
 impl Shortcut {
     /// Platform-aware display text (e.g. "Ctrl+N" on Win, "Cmd+N" on Mac).
     pub fn display(&self) -> String {
@@ -62,10 +53,6 @@ impl Shortcut {
         match self.key {
             ShortcutKey::Char(c) if c.is_ascii_alphabetic() => s.push(c.to_ascii_uppercase()),
             ShortcutKey::Char(c) => s.push(c),
-            ShortcutKey::F(n) => {
-                s.push('F');
-                s.push_str(&n.to_string());
-            }
         }
         s
     }
@@ -87,25 +74,6 @@ impl Shortcut {
                 .chars()
                 .next()
                 .is_some_and(|pressed| pressed.eq_ignore_ascii_case(c)),
-            (ShortcutKey::F(n), iced::keyboard::Key::Named(named)) => {
-                use iced::keyboard::key::Named::*;
-                let matched = match named {
-                    F1 => 1,
-                    F2 => 2,
-                    F3 => 3,
-                    F4 => 4,
-                    F5 => 5,
-                    F6 => 6,
-                    F7 => 7,
-                    F8 => 8,
-                    F9 => 9,
-                    F10 => 10,
-                    F11 => 11,
-                    F12 => 12,
-                    _ => return false,
-                };
-                matched == *n
-            }
             _ => false,
         }
     }

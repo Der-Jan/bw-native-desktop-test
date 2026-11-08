@@ -203,7 +203,8 @@ impl App {
         if !self.pending_logouts.is_empty() {
             column = column.push(
                 iced::widget::container(
-                    iced::widget::text(crate::fl!("storage-logout-pending")).size(14),
+                    iced::widget::text(crate::fl!("storage-logout-pending"))
+                        .size(crate::text_size(14)),
                 )
                 .padding([12, 16])
                 .width(iced::Fill),
@@ -222,7 +223,7 @@ impl App {
                 }
             };
             column = column.push(
-                iced::widget::container(iced::widget::text(text).size(14))
+                iced::widget::container(iced::widget::text(text).size(crate::text_size(14)))
                     .padding([12, 16])
                     .width(iced::Fill),
             );
@@ -296,13 +297,14 @@ impl App {
     }
 
     /// Per-window UI scale fed back to iced. Only the main window honours the
-    /// user's zoom setting — the About dialog and Magnify launcher have hand-
-    /// tuned fixed layouts and stay at 1.0.
+    /// user's additional zoom setting. Desktop typography applies to all windows;
+    /// monitor DPI is composed by Iced itself.
     pub fn scale_factor(&self, window_id: iced::window::Id) -> f32 {
-        match self.windows.get(&window_id).map(|w| w.kind) {
+        let zoom = match self.windows.get(&window_id).map(|w| w.kind) {
             Some(WindowKind::Main) => self.settings.zoom_factor.scale(),
             _ => 1.0,
-        }
+        };
+        crate::services::desktop_typography::current().scale * zoom
     }
 
     /// Build the list of overlays (sub-modals, sheets, app-level modals) that
@@ -311,7 +313,10 @@ impl App {
     /// `overlays()` (sheet + sub-modal) come first, then the global modals
     /// (Settings, Generator, etc.) on top, then the small confirmation
     /// modals (fingerprint, screenshot confirm).
-    fn collect_overlays<'a>(&'a self, rctx: &RenderCtx<'a>) -> Vec<Element<'a, Message, AppTheme>> {
+    pub(super) fn collect_overlays<'a>(
+        &'a self,
+        rctx: &RenderCtx<'a>,
+    ) -> Vec<Element<'a, Message, AppTheme>> {
         if let Some(approval) = &self.ssh_approval {
             return vec![crate::components::modal::view(
                 iced::widget::container(

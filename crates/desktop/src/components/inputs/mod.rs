@@ -49,7 +49,7 @@ pub use select::{multi_select_field, search_select_field, select_field, select_f
 /// the border).
 pub fn bare_text_input<'a, M: Clone + 'a>(value: &'a str) -> TextInput<'a, M, AppTheme> {
     text_input("", value)
-        .size(16)
+        .size(crate::text_size(16))
         .padding([10, 12])
         .width(Fill)
         .style(|theme: &AppTheme, _status| text_input::Style {
@@ -72,9 +72,11 @@ pub fn readonly_field_truncated<'a, M: 'a>(
     colors: &AppColors,
 ) -> Element<'a, M, AppTheme> {
     column![
-        text(label.into()).size(12).color(colors.text_muted),
+        text(label.into())
+            .size(crate::text_size(12))
+            .color(colors.text_muted),
         text(value)
-            .size(14)
+            .size(crate::text_size(14))
             .color(colors.text_primary)
             .wrapping(Wrapping::None)
             .ellipsis(Ellipsis::End),
@@ -157,11 +159,13 @@ fn field_frame_styled<'a, M: 'a>(
     } else {
         colors.text_secondary
     };
-    let floating_label = container(text(label.into()).size(14).color(label_color))
-        .padding([0, 4])
-        .style(move |theme: &AppTheme| {
-            container::Style::default().background(chip_bg(&theme.colors))
-        });
+    let floating_label = container(
+        text(label.into())
+            .size(crate::text_size(14))
+            .color(label_color),
+    )
+    .padding([0, 4])
+    .style(move |theme: &AppTheme| container::Style::default().background(chip_bg(&theme.colors)));
 
     let bordered = container(content)
         .width(Fill)
@@ -190,7 +194,9 @@ pub fn field_error_row<'a, M: 'a>(
 ) -> Element<'a, M, AppTheme> {
     row![
         icons::X_CIRCLE_FILL.render(14.0, colors.danger),
-        text(message.into()).size(12).color(colors.danger),
+        text(message.into())
+            .size(crate::text_size(12))
+            .color(colors.danger),
     ]
     .spacing(6)
     .align_y(Alignment::Center)

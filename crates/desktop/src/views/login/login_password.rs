@@ -49,14 +49,14 @@ fn card_content<'a>(
 
     let hint_link = buttons::transparent(
         text(fl!("login-password-get-hint"))
-            .size(14)
+            .size(crate::text_size(14))
             .color(colors.accent),
     )
     .on_press(LoginMessage::GetPasswordHint)
     .padding(0);
 
     let login_button = buttons::primary(
-        container(text(fl!("login-password-submit")).size(16))
+        container(text(fl!("login-password-submit")).size(crate::text_size(16)))
             .center_x(Fill)
             .padding([4, 8]),
     )
@@ -64,7 +64,7 @@ fn card_content<'a>(
     .width(Fill);
 
     let back_button = buttons::secondary(
-        container(text(fl!("login-password-back")).size(16))
+        container(text(fl!("login-password-back")).size(crate::text_size(16)))
             .center_x(Fill)
             .padding([4, 8]),
     )

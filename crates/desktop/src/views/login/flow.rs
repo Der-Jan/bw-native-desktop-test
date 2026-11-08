@@ -693,7 +693,7 @@ impl LoginView {
         let m = |m| LoginMessage::Flow(m);
         let content: Element<'a, LoginMessage, AppTheme> = if f.ready {
             let mut body = column![
-                text("Angemeldet").size(28),
+                text("Angemeldet").size(crate::text_size(28)),
                 text("Login und lokale Schlüsselprüfung waren erfolgreich."),
                 text(if ctx.syncing {
                     "Der verschlüsselte Tresor wird heruntergeladen und geprüft …"
@@ -716,7 +716,7 @@ impl LoginView {
             .spacing(16)
             .width(420);
             if let Some(error) = ctx.sync_error {
-                body = body.push(text(error).size(14));
+                body = body.push(text(error).size(crate::text_size(14)));
             }
             body.into()
         } else {
@@ -726,13 +726,13 @@ impl LoginView {
                 } else {
                     "Anmeldung"
                 })
-                .size(26)
+                .size(crate::text_size(26))
             ]
             .spacing(16)
             .width(420);
             if let Some(error) = &f.error {
                 body = body
-                    .push(text(error).size(14))
+                    .push(text(error).size(crate::text_size(14)))
                     .push(button("Server / mTLS-Einstellungen").on_press(m(FlowMessage::Settings)));
             }
             if f.pending.is_some() {
@@ -773,19 +773,21 @@ impl LoginView {
     pub(super) fn certificate_controls<'a>(&'a self) -> Element<'a, LoginMessage, AppTheme> {
         let f = &self.flow;
         let m = |m| LoginMessage::Flow(m);
-        let mut body=column![text("mTLS (optional)").size(18),text("PKCS#12 mit genau einem privaten Schlüssel. Die Identität gilt nur für dieses Serverprofil.").size(12)].spacing(10);
+        let mut body=column![text("mTLS (optional)").size(crate::text_size(18)),text("PKCS#12 mit genau einem privaten Schlüssel. Die Identität gilt nur für dieses Serverprofil.").size(crate::text_size(12))].spacing(10);
         if !f.saved_profiles.is_empty() && !f.profile.as_ref().is_some_and(|p| p.account_bound) {
             let selected = f
                 .profile
                 .as_ref()
                 .and_then(|p| f.saved_profiles.iter().find(|choice| choice.id == p.id))
                 .cloned();
-            body = body.push(text("Gespeicherte Serverprofile").size(12)).push(
-                pick_list(selected, f.saved_profiles.clone(), |choice| {
-                    choice.label.clone()
-                })
-                .on_select(|choice| LoginMessage::Flow(FlowMessage::UseProfile(choice.id))),
-            );
+            body = body
+                .push(text("Gespeicherte Serverprofile").size(crate::text_size(12)))
+                .push(
+                    pick_list(selected, f.saved_profiles.clone(), |choice| {
+                        choice.label.clone()
+                    })
+                    .on_select(|choice| LoginMessage::Flow(FlowMessage::UseProfile(choice.id))),
+                );
         }
         if let Some(c) = f.profile.as_ref().and_then(|p| p.certificate.as_ref()) {
             body = body
@@ -798,7 +800,7 @@ impl LoginView {
                             .map(|d| d.to_rfc3339())
                             .unwrap_or_default()
                     ))
-                    .size(12),
+                    .size(crate::text_size(12)),
                 )
                 .push(button("Zertifikat entfernen").on_press(m(FlowMessage::RemoveCertificate)));
         }
@@ -812,7 +814,7 @@ impl LoginView {
                             .to_string_lossy()
                             .to_string(),
                     )
-                    .size(12),
+                    .size(crate::text_size(12)),
                 )
                 .push(
                     text_input("PKCS#12-Passwort", &f.certificate_password)
@@ -828,7 +830,7 @@ impl LoginView {
                     .on_press_maybe((!f.settings_busy).then(|| m(FlowMessage::ImportCertificate))),
                 );
         }
-        body=body.push(text("Zusätzlich erlaubte HTTPS-Ursprünge (durch Leerzeichen getrennt, einschließlich Port)").size(12))
+        body=body.push(text("Zusätzlich erlaubte HTTPS-Ursprünge (durch Leerzeichen getrennt, einschließlich Port)").size(crate::text_size(12)))
             .push(text_input("https://identity.example.org",&f.origins).on_input(move|s|m(FlowMessage::Origins(s))))
             .push(button("Private Server-CA importieren (PEM) …").on_press(m(FlowMessage::PickCa)));
         if f.profile
@@ -836,11 +838,11 @@ impl LoginView {
             .is_some_and(|p| p.server_ca_pem.is_some())
         {
             body = body
-                .push(text("Zusätzliche Server-CA eingerichtet").size(12))
+                .push(text("Zusätzliche Server-CA eingerichtet").size(crate::text_size(12)))
                 .push(button("Zusätzliche Server-CA entfernen").on_press(m(FlowMessage::RemoveCa)));
         }
         if let Some(e) = &f.settings_error {
-            body = body.push(text(e).size(12));
+            body = body.push(text(e).size(crate::text_size(12)));
         }
         body.into()
     }

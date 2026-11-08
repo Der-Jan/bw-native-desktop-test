@@ -111,14 +111,16 @@ impl View for ScreenshotConfirmModal {
 
     fn view<'a>(&'a self, ctx: &RenderCtx<'a>) -> Element<'a, ScreenshotConfirmMessage, AppTheme> {
         let body_text = text(fl!("settings-confirm-window-visible-body"))
-            .size(14)
+            .size(crate::text_size(14))
             .color(ctx.colors.text_secondary);
 
-        let ok_button = buttons::primary(text(fl!("settings-confirm-window-visible-ok")).size(14))
-            .on_press(ScreenshotConfirmMessage::Confirm)
-            .padding(Padding::from([10, 20]))
-            .width(Length::Fill)
-            .into();
+        let ok_button = buttons::primary(
+            text(fl!("settings-confirm-window-visible-ok")).size(crate::text_size(14)),
+        )
+        .on_press(ScreenshotConfirmMessage::Confirm)
+        .padding(Padding::from([10, 20]))
+        .width(Length::Fill)
+        .into();
 
         modal::info_dialog(
             420.0,

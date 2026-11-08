@@ -171,9 +171,10 @@ impl VaultView {
                 )
             };
             let mut content =
-                iced::widget::column![iced::widget::text(label).size(12), search].spacing(8);
+                iced::widget::column![iced::widget::text(label).size(crate::text_size(12)), search]
+                    .spacing(8);
             if let Some(error) = ctx.sync_error {
-                content=content.push(iced::widget::text(format!("Aktualisierung fehlgeschlagen: {error} · Gespeicherter Stand bleibt verfügbar.")).size(12));
+                content=content.push(iced::widget::text(format!("Aktualisierung fehlgeschlagen: {error} · Gespeicherter Stand bleibt verfügbar.")).size(crate::text_size(12)));
             }
             content.into()
         } else {
@@ -202,7 +203,7 @@ impl VaultView {
         let mut heading = iced::widget::column![heading_label(
             title,
             28,
-            crate::APP_FONT_BOLD,
+            crate::app_font_bold(),
             ctx.colors.text_primary
         )]
         .width(Fill)
@@ -211,7 +212,7 @@ impl VaultView {
             heading = heading.push(heading_label(
                 filters.join(" · "),
                 14,
-                crate::APP_FONT,
+                crate::app_font(),
                 ctx.colors.text_secondary,
             ));
         }
@@ -295,7 +296,7 @@ fn heading_label<'a>(
         // paragraph after relayout. Clip a non-wrapping label instead.
         container(
             text(value.clone())
-                .size(size)
+                .size(crate::text_size(size))
                 .font(font)
                 .color(color)
                 .width(Fill)
@@ -303,7 +304,7 @@ fn heading_label<'a>(
         )
         .width(Fill)
         .clip(true),
-        container(text(value).size(14))
+        container(text(value).size(crate::text_size(14)))
             .max_width(600)
             .padding(8)
             .style(|theme: &AppTheme| {

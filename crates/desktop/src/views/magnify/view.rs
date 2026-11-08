@@ -84,11 +84,11 @@ fn locked_body<'a>(colors: &'a AppColors) -> Element<'a, MagnifyMessage, AppThem
 
     let labels = column![
         text(fl!("magnify-locked-title"))
-            .size(14)
+            .size(crate::text_size(14))
             .color(colors.text_primary)
-            .font(crate::APP_FONT_BOLD),
+            .font(crate::app_font_bold()),
         text(fl!("magnify-locked-subtitle"))
-            .size(12)
+            .size(crate::text_size(12))
             .color(colors.text_secondary),
     ]
     .spacing(2);
@@ -163,21 +163,25 @@ fn search_row<'a>(
     let input = search_input(query);
     let trailing: Element<'a, MagnifyMessage, AppTheme> = if is_searching {
         mouse_area(
-            container(text("esc").size(12).color(colors.text_secondary))
-                .padding([4, 10])
-                .style(|theme: &AppTheme| {
-                    container::Style::default()
-                        .background(Background::Color(Color {
-                            a: MAGNIFY_OVERLAY_ALPHA_FAINT,
-                            ..Color::WHITE
-                        }))
-                        .border(
-                            Border::default()
-                                .color(theme.colors.border)
-                                .width(1.0)
-                                .rounded(RADIUS_PILL),
-                        )
-                }),
+            container(
+                text("esc")
+                    .size(crate::text_size(12))
+                    .color(colors.text_secondary),
+            )
+            .padding([4, 10])
+            .style(|theme: &AppTheme| {
+                container::Style::default()
+                    .background(Background::Color(Color {
+                        a: MAGNIFY_OVERLAY_ALPHA_FAINT,
+                        ..Color::WHITE
+                    }))
+                    .border(
+                        Border::default()
+                            .color(theme.colors.border)
+                            .width(1.0)
+                            .rounded(RADIUS_PILL),
+                    )
+            }),
         )
         .on_press(MagnifyMessage::Hide)
         .into()
@@ -230,7 +234,7 @@ fn results_list<'a>(
     if rows.is_empty() {
         container(
             text(fl!("magnify-no-results"))
-                .size(14)
+                .size(crate::text_size(14))
                 .color(colors.text_secondary),
         )
         .padding([12, 16])
@@ -253,7 +257,7 @@ fn search_input<'a>(query: &'a str) -> Element<'a, MagnifyMessage, AppTheme> {
         .id(MAGNIFY_SEARCH_ID)
         .on_input(MagnifyMessage::QueryChanged)
         .icon(icons::SEARCH.input_icon(16.0, text_input::Side::Left))
-        .size(16)
+        .size(crate::text_size(16))
         .padding([10, 8])
         .width(Fill)
         .style(|theme: &AppTheme, _status| text_input::Style {

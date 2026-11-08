@@ -97,12 +97,12 @@ fn toast_view<'a, Message: 'a + Clone>(
         .style(white_alpha_style(cell.clone(), 1.0));
 
     let title_elem = text(toast.title.as_str())
-        .font(crate::APP_FONT_BOLD)
-        .size(14)
+        .font(crate::app_font_bold())
+        .size(crate::text_size(14))
         .style(white_alpha_style(cell.clone(), 1.0));
 
     let body_elem = text(toast.body.as_str())
-        .size(12)
+        .size(crate::text_size(12))
         .style(white_alpha_style(cell.clone(), 0.92));
 
     let close_icon = text(icons::BWI_CLOSE.char().to_string())

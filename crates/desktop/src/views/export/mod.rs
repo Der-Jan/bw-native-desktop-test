@@ -449,10 +449,12 @@ impl ExportView {
 
         let copy = column![
             text(title)
-                .size(13)
-                .font(crate::APP_FONT_BOLD)
+                .size(crate::text_size(13))
+                .font(crate::app_font_bold())
                 .color(colors.text_primary),
-            text(body).size(13).color(colors.text_primary),
+            text(body)
+                .size(crate::text_size(13))
+                .color(colors.text_primary),
         ]
         .spacing(4);
 
@@ -494,7 +496,9 @@ impl ExportView {
             }
             ExportFormatChoice::EncryptedJson => fl!("export-confirm-warning-file-encrypted"),
         };
-        let warning = text(warning_text).size(14).color(colors.text_primary);
+        let warning = text(warning_text)
+            .size(crate::text_size(14))
+            .color(colors.text_primary);
 
         let mut password_input = inputs::bare_text_input(&self.master_password)
             .id(CONFIRM_PASSWORD_FIELD_ID)
@@ -511,7 +515,7 @@ impl ExportView {
         );
 
         let helper = text(fl!("export-confirm-helper"))
-            .size(12)
+            .size(crate::text_size(12))
             .color(colors.text_secondary);
 
         let confirm_disabled = self.master_password.is_empty() || self.validating;

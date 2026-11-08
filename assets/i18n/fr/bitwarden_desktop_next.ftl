@@ -319,7 +319,6 @@ menu-view-generator-history = Historique du générateur
 menu-view-zoom-in = Zoom avant
 menu-view-zoom-out = Zoom arrière
 menu-view-reset-zoom = Réinitialiser le zoom
-menu-view-toggle-fullscreen = Basculer en plein écran
 
 ## Menu — Account
 menu-account-change-password = Changer le mot de passe principal

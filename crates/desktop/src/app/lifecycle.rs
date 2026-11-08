@@ -178,8 +178,10 @@ impl App {
         // `window::Id` is provided natively. `Subscription::map` requires a
         // non-capturing closure, and we need the id bound into the emitted
         // message for daemon multi-window dispatch.
-        let event_sub = iced::event::listen_with(|event, _status, id| match event {
-            iced::Event::Keyboard(ev) => Some(Message::Window(WindowMessage::KeyPressed(id, ev))),
+        let event_sub = iced::event::listen_with(|event, status, id| match event {
+            iced::Event::Keyboard(ev) => {
+                Some(Message::Window(WindowMessage::KeyPressed(id, ev, status)))
+            }
             // Mouse button presses count as session-timeout activity. Cursor
             // moves are intentionally skipped — they fire ~per-frame while
             // the cursor is in the window and would prevent any lock from

@@ -162,26 +162,30 @@ impl View for TitleBarView {
             .enumerate()
             .map(|(i, section)| {
                 let is_open = ctx.open_title_bar_menu == Some(i);
-                let btn = button(text(section.label.clone()).size(14).color(Color::WHITE))
-                    .on_press(TitleBarMessage::TopLevelClicked(i))
-                    .padding([4, 10])
-                    .style(move |theme: &AppTheme, status| {
-                        let bg = if is_open {
-                            theme.colors.titlebar_btn_hover
-                        } else {
-                            match status {
-                                button::Status::Hovered => theme.colors.titlebar_btn_hover,
-                                _ => Color::TRANSPARENT,
-                            }
-                        };
-                        button::Style {
-                            background: Some(Background::Color(bg)),
-                            text_color: Color::WHITE,
-                            border: Border::default(),
-                            shadow: Shadow::default(),
-                            snap: false,
+                let btn = button(
+                    text(section.label.clone())
+                        .size(crate::text_size(14))
+                        .color(Color::WHITE),
+                )
+                .on_press(TitleBarMessage::TopLevelClicked(i))
+                .padding([4, 10])
+                .style(move |theme: &AppTheme, status| {
+                    let bg = if is_open {
+                        theme.colors.titlebar_btn_hover
+                    } else {
+                        match status {
+                            button::Status::Hovered => theme.colors.titlebar_btn_hover,
+                            _ => Color::TRANSPARENT,
                         }
-                    });
+                    };
+                    button::Style {
+                        background: Some(Background::Color(bg)),
+                        text_color: Color::WHITE,
+                        border: Border::default(),
+                        shadow: Shadow::default(),
+                        snap: false,
+                    }
+                });
 
                 let panel = dropdown::menu_panel(
                     &section.entries,

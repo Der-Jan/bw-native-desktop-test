@@ -308,8 +308,13 @@ V1 ships behind `Ctrl+Shift+Space`
 
 ### Biometrics `[L]` `[plan: desktop_native study]`
 
-Touch ID / Windows Hello / polkit unlock. Implementation depends on the desktop_native
-study (under [Plan-first](#plan-first)).
+Touch ID / Windows Hello and Linux authentication remain deferred. The
+[Linux wallet and biometric unlock concept](security-concept.md#linux-wallet-and-biometric-unlock-concept-deferred)
+distinguishes optional Secret Service wallet unlock from fresh biometric key
+release. Acceptance testing with the actual biometric hardware is outstanding;
+do not enable a biometric path based only on simulated authentication. Linux
+wallet unlock can be evaluated separately without a sensor. Other platforms also
+require the desktop_native study (under [Plan-first](#plan-first)).
 
 ---
 

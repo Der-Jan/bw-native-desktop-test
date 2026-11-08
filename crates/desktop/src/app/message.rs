@@ -114,7 +114,7 @@ pub enum WindowMessage {
     /// on the main window defers the real close to our handler.
     CloseRequested(iced::window::Id),
     Closed(iced::window::Id),
-    KeyPressed(iced::window::Id, iced::keyboard::Event),
+    KeyPressed(iced::window::Id, iced::keyboard::Event, iced::event::Status),
     /// Mouse-button down anywhere in a window. Carried separately from
     /// `KeyPressed` so the session-timeout handler can record activity
     /// without us having to materialise a synthetic `keyboard::Event`.

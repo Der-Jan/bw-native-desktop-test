@@ -29,7 +29,7 @@ pub(in super::super) fn view<'a>(
     );
 
     let length_hint = iced::widget::text(fl!("generator-length-hint"))
-        .size(12)
+        .size(crate::text_size(12))
         .color(colors.text_muted);
 
     let include_heading = section_heading(fl!("generator-include"), colors);

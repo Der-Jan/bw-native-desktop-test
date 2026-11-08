@@ -49,7 +49,7 @@ pub fn view<'a>(
         inputs::field_error_row(fl!("login-self-hosted-modal-url-error"), colors)
     } else {
         text(fl!("login-self-hosted-modal-url-helper"))
-            .size(12)
+            .size(crate::text_size(12))
             .color(colors.text_secondary)
             .into()
     };

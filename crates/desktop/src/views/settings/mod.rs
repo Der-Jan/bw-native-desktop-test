@@ -257,8 +257,8 @@ impl SettingsView {
     fn sidebar_view<'a>(&'a self, colors: &'a AppColors) -> Element<'a, SettingsMessage, AppTheme> {
         let mut items = column![
             text(fl!("settings-title"))
-                .size(28)
-                .font(crate::APP_FONT_BOLD)
+                .size(crate::text_size(28))
+                .font(crate::app_font_bold())
                 .color(colors.text_primary),
             Space::new().height(16),
         ]
@@ -336,7 +336,9 @@ fn category_item<'a>(
 
     let content = row![
         kind.icon().render(16.0, icon_color),
-        text(kind.title()).size(14).color(text_color),
+        text(kind.title())
+            .size(crate::text_size(14))
+            .color(text_color),
     ]
     .spacing(10)
     .align_y(Alignment::Center);

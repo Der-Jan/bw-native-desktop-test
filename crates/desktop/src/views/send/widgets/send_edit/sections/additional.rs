@@ -23,7 +23,7 @@ pub(in super::super) fn additional_options_card<'a>(
     items.push(limit_views_field(form, colors));
     items.push(views_left_hint(form, colors).unwrap_or_else(|| {
         text(fl!("send-form-limit-views-hint"))
-            .size(12)
+            .size(crate::text_size(12))
             .color(colors.text_secondary)
             .into()
     }));
@@ -31,7 +31,7 @@ pub(in super::super) fn additional_options_card<'a>(
         checkbox(form.hide_email)
             .label(fl!("send-form-hide-email"))
             .on_toggle(SendEditMessage::HideEmailToggled)
-            .size(18)
+            .size(crate::text_size(18))
             .spacing(8)
             .into(),
     );
@@ -68,7 +68,7 @@ fn views_left_hint<'a>(
     let left = form.views_left()?;
     Some(
         text(fl!("send-form-views-left", count = left.to_string()))
-            .size(12)
+            .size(crate::text_size(12))
             .color(colors.text_secondary)
             .into(),
     )

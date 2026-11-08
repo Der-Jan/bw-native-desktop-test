@@ -410,7 +410,6 @@ menu-view-generator-history = Historial del generador
 menu-view-zoom-in = Acercar
 menu-view-zoom-out = Alejar
 menu-view-reset-zoom = Restablecer zoom
-menu-view-toggle-fullscreen = Pantalla completa
 
 ## Menu — Account
 menu-account-change-password = Cambiar contraseña maestra

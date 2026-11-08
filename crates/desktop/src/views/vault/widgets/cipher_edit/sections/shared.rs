@@ -29,7 +29,7 @@ pub(in super::super) fn item_details_card<'a>(
     let favorite_checkbox = checkbox(form.modified.favorite)
         .label(fl!("form-favorite"))
         .on_toggle(|_| CipherEditMessage::FavoriteToggled)
-        .size(18)
+        .size(crate::text_size(18))
         .spacing(8);
 
     let mut body = column![
@@ -78,7 +78,7 @@ pub(in super::super) fn additional_options_card<'a>(
     ))
     .label(fl!("form-reprompt"))
     .on_toggle(|_| CipherEditMessage::RepromptToggled)
-    .size(18)
+    .size(crate::text_size(18))
     .spacing(8);
 
     let body = column![notes, reprompt_checkbox].spacing(12);
@@ -97,7 +97,7 @@ pub(in super::super) fn custom_fields_card<'a>(
     if fields.is_empty() {
         body = body.push(
             text(fl!("form-custom-field-empty"))
-                .size(14)
+                .size(crate::text_size(14))
                 .color(colors.text_muted),
         );
     } else {
@@ -168,12 +168,12 @@ fn custom_field_row<'a>(
             checkbox(checked)
                 .label(fl!("form-custom-field-enabled"))
                 .on_toggle(move |_| CipherEditMessage::CustomFieldBoolToggled(idx))
-                .size(18)
+                .size(crate::text_size(18))
                 .spacing(8)
                 .into()
         }
         FieldType::Linked => text(fl!("form-custom-field-linked-unsupported"))
-            .size(12)
+            .size(crate::text_size(12))
             .color(colors.text_muted)
             .into(),
     };

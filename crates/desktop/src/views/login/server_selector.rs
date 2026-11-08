@@ -15,7 +15,7 @@ use super::{LoginMessage, ServerOption};
 pub fn simple_status<'a>(server: &str, colors: &AppColors) -> Element<'a, LoginMessage, AppTheme> {
     container(
         text(fl!("login-server-accessing", server = server))
-            .size(14)
+            .size(crate::text_size(14))
             .color(colors.text_secondary),
     )
     .center_x(Fill)
@@ -39,7 +39,7 @@ pub fn view<'a>(
 
     let trigger = button(
         row![
-            text(server_name).size(14).color(accent),
+            text(server_name).size(crate::text_size(14)).color(accent),
             icons::BWI_ANGLE_DOWN.render(12.0, accent),
         ]
         .spacing(4)
@@ -67,7 +67,7 @@ pub fn view<'a>(
     container(
         row![
             text(format!("{} ", fl!("login-server-accessing-label")))
-                .size(14)
+                .size(crate::text_size(14))
                 .color(colors.text_secondary),
             dropdown,
         ]
@@ -106,7 +106,7 @@ fn server_panel<'a>(
             let is_selected = name == current_name;
             let label_color = if is_selected { accent } else { text_primary };
 
-            button(text(name).size(14).color(label_color))
+            button(text(name).size(crate::text_size(14)).color(label_color))
                 .on_press(LoginMessage::SelectServer(opt))
                 .padding([8, 16])
                 .width(Fill)

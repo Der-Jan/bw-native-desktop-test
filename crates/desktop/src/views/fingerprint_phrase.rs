@@ -87,7 +87,7 @@ impl View for FingerprintModal {
     fn view<'a>(&'a self, ctx: &RenderCtx<'a>) -> Element<'a, FingerprintMessage, AppTheme> {
         let phrase_row = row![
             text(self.phrase.as_str())
-                .size(14)
+                .size(crate::text_size(14))
                 .color(ctx.colors.text_primary)
                 .wrapping(Wrapping::None),
             buttons::icon_button(icons::BWI_COPY, FingerprintMessage::Copy, ctx.colors),
@@ -97,7 +97,7 @@ impl View for FingerprintModal {
 
         let learn_more = buttons::primary(
             row![
-                text(fl!("menu-fingerprint-learn-more")).size(14),
+                text(fl!("menu-fingerprint-learn-more")).size(crate::text_size(14)),
                 icons::BWI_EXTERNAL_LINK
                     .render::<FingerprintMessage, AppTheme>(12.0, ctx.colors.card_bg),
             ]
@@ -111,7 +111,7 @@ impl View for FingerprintModal {
 
         let close_button = buttons::secondary(
             text(fl!("menu-fingerprint-close"))
-                .size(14)
+                .size(crate::text_size(14))
                 .color(ctx.colors.accent),
         )
         .on_press(FingerprintMessage::Close)

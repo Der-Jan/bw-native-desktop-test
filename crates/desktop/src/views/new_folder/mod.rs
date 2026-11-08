@@ -137,7 +137,7 @@ impl View for NewFolderView {
         }
 
         let helper = text(fl!("new-folder-modal-helper"))
-            .size(12)
+            .size(crate::text_size(12))
             .color(ctx.colors.text_secondary);
 
         let submit_disabled = self.saving || self.name.trim().is_empty();

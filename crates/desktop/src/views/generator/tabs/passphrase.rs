@@ -28,7 +28,7 @@ pub(in super::super) fn view<'a>(
         colors,
     );
     let num_hint = iced::widget::text(fl!("generator-num-words-hint"))
-        .size(12)
+        .size(crate::text_size(12))
         .color(colors.text_muted);
 
     let separator = inputs::text_field(

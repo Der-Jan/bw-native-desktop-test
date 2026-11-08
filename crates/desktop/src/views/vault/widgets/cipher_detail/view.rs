@@ -70,7 +70,9 @@ pub fn view<'a>(
             if let Some(notes) = item.notes.as_deref() {
                 sections.push(section_label(fl!("detail-section-note"), colors));
                 sections.push(card_with_margin(styled_card(
-                    text(notes).size(14).color(colors.text_primary),
+                    text(notes)
+                        .size(crate::text_size(14))
+                        .color(colors.text_primary),
                 )));
             }
         }
@@ -107,7 +109,9 @@ pub fn view<'a>(
 
     let body = scrollable(column(sections).spacing(4).padding([12, 20])).height(Fill);
     let bottom = if read_only {
-        components::pane_footer(text("Synchronisierter Tresor · schreibgeschützt").size(12))
+        components::pane_footer(
+            text("Synchronisierter Tresor · schreibgeschützt").size(crate::text_size(12)),
+        )
     } else {
         bottom_bar(colors)
     };
@@ -136,7 +140,7 @@ fn header_row<'a>(
 }
 
 fn bottom_bar<'a>(colors: &'a AppColors) -> Element<'a, CipherDetailMessage, AppTheme> {
-    let edit_btn = buttons::primary(text(fl!("detail-edit-button")).size(14))
+    let edit_btn = buttons::primary(text(fl!("detail-edit-button")).size(crate::text_size(14)))
         .on_press(CipherDetailMessage::Edit)
         .padding([8, 20]);
     let delete_btn = buttons::delete_icon_button(CipherDetailMessage::Delete, colors);

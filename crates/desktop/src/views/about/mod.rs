@@ -34,15 +34,19 @@ pub fn info_string() -> String {
 pub(crate) fn view<'a>(ctx: &RenderCtx<'a>) -> Element<'a, AboutMessage, AppTheme> {
     // "Bitwarden" is the product name — kept untranslated.
     let title = text("Bitwarden")
-        .size(28)
+        .size(crate::text_size(28))
         .color(ctx.colors.text_primary)
-        .font(crate::APP_FONT_BOLD);
+        .font(crate::app_font_bold());
 
     let info_line = |label: String, value: String| -> Element<'_, AboutMessage, AppTheme> {
         row![
-            text(label).size(14).color(ctx.colors.text_secondary),
+            text(label)
+                .size(crate::text_size(14))
+                .color(ctx.colors.text_secondary),
             Space::new().width(Fill),
-            text(value).size(14).color(ctx.colors.text_primary),
+            text(value)
+                .size(crate::text_size(14))
+                .color(ctx.colors.text_primary),
         ]
         .spacing(8)
         .align_y(Alignment::Center)
@@ -63,10 +67,10 @@ pub(crate) fn view<'a>(ctx: &RenderCtx<'a>) -> Element<'a, AboutMessage, AppThem
     ]
     .spacing(6);
 
-    let copy_button = buttons::secondary(text(fl!("about-copy-button")).size(14))
+    let copy_button = buttons::secondary(text(fl!("about-copy-button")).size(crate::text_size(14)))
         .on_press(AboutMessage::CopyInfo)
         .padding([8, 16]);
-    let close_button = buttons::primary(text(fl!("about-close-button")).size(14))
+    let close_button = buttons::primary(text(fl!("about-close-button")).size(crate::text_size(14)))
         .on_press(AboutMessage::Close)
         .padding([8, 16]);
 

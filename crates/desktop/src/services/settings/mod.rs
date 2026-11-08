@@ -136,7 +136,8 @@ pub struct Settings {
     pub user_preferences: HashMap<UserId, UserPreferences>,
 
     /// UI scale fed into iced's per-window `scale_factor` callback. Composes
-    /// multiplicatively with OS DPI. Stepped from the View → Zoom in / out / reset menu.
+    /// multiplicatively with desktop typography and OS DPI. Reset restores the
+    /// desktop baseline. Stepped from the View → Zoom in / out / reset menu.
     pub zoom_factor: ZoomFactor,
 }
 

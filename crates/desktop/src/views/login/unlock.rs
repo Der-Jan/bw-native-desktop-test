@@ -111,7 +111,7 @@ fn card_content<'a>(
     // of UI disappearing and returning around a ~200 ms task.
     items.push(
         text(fl!("login-unlock-or"))
-            .size(14)
+            .size(crate::text_size(14))
             .color(colors.text_primary)
             .center()
             .into(),
@@ -158,7 +158,7 @@ fn secondary_action<'a>(
     in_progress: bool,
 ) -> iced::widget::Button<'a, LoginMessage, AppTheme> {
     let mut btn = buttons::secondary(
-        container(text(label).size(16))
+        container(text(label).size(crate::text_size(16)))
             .center_x(Fill)
             .padding([4, 8]),
     )
@@ -188,7 +188,7 @@ fn primary_action<'a>(
         .into()
     } else {
         buttons::primary(
-            container(text(label).size(16))
+            container(text(label).size(crate::text_size(16)))
                 .center_x(Fill)
                 .padding([4, 8]),
         )

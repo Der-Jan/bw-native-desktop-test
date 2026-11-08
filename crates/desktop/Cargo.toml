@@ -5,7 +5,12 @@ edition = "2024"
 license-file = "LICENSE.txt"
 
 [features]
-default = []
+default = ["gpu"]
+
+# Hardware rendering with automatic tiny-skia fallback.
+# CPU comparison: ICED_BACKEND=tiny-skia cargo run
+# CPU-only build: cargo run --no-default-features
+gpu = ["iced/wgpu"]
 
 # Debug overlay with layout bounds, render time, widget IDs. Toggle with F12.
 # Usage: cargo run --features dev

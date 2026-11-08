@@ -199,7 +199,7 @@ fn avatar<'a, M: 'a>(email: &str, size: f32, palette: &[Color]) -> Element<'a, M
         text(initials)
             .size(size * 0.4)
             .color(Color::WHITE)
-            .font(crate::APP_FONT_BOLD),
+            .font(crate::app_font_bold()),
     )
     .width(size)
     .height(size)
@@ -220,9 +220,11 @@ fn active_account_card<'a>(
     let identity = row![
         avatar(&entry.email, 40.0, &colors.avatar_palette),
         column![
-            text(&entry.email).size(14).color(colors.text_primary),
+            text(&entry.email)
+                .size(crate::text_size(14))
+                .color(colors.text_primary),
             text(&entry.server_url)
-                .size(12)
+                .size(crate::text_size(12))
                 .color(colors.text_secondary),
         ]
         .spacing(2)
@@ -235,7 +237,7 @@ fn active_account_card<'a>(
     let lock_now = buttons::primary(
         row![
             icons::LOCK_FILL.render(12.0, colors.card_bg),
-            text(fl!("account-switcher-lock-now")).size(14),
+            text(fl!("account-switcher-lock-now")).size(crate::text_size(14)),
         ]
         .spacing(6)
         .align_y(Alignment::Center),
@@ -247,7 +249,7 @@ fn active_account_card<'a>(
     let log_out = buttons::secondary(
         row![
             icons::BOX_ARROW_RIGHT.render(12.0, colors.accent),
-            text(fl!("account-switcher-log-out")).size(14),
+            text(fl!("account-switcher-log-out")).size(crate::text_size(14)),
         ]
         .spacing(6)
         .align_y(Alignment::Center),
@@ -277,9 +279,11 @@ fn other_account_row<'a>(
         row![
             avatar(&entry.email, 32.0, &colors.avatar_palette),
             column![
-                text(&entry.email).size(14).color(colors.text_primary),
+                text(&entry.email)
+                    .size(crate::text_size(14))
+                    .color(colors.text_primary),
                 text(&entry.server_url)
-                    .size(12)
+                    .size(crate::text_size(12))
                     .color(colors.text_secondary),
             ]
             .spacing(2)
@@ -308,7 +312,7 @@ fn options_row<'a>(
     buttons::ghost(
         row![
             icon.render(14.0, colors.accent),
-            text(label).size(14).color(colors.accent),
+            text(label).size(crate::text_size(14)).color(colors.accent),
         ]
         .spacing(10)
         .align_y(Alignment::Center),
@@ -324,9 +328,13 @@ fn options_row<'a>(
 }
 
 fn section_label<'a, M: 'a>(label: String, colors: &AppColors) -> Element<'a, M, AppTheme> {
-    container(text(label).size(12).color(colors.text_muted))
-        .padding([8, 12])
-        .into()
+    container(
+        text(label)
+            .size(crate::text_size(12))
+            .color(colors.text_muted),
+    )
+    .padding([8, 12])
+    .into()
 }
 
 fn section_divider<'a, M: 'a>() -> Element<'a, M, AppTheme> {

@@ -51,13 +51,13 @@ pub fn view<'a>(
     // collides with the action pills on the selected row.
     let info = column![
         text(item.name.as_str())
-            .size(14)
+            .size(crate::text_size(14))
             .color(text_primary)
-            .font(crate::APP_FONT_BOLD)
+            .font(crate::app_font_bold())
             .wrapping(Wrapping::None)
             .ellipsis(Ellipsis::End),
         text(item.subtitle.as_str())
-            .size(14)
+            .size(crate::text_size(14))
             .color(text_secondary)
             .wrapping(Wrapping::None)
             .ellipsis(Ellipsis::End),
@@ -122,8 +122,14 @@ fn action_pill<'a>(
 ) -> Element<'a, MagnifyMessage, AppTheme> {
     container(
         row![
-            text(label).size(12).color(colors.text_primary),
-            keybind(text(shortcut).size(12).color(colors.text_primary)),
+            text(label)
+                .size(crate::text_size(12))
+                .color(colors.text_primary),
+            keybind(
+                text(shortcut)
+                    .size(crate::text_size(12))
+                    .color(colors.text_primary)
+            ),
         ]
         .spacing(8)
         .align_y(Alignment::Center),

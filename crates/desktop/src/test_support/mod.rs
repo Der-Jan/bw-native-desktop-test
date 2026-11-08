@@ -83,14 +83,13 @@ use iced::{Element, Settings};
 use iced_test::simulator::Simulator;
 
 use crate::{
-    APP_FONT,
     app::{App, Outcome, RenderCtx, View},
-    assets,
+    app_font, assets,
     components::{icons, toast::Toast},
     theme::AppTheme,
 };
 
-/// Select the same `tiny-skia` backend as the application for headless
+/// Select the deterministic `tiny-skia` backend for headless
 /// snapshots. Idempotent and parallel-safe via `OnceLock`.
 pub fn init() {
     static INIT: OnceLock<()> = OnceLock::new();
@@ -120,7 +119,8 @@ pub fn simulator<'a, M>(
             assets::BWI_FONT.into(),
             icons::FONT_BYTES.into(),
         ],
-        default_font: APP_FONT,
+        default_font: app_font(),
+        default_text_size: crate::text_size(14).into(),
         ..Settings::default()
     };
     Simulator::with_settings(settings, element)

@@ -78,7 +78,6 @@ pub enum MenuAction {
     LogOutAccount(UserId),
     SyncNow,
     SearchVault,
-    ToggleFullScreen,
     Minimize,
     HideToTray,
     ToggleAlwaysOnTop,

@@ -93,7 +93,7 @@ pub(in super::super) fn autofill_card<'a>(
     if uris.is_empty() {
         body = body.push(
             text(fl!("form-uri-empty"))
-                .size(14)
+                .size(crate::text_size(14))
                 .color(colors.text_muted),
         );
     } else {

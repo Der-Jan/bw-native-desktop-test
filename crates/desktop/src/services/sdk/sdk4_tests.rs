@@ -157,6 +157,15 @@ async fn password_unlock_crud_export_and_reunlock_use_real_sdk_state() {
 
 #[tokio::test]
 async fn protected_items_require_fresh_action_grants_and_enforce_permissions() {
+    assert_protected_item(bitwarden_vault::CipherType::Login).await;
+}
+
+#[tokio::test]
+async fn imported_license_notes_require_password_and_preserve_custom_fields() {
+    assert_protected_item(bitwarden_vault::CipherType::SecureNote).await;
+}
+
+async fn assert_protected_item(kind: bitwarden_vault::CipherType) {
     use super::{Action, Authorization};
     let uid = "00000000-0000-0000-0000-000000000043".parse().unwrap();
     let mut manager = unlocked_manager(uid);
@@ -186,7 +195,7 @@ async fn protected_items_require_fresh_action_grants_and_enforce_permissions() {
         .await
         .unwrap();
     let now = chrono::Utc::now();
-    let cipher:CipherView=serde_json::from_value(serde_json::json!({"name":"Protected","type":1,"collectionIds":[],"partial":false,"favorite":false,"reprompt":1,"organizationUseTotp":false,"edit":true,"viewPassword":true,"creationDate":now,"revisionDate":now,"login":{"password":"protected secret"}})).unwrap();
+    let cipher:CipherView=serde_json::from_value(serde_json::json!({"name":"Protected","type":kind,"collectionIds":[],"partial":false,"favorite":false,"reprompt":1,"organizationUseTotp":false,"edit":true,"viewPassword":true,"creationDate":now,"revisionDate":now,"notes":"Synthetic imported license notes","fields":[{"name":"License key","value":"SYNTHETIC-LICENSE","type":1}],"login":if kind == bitwarden_vault::CipherType::Login {Some(serde_json::json!({"password":"protected secret"}))} else {None},"secureNote":if kind == bitwarden_vault::CipherType::SecureNote {Some(serde_json::json!({"type":0}))} else {None}})).unwrap();
     let saved = manager
         .client_for(&uid)
         .unwrap()
@@ -208,16 +217,30 @@ async fn protected_items_require_fresh_action_grants_and_enforce_permissions() {
         action: Action::Read,
     };
     let (c, envelope) = manager.validation_data_for(&uid).unwrap();
+    assert!(
+        c.authorize_password(envelope, "wrong-password".into(), target.clone())
+            .await
+            .is_err()
+    );
+    assert!(!manager.permitted(&uid, &target, false));
+    let (c, envelope) = manager.validation_data_for(&uid).unwrap();
     c.authorize_password(envelope, password.into(), target.clone())
         .await
         .unwrap();
-    assert!(
-        manager
-            .client_for(&uid)
-            .unwrap()
-            .full_cipher(id)
-            .await
-            .is_ok()
+    let details = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    assert_eq!(details.r#type, kind);
+    assert_eq!(
+        details.notes.as_deref(),
+        Some("Synthetic imported license notes")
+    );
+    assert_eq!(
+        details.fields.as_ref().unwrap()[0].value.as_deref(),
+        Some("SYNTHETIC-LICENSE")
     );
     assert!(
         manager

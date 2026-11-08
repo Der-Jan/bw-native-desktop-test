@@ -33,26 +33,27 @@ pub fn view<'a>(
 ) -> Element<'a, (Uuid, Action), AppTheme> {
     let deny = (approval.id, Action::Decide(Decision::Deny));
     let mut details = column![
-        text(fl!("ssh-approval-key", name = approval.key_name.clone())).size(16),
-        text(approval.fingerprint.clone()).size(14),
-        text(fl!("ssh-approval-user", name = approval.username.clone())).size(14),
-        text(fl!("ssh-approval-process", name = approval.process.clone())).size(14),
+        text(fl!("ssh-approval-key", name = approval.key_name.clone())).size(crate::text_size(16)),
+        text(approval.fingerprint.clone()).size(crate::text_size(14)),
+        text(fl!("ssh-approval-user", name = approval.username.clone())).size(crate::text_size(14)),
+        text(fl!("ssh-approval-process", name = approval.process.clone()))
+            .size(crate::text_size(14)),
         text(fl!("ssh-approval-process-note"))
-            .size(12)
+            .size(crate::text_size(12))
             .color(colors.text_secondary),
     ]
     .spacing(10)
     .width(Fill);
     if approval.hosts.is_empty() {
-        details = details.push(text(fl!("ssh-approval-unbound")).size(14));
+        details = details.push(text(fl!("ssh-approval-unbound")).size(crate::text_size(14)));
     } else {
-        details = details.push(text(fl!("ssh-approval-hosts")).size(14));
+        details = details.push(text(fl!("ssh-approval-hosts")).size(crate::text_size(14)));
         for host in &approval.hosts {
-            details = details.push(text(host.clone()).size(12));
+            details = details.push(text(host.clone()).size(crate::text_size(12)));
         }
     }
     if !approval.hosts.is_empty() && !approval.can_remember {
-        details = details.push(text(fl!("ssh-approval-bound-once")).size(14));
+        details = details.push(text(fl!("ssh-approval-bound-once")).size(crate::text_size(14)));
     }
     let action = |decision: Decision, label: String, next: Decision, previous: Decision| {
         let message = (approval.id, Action::Decide(decision));
@@ -108,7 +109,7 @@ pub fn view<'a>(
         // Keep actions visible even with long key names, usernames or host paths.
         scrollable(details).height(260.0),
         text(fl!("ssh-approval-timeout"))
-            .size(12)
+            .size(crate::text_size(12))
             .color(colors.text_secondary),
         actions
     ]

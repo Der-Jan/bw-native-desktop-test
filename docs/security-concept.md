@@ -155,6 +155,81 @@ before clearing keys or dispose of its isolated candidate client. Never publish 
 unlocked candidate after its generation expires. A network request already sent
 may still reach the server; prevent its response from reviving local state.
 
+## Linux wallet and biometric unlock concept (deferred)
+
+Recorded 2026-11-08. Concept only: do not enable biometric unlock or change system
+PAM configuration until the key-release design and hardware can be tested.
+
+### Shared wallet interface
+
+Use the freedesktop Secret Service D-Bus API (`org.freedesktop.secrets`) through
+our existing Rust `keyring` adapter, rather than separate KDE/GNOME integrations.
+GNOME Keyring and KDE's KWallet/Secret Service infrastructure are providers; the
+exact installed provider depends on desktop and distribution versions. There is
+a common protocol, not a single mandatory Linux wallet implementation.
+
+The current `accounts/storage.rs` already uses this interface on Linux: a random
+wrapping key is stored in the OS credential store and protects local AEAD credential
+envelopes, including persisted login and mTLS secrets. That does not currently
+provide vault unlock. The master password must never be saved for this feature.
+
+The protocol supports locked collections/items and provider prompts, but does not
+guarantee a fresh password/biometric check for every read, hardware-backed storage,
+or uniform application access control. A desktop wallet may already be unlocked
+by login. An application label/UUID is a lookup namespace, not proof that another
+process running as the same user cannot retrieve the secret. Collection lock state
+also differs from our per-account vault lock state. Do not lock the shared desktop
+wallet as a side effect of locking this app.
+
+### Two independent future options
+
+1. **Unlock using the desktop wallet:** a simpler, explicitly opt-in convenience
+   mode, testable without biometric hardware. After master-password confirmation,
+   create an account/installation-bound wrapping secret for SDK-supported local
+   unlock material. Retrieve it from Secret Service on an explicit unlock action;
+   preserve all existing SDK session, generation and stale-result checks. Explain
+   that trust extends to the desktop session and wallet access policy; an already
+   unlocked wallet may release the secret without another prompt. Name this mode
+   “Desktop wallet unlock”, never “Biometric unlock”. This is a proposed option,
+   not an approved security boundary or an implemented feature.
+2. **Fresh biometric authentication:** remain deferred. Fingerprints can use
+   fprintd/PAM; IR face recognition can potentially use Howdy/PAM if the camera,
+   IR stream and emitter work under Linux. A successful PAM/fprintd/polkit check
+   alone supplies no vault decryption secret. A stronger design needs a trusted
+   key-release component enforcing fresh authentication before releasing the
+   wrapping secret; an app-side check followed by an unrestricted wallet read
+   does not establish that boundary. TPM-backed protection is a separate design
+   decision, not something supplied automatically by Secret Service or PAM.
+
+Howdy explicitly warns about lookalike/photo spoofing. Windows Hello branding on
+a camera does not establish equivalent Linux authentication guarantees. Camera
+compatibility and IR-emitter support must be verified for the actual model before
+any face-unlock implementation or security claim.
+
+### Acceptance gates before implementation
+
+- Default off; activation requires a fresh master-password check and explicit
+  acknowledgement of the chosen mode's protection and persistence across restarts.
+- Validate the pinned SDK's local key wrapping/unlock path; use a dedicated secret
+  per installation/account and separate it from token and certificate keys.
+- Missing/locked/unavailable wallet, cancelled prompts and corrupt envelopes fail
+  closed with a usable master-password fallback; never silently store plaintext.
+- Lock clears runtime unlock material. Account switch, cancellation and lock revoke
+  pending unlock results. Logout, disabling the feature and account removal delete
+  the dedicated secret and envelope with recoverable deletion on failure.
+- Test wallet availability, login-unlocked versus locked wallets, restart, removal,
+  stale results and account separation on KDE and GNOME. For biometric mode, also
+  test failure/cancellation, daemon loss and the real sensor/IR camera. Tests using
+  fake authentication cannot validate spoof resistance or actual key-release policy.
+
+References (reviewed 2026-11-08):
+[Secret Service specification](https://specifications.freedesktop.org/secret-service/latest-single/),
+[KDE wallet/provider architecture](https://github.com/KDE/kwallet/blob/master/README.md),
+[libsecret and GNOME Keyring](https://gitlab.gnome.org/GNOME/libsecret/-/blob/main/docs/reference/libsecret/migrating-libgnome-keyring.md),
+[fprintd](https://fprint.freedesktop.org/),
+[Howdy security limitations](https://github.com/boltgolt/howdy#a-note-on-security),
+[IR emitter support](https://github.com/EmixamPP/linux-enable-ir-emitter).
+
 ## Lock and logout contracts
 
 Lock begins by denying new plaintext operations and advancing the unlock

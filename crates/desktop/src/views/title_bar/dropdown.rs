@@ -134,7 +134,9 @@ fn render_entry<'a>(
         colors.text_muted
     };
 
-    let label_text = text(entry.label.clone()).size(14).color(label_color);
+    let label_text = text(entry.label.clone())
+        .size(crate::text_size(14))
+        .color(label_color);
 
     let content: Element<'_, TitleBarMessage, AppTheme> = if is_sub {
         row![
@@ -149,7 +151,9 @@ fn render_entry<'a>(
         row![
             label_text,
             iced::widget::Space::new().width(Fill),
-            text(shortcut_text).size(12).color(shortcut_color),
+            text(shortcut_text)
+                .size(crate::text_size(12))
+                .color(shortcut_color),
         ]
         .spacing(16)
         .align_y(Alignment::Center)
@@ -220,18 +224,22 @@ fn render_submenu_item<'a>(
         colors.text_muted
     };
 
-    let label_text = text(entry.label.clone()).size(14).color(label_color);
+    let label_text = text(entry.label.clone())
+        .size(crate::text_size(14))
+        .color(label_color);
 
     let content: Element<'_, TitleBarMessage, AppTheme> =
         if let Some(shortcut_text) = entry.shortcut_display() {
             row![
                 label_text,
                 iced::widget::Space::new().width(Fill),
-                text(shortcut_text).size(12).color(if enabled {
-                    colors.text_secondary
-                } else {
-                    colors.text_muted
-                }),
+                text(shortcut_text)
+                    .size(crate::text_size(12))
+                    .color(if enabled {
+                        colors.text_secondary
+                    } else {
+                        colors.text_muted
+                    }),
             ]
             .spacing(16)
             .align_y(Alignment::Center)

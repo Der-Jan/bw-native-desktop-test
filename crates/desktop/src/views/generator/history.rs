@@ -30,7 +30,7 @@ pub(super) fn view<'a>(
     let header = row![
         back,
         text(fl!("generator-history-heading"))
-            .size(14)
+            .size(crate::text_size(14))
             .color(colors.text_secondary),
     ]
     .spacing(8)
@@ -39,7 +39,7 @@ pub(super) fn view<'a>(
     let body: Element<'a, GeneratorMessage, AppTheme> = if history.is_empty() {
         container(
             text(fl!("generator-history-empty"))
-                .size(14)
+                .size(crate::text_size(14))
                 .color(colors.text_muted),
         )
         .padding(Padding::from([24, 16]))
@@ -53,7 +53,7 @@ pub(super) fn view<'a>(
         col.into()
     };
 
-    let clear = buttons::secondary(text(fl!("generator-history-clear")).size(14))
+    let clear = buttons::secondary(text(fl!("generator-history-clear")).size(crate::text_size(14)))
         .padding([8, 16])
         .on_press(GeneratorMessage::ClearHistory);
 
@@ -82,13 +82,13 @@ fn history_row<'a>(
     .on_press(GeneratorMessage::CopyHistoryEntry(idx));
 
     let value = text(entry.value.clone())
-        .size(14)
+        .size(crate::text_size(14))
         .font(iced::Font::MONOSPACE)
         .color(colors.text_primary)
         .wrapping(iced::widget::text::Wrapping::None);
 
     let age = text(format_relative(now.signed_duration_since(entry.created)))
-        .size(12)
+        .size(crate::text_size(12))
         .color(colors.text_muted);
 
     container(

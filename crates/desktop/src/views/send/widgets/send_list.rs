@@ -46,7 +46,7 @@ pub fn search_view<'a>(query: &'a str) -> Element<'a, SearchMessage, AppTheme> {
         .on_input(SearchMessage::QueryChanged)
         .icon(icons::SEARCH.input_icon(16.0, text_input::Side::Left))
         .padding([10, 12])
-        .size(14)
+        .size(crate::text_size(14))
         .style(|theme: &AppTheme, _status| text_input::Style {
             background: Background::Color(theme.colors.background),
             border: Border::default()
@@ -74,14 +74,14 @@ pub fn view<'a>(
     let header = container(
         row![
             text(fl!("send-column-name"))
-                .size(14)
+                .size(crate::text_size(14))
                 .color(colors.table_header)
-                .font(crate::APP_FONT_BOLD)
+                .font(crate::app_font_bold())
                 .width(Fill),
             text(fl!("send-column-deletion"))
-                .size(14)
+                .size(crate::text_size(14))
                 .color(colors.table_header)
-                .font(crate::APP_FONT_BOLD),
+                .font(crate::app_font_bold()),
             Space::new().width(64.0),
         ]
         .spacing(8)
@@ -96,6 +96,13 @@ pub fn view<'a>(
         items,
         scroll,
         ROW_HEIGHT,
+        |i, item| {
+            (
+                items.as_ptr() as usize,
+                item.id,
+                if item.id.is_none() { i } else { 0 },
+            )
+        },
         |i, item| row_element(i, item, selected_index == Some(i), colors),
         SendListMessage::Scrolled,
     )
@@ -115,7 +122,7 @@ pub fn view<'a>(
 pub fn empty_state<'a>(colors: &'a AppColors) -> Element<'a, SendListMessage, AppTheme> {
     container(
         text(fl!("send-empty-body"))
-            .size(14)
+            .size(crate::text_size(14))
             .color(colors.text_secondary),
     )
     .padding([48, 24])
@@ -138,13 +145,13 @@ fn row_element<'a>(
     .render(20.0, colors.text_primary);
 
     let name = text(item.name.as_str())
-        .size(14)
+        .size(crate::text_size(14))
         .color(colors.text_primary)
         .wrapping(Wrapping::None)
         .ellipsis(Ellipsis::End);
 
     let deletion = text(format_deletion_date(&item.deletion_date))
-        .size(14)
+        .size(crate::text_size(14))
         .color(colors.text_secondary)
         .wrapping(Wrapping::None);
 

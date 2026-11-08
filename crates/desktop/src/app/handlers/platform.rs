@@ -184,7 +184,7 @@ impl App {
                 }
                 Task::none()
             }
-            WindowMessage::KeyPressed(id, ev) => {
+            WindowMessage::KeyPressed(id, ev, status) => {
                 if let Some((window, request)) = self.ssh_approval_window
                     && window == id
                 {
@@ -244,6 +244,24 @@ impl App {
                 {
                     self.views.settings.close();
                     return Task::none();
+                }
+                if status == iced::event::Status::Ignored
+                    && modifiers.is_empty()
+                    && self.screen == Screen::Vault
+                    && self.open_overlay.is_none()
+                    && self.views.vault.list_keyboard_enabled()
+                    && self.collect_overlays(&self.render_ctx(id)).is_empty()
+                {
+                    use iced::keyboard::{Key, key::Named};
+                    match key {
+                        Key::Named(Named::PageUp) => {
+                            return self.views.vault.scroll_page_task(false);
+                        }
+                        Key::Named(Named::PageDown) => {
+                            return self.views.vault.scroll_page_task(true);
+                        }
+                        _ => {}
+                    }
                 }
                 let state = self.menu_state();
                 let Some(action) = self.menu.find_shortcut_action(&key, modifiers, &state) else {
@@ -396,18 +414,6 @@ impl App {
             }
             MenuAction::LogOutAccount(uid) => {
                 return self.handle_log_out_for(uid);
-            }
-            MenuAction::ToggleFullScreen => {
-                let id = self.main_window_id();
-                if let Some(info) = self.windows.get_mut(&id) {
-                    info.fullscreen = !info.fullscreen;
-                    let mode = if info.fullscreen {
-                        iced::window::Mode::Fullscreen
-                    } else {
-                        iced::window::Mode::Windowed
-                    };
-                    return iced::window::set_mode(id, mode);
-                }
             }
             MenuAction::Minimize => {
                 return iced::window::minimize(self.main_window_id(), true);
@@ -608,7 +614,6 @@ impl App {
                 size: info.size,
                 min_size: Some(iced::Size::new(800.0, 750.0)),
                 maximized: info.maximized,
-                fullscreen: info.fullscreen,
                 level: if info.always_on_top {
                     iced::window::Level::AlwaysOnTop
                 } else {
@@ -708,5 +713,80 @@ mod tray_window_tests {
             app.handle_window_message(WindowMessage::HideBackendResolved { id, wayland: false });
         assert!(app.main_window_hidden && !app.main_window_suspended);
         assert_eq!(app.main_window_id(), id);
+    }
+}
+
+#[cfg(test)]
+mod page_key_tests {
+    use super::*;
+    use iced::{
+        event::Status,
+        keyboard::{Modifiers, key::Named},
+    };
+
+    fn page(
+        id: iced::window::Id,
+        key: Named,
+        status: Status,
+        modifiers: Modifiers,
+    ) -> WindowMessage {
+        let iced::Event::Keyboard(mut event) = iced_test::simulator::press_key(key, None) else {
+            unreachable!()
+        };
+        if let iced::keyboard::Event::KeyPressed {
+            modifiers: value, ..
+        } = &mut event
+        {
+            *value = modifiers;
+        }
+        WindowMessage::KeyPressed(id, event, status)
+    }
+    #[tokio::test]
+    async fn page_keys_scroll_only_the_unobstructed_main_vault_and_respect_capture() {
+        crate::test_support::init();
+        let mut app = App::test();
+        let id = app.main_window_id();
+        app.screen = Screen::Vault;
+        let uid = crate::domain::UserId::new_v4();
+        app.active_user = Some(uid);
+        app.client_manager = crate::services::sdk::test_support::unlocked_manager(uid);
+        for key in [Named::PageDown, Named::PageUp] {
+            assert!(
+                app.handle_window_message(page(id, key, Status::Ignored, Modifiers::empty()))
+                    .units()
+                    > 0
+            );
+            assert_eq!(
+                app.handle_window_message(page(id, key, Status::Captured, Modifiers::empty()))
+                    .units(),
+                0
+            );
+            assert_eq!(
+                app.handle_window_message(page(id, key, Status::Ignored, Modifiers::CTRL))
+                    .units(),
+                0
+            );
+            assert_eq!(
+                app.handle_window_message(page(
+                    iced::window::Id::unique(),
+                    key,
+                    Status::Ignored,
+                    Modifiers::empty()
+                ))
+                .units(),
+                0
+            );
+        }
+        let _ = app.handle_menu_action(crate::services::menu::MenuAction::Settings);
+        assert_eq!(
+            app.handle_window_message(page(
+                id,
+                Named::PageDown,
+                Status::Ignored,
+                Modifiers::empty()
+            ))
+            .units(),
+            0
+        );
     }
 }

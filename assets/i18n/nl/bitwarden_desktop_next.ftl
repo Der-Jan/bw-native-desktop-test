@@ -319,7 +319,6 @@ menu-view-generator-history = Generator-geschiedenis
 menu-view-zoom-in = Inzoomen
 menu-view-zoom-out = Uitzoomen
 menu-view-reset-zoom = Zoom resetten
-menu-view-toggle-fullscreen = Volledig scherm aan/uit
 
 ## Menu — Account
 menu-account-change-password = Hoofdwachtwoord wijzigen

@@ -33,25 +33,25 @@ macro_rules! fl {
     }};
 }
 
-use iced::{
-    Font,
-    font::{Family, Weight},
-};
+use iced::{Font, font::Weight};
 
 use crate::{app::App, components::icons};
 
-/// App-wide default font (Inter 18pt Medium).
-pub const APP_FONT: Font = Font {
-    family: Family::Name("Inter 18pt"),
-    weight: Weight::Medium,
-    stretch: iced::font::Stretch::Normal,
-    style: iced::font::Style::Normal,
-};
+/// Desktop typography where configured, otherwise the system sans-serif font.
+pub fn app_font() -> Font {
+    services::desktop_typography::current().font
+}
+pub fn app_font_bold() -> Font {
+    Font {
+        weight: Weight::Bold,
+        ..app_font()
+    }
+}
 
-pub const APP_FONT_BOLD: Font = Font {
-    weight: Weight::Bold,
-    ..APP_FONT
-};
+/// Rounded point sizes derived from the compact typography hierarchy.
+pub fn text_size(design: u32) -> f32 {
+    services::desktop_typography::current().text_size(design)
+}
 
 fn main() -> iced::Result {
     init_tracing();
@@ -83,7 +83,11 @@ fn main() -> iced::Result {
     }
     services::instance_lock::cleanup_stale_socket();
 
-    tracing::info!("Starting app with Iced backend: tiny-skia");
+    tracing::info!(
+        gpu_enabled = cfg!(feature = "gpu"),
+        backend_override = ?std::env::var("ICED_BACKEND").ok(),
+        "Starting Iced; compositor reports the selected graphics adapter"
+    );
 
     iced::daemon(App::new, App::update, App::view)
         .settings(iced::Settings {
@@ -91,13 +95,9 @@ fn main() -> iced::Result {
             // window matches the `.desktop` file (and its icon). Kept in sync
             // with `Packager.toml`'s `identifier`. Ignored on Windows + macOS.
             id: Some("com.bitwarden.desktop.next".into()),
-            fonts: vec![
-                assets::FONT_MEDIUM.into(),
-                assets::FONT_BOLD.into(),
-                assets::BWI_FONT.into(),
-                icons::FONT_BYTES.into(),
-            ],
-            default_font: APP_FONT,
+            fonts: vec![assets::BWI_FONT.into(), icons::FONT_BYTES.into()],
+            default_font: app_font(),
+            default_text_size: crate::text_size(14).into(),
             antialiasing: true,
             ..Default::default()
         })
@@ -125,7 +125,7 @@ fn init_tracing() {
 
     // `EnvFilter::from_default_env()` alone falls back to `LevelFilter::ERROR`
     // when `RUST_LOG` is unset, which would silence our `warn!` / `debug!`.
-    const DEFAULT_FILTER: &str = "bitwarden_desktop_next=debug,warn";
+    const DEFAULT_FILTER: &str = "bitwarden_desktop_next=debug,iced_wgpu=info,warn";
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
 

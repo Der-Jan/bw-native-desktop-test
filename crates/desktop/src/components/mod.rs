@@ -137,7 +137,7 @@ pub fn section_label<'a, M: 'a>(
     colors: &AppColors,
 ) -> Element<'a, M, AppTheme> {
     text(label.into())
-        .size(14)
+        .size(crate::text_size(14))
         .color(colors.text_primary)
         .into()
 }
@@ -149,8 +149,8 @@ pub fn section_heading<'a, M: 'a>(
     colors: &'a AppColors,
 ) -> Element<'a, M, AppTheme> {
     text(label.into())
-        .size(16)
-        .font(crate::APP_FONT_BOLD)
+        .size(crate::text_size(16))
+        .font(crate::app_font_bold())
         .color(colors.text_primary)
         .into()
 }
@@ -164,7 +164,9 @@ pub fn pane_header<'a, M: Clone + 'a>(
     colors: &'a AppColors,
 ) -> Element<'a, M, AppTheme> {
     use iced::widget::{Space, row};
-    let title_el = text(title.into()).size(18).color(colors.text_primary);
+    let title_el = text(title.into())
+        .size(crate::text_size(18))
+        .color(colors.text_primary);
     let close_btn = self::buttons::ghost_icon(
         self::icons::BWI_CLOSE.render(32.0, colors.text_secondary),
         colors.item_hover,
@@ -201,8 +203,8 @@ pub fn section_card<'a, M: 'a>(
 ) -> Element<'a, M, AppTheme> {
     iced::widget::column![
         text(heading.into())
-            .size(14)
-            .font(crate::APP_FONT_BOLD)
+            .size(crate::text_size(14))
+            .font(crate::app_font_bold())
             .color(colors.text_primary),
         styled_card(body),
     ]
@@ -232,7 +234,7 @@ where
 {
     iced::widget::checkbox(checked)
         .label(label.into())
-        .size(18)
+        .size(crate::text_size(18))
         .spacing(8)
         .on_toggle(on_toggle)
 }
@@ -240,3 +242,7 @@ where
 pub mod ssh_approval;
 
 pub mod focus_button;
+
+pub mod keyed_rows;
+
+pub mod smooth_scroll;

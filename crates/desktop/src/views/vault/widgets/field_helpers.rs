@@ -27,7 +27,7 @@ pub fn add_item_button<'a, M: 'a + Clone>(
     buttons::secondary(
         row![
             icons::PLUS.render(14.0, colors.accent),
-            text(label.into()).size(14),
+            text(label.into()).size(crate::text_size(14)),
         ]
         .spacing(6)
         .align_y(Alignment::Center),
@@ -45,8 +45,12 @@ pub fn field_readonly<'a, M: 'a>(
     colors: &AppColors,
 ) -> Element<'a, M, AppTheme> {
     iced::widget::column![
-        text(label.into()).size(12).color(colors.text_muted),
-        text(value).size(14).color(colors.text_primary),
+        text(label.into())
+            .size(crate::text_size(12))
+            .color(colors.text_muted),
+        text(value)
+            .size(crate::text_size(14))
+            .color(colors.text_primary),
     ]
     .spacing(2)
     .into()

@@ -59,12 +59,13 @@ fn footer_content<'a>(
     form: &'a SendForm,
     colors: &'a AppColors,
 ) -> Element<'a, SendEditMessage, AppTheme> {
-    let mut save = buttons::primary(text(fl!("send-form-save")).size(14)).padding([8, 20]);
+    let mut save =
+        buttons::primary(text(fl!("send-form-save")).size(crate::text_size(14))).padding([8, 20]);
     if !form.saving {
         save = save.on_press(SendEditMessage::SavePressed);
     }
 
-    let cancel = buttons::secondary(text(fl!("send-form-cancel")).size(14))
+    let cancel = buttons::secondary(text(fl!("send-form-cancel")).size(crate::text_size(14)))
         .on_press(SendEditMessage::CancelPressed)
         .padding([8, 20]);
 

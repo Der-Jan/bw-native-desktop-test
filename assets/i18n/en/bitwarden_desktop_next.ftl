@@ -415,7 +415,6 @@ menu-view-generator-history = Generator history
 menu-view-zoom-in = Zoom in
 menu-view-zoom-out = Zoom out
 menu-view-reset-zoom = Reset zoom
-menu-view-toggle-fullscreen = Toggle full screen
 
 ## Menu — Account
 menu-account-change-password = Change master password

@@ -109,7 +109,7 @@ pub(in super::super) fn passport_card<'a>(
     if fields.is_empty() {
         fields.push(
             text(fl!("detail-empty-passport"))
-                .size(14)
+                .size(crate::text_size(14))
                 .color(colors.text_muted)
                 .into(),
         );

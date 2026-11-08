@@ -35,7 +35,7 @@ pub(in super::super) fn details_card<'a>(
                 checkbox(form.text_hidden)
                     .label(fl!("send-form-hide-text"))
                     .on_toggle(SendEditMessage::HideTextToggled)
-                    .size(18)
+                    .size(crate::text_size(18))
                     .spacing(8)
                     .into(),
             );
@@ -55,7 +55,7 @@ pub(in super::super) fn details_card<'a>(
             date =
                 crate::views::send::widgets::send_list::format_deletion_date(&form.deletion_date)
         ))
-        .size(12)
+        .size(crate::text_size(12))
         .color(colors.text_secondary)
         .into(),
     );
@@ -65,7 +65,7 @@ pub(in super::super) fn details_card<'a>(
     if matches!(form.access_type, AccessType::Password) {
         items.push(
             text(fl!("send-form-password-hint"))
-                .size(12)
+                .size(crate::text_size(12))
                 .color(colors.text_secondary)
                 .into(),
         );
@@ -124,11 +124,12 @@ fn file_section<'a>(
         // New file send: the filename + size are "chosen" via a picker.
         // The picker is stubbed — see docs/todo.md.
         let placeholder = text(fl!("send-form-file-choose-placeholder"))
-            .size(14)
+            .size(crate::text_size(14))
             .color(colors.text_secondary);
-        let choose_btn = buttons::secondary(text(fl!("send-form-file-choose")).size(14))
-            .on_press(SendEditMessage::ChooseFilePressed)
-            .padding([8, 16]);
+        let choose_btn =
+            buttons::secondary(text(fl!("send-form-file-choose")).size(crate::text_size(14)))
+                .on_press(SendEditMessage::ChooseFilePressed)
+                .padding([8, 16]);
         row![placeholder, Space::new().width(Fill), choose_btn]
             .spacing(12)
             .align_y(Alignment::Center)
@@ -238,7 +239,7 @@ fn send_link_field<'a>(
     colors: &'a AppColors,
 ) -> Element<'a, SendEditMessage, AppTheme> {
     let input = text_input("", &url)
-        .size(14)
+        .size(crate::text_size(14))
         .padding([10, 12])
         .width(Fill)
         .style(|theme: &AppTheme, _status| text_input::Style {

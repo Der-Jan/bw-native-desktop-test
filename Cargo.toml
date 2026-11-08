@@ -2,7 +2,7 @@
 members = ["crates/*", "bitwarden_license/*", "tools/*"]
 default-members = ["crates/*", "bitwarden_license/*"]
 resolver = "3"
-exclude = ["vendor/bitwarden-core"]
+exclude = ["vendor/bitwarden-core", "vendor/iced-wgpu"]
 
 [workspace.dependencies]
 async-trait = "0.1.89"
@@ -55,3 +55,6 @@ opt-level = 3
 
 [patch."https://github.com/bitwarden/sdk-internal"]
 bitwarden-core = { path = "vendor/bitwarden-core" }
+
+[patch."https://github.com/iced-rs/iced"]
+iced_wgpu = { path = "vendor/iced-wgpu" }

@@ -49,10 +49,12 @@ pub fn view<'a, M: 'a + Clone>(
         });
 
     let title_el = text(title.into())
-        .size(14)
-        .font(crate::APP_FONT_BOLD)
+        .size(crate::text_size(14))
+        .font(crate::app_font_bold())
         .color(colors.text_primary);
-    let subtitle_el = text(subtitle.into()).size(12).color(colors.text_secondary);
+    let subtitle_el = text(subtitle.into())
+        .size(crate::text_size(12))
+        .color(colors.text_secondary);
 
     let body = row![
         chip,

@@ -12,20 +12,67 @@ change, ~25k GitHub stars, actively maintained, cross-platform. 0.15 brings a cl
 window/daemon API and builder methods on `Border` / `container::Style` that remove much of
 the `..Default::default()` boilerplate.
 
+## KDE typography and application zoom
+
+On KDE/Linux, read the general font through `kreadconfig6` (or `kreadconfig5`)
+once at startup, honoring KConfig's user/system configuration cascade. Use the
+configured family with normal weight and map the point size to the existing
+14-logical-pixel body scale at 96 logical DPI. This scale applies to every
+window; monitor DPI remains Iced's responsibility. Main-window zoom is an
+additional user multiplier, so reset means the desktop-based compact typography baseline.
+Text sizes use a shared conversion: apply 90% to the existing design hierarchy,
+round to whole point sizes, and keep captions at least 9 pt. Undo the desktop
+layout scale inside that conversion so Iced applies it exactly once. At a KDE
+base of 11 pt this yields body 10 pt, navigation 11 pt, section headings 13 pt
+and large headings 20 pt, at 100% application zoom. Unsized text uses the same
+body conversion. Icon sizes and spacing retain their existing layout values;
+manual zoom still scales the complete main window. General-font weight/style overrides, separate
+KDE menu fonts, live font changes and GNOME font discovery are not implemented.
+
+Missing/malformed KDE configuration or unavailable KConfig tools use the system
+sans-serif font at 1× scale. Other desktops/platforms also use system sans-serif;
+their exact desktop font preference is not yet queried. Production embeds no
+Inter text fonts; the existing symbol fonts remain for icons. UI fixtures alone
+use embedded text fonts for reproducibility; parser tests cover
+point conversion and invalid values. Fullscreen menu/action/F11 support is removed;
+normal window maximization remains available.
+
 ## Renderer and image formats
 
-**Decision**: Use tiny-skia CPU rendering exclusively. Remove the GPU Cargo
-feature, graphics-backend discovery/cache, and hardware-acceleration controls.
+**Decision**: Enable wgpu hardware rendering by default with tiny-skia as automatic
+fallback. `ICED_BACKEND=tiny-skia` selects the CPU path in the same binary;
+`--no-default-features` builds without the GPU stack. The user explicitly
+prioritized responsiveness over binary size and authorized this comparison.
 
-**Why**: The current form and virtualized-list UI works with CPU rendering.
-The additional GPU stack increases binary size without a demonstrated benefit
-for this application. Existing settings files remain readable; obsolete GPU
-fields are ignored and omitted on the next save.
+**Why**: The CPU-only preview remained visibly sluggish to the user after the
+shadow and animation removal. The earlier isolated list benchmark did not
+establish full-window presentation latency. Reintroducing hardware rendering is
+a comparative change, not proof that a password list inherently requires a GPU
+or that Iced must be replaced. Compositor info logging identifies the selected
+adapter so software rendering cannot be mistaken for hardware acceleration.
+Keep the UI shadow-free and dialogs immediate.
 
 **Image formats**: Disable image defaults and select the existing codecs explicitly,
 excluding OpenEXR and TIFF. Use Iced's `image-without-codecs` feature so it cannot
 restore the default codecs indirectly. SVG remains available for the embedded
 vector assets. Other existing image formats remain supported.
+
+## SVG rasterization and sidebar wordmark
+
+The sidebar uses the unmodified official outlined Bitwarden Password Manager
+logo, independent of UI/system fonts. The pinned wgpu rasterizer performed a
+second integer aspect fit after widget layout had already resolved the physical
+target dimensions. This could stretch the logo and crop its last letters.
+
+Patch the pinned `iced_wgpu` crate locally: rasterize directly from the original
+floating-point SVG viewport into the exact allocated pixel dimensions. This
+fix also converts tiny-skia's premultiplied RGBA to straight RGBA before upload:
+the image shader already premultiplies, so the old path applied edge coverage
+twice and made small lettering thin/uneven. These corrections apply to SVGs
+generally, preserve vector artwork and need no additional fonts or raster assets.
+Provenance and the narrow patch scope are documented in
+`vendor/iced-wgpu/README.local.md`. A renderer regression checks actual edge-pixel
+coverage at a fractional target size and preserves translucent white edge coverage.
 
 ## Surface separation without painted shadows
 
@@ -216,7 +263,9 @@ the result in `assets/`, then removed `wuff` from dependencies.
 
 **Decision**: Bundle static Inter 18pt font files (`Inter_18pt-Medium.ttf` +
 `Inter_18pt-Bold.ttf`), default weight Medium (500). Family name: `"Inter 18pt"`.
-Constants `APP_FONT` / `APP_FONT_BOLD` in `main.rs`.
+Retained as the fallback outside supported desktop font discovery. Helpers
+`app_font()` / `app_font_bold()` in `main.rs` use KDE typography when available
+(see the KDE typography decision above).
 
 **Rationale**: The "18pt" optical size variant has an open single-storey "g" matching the
 Bitwarden app better than variable Inter. Medium (500) matches the app's visual density.
@@ -797,7 +846,7 @@ Use native backend detection when hiding the main surface. The pinned winit
 Wayland implementation's `set_visible(false)` deliberately does nothing, so an
 Xvfb/X11-only acceptance check cannot validate KDE/Wayland behavior. Wayland tray
 hiding closes the native main surface while the Iced daemon retains account/view
-state; restoring opens a replacement surface with the remembered size, fullscreen,
+state; restoring opens a replacement surface with the remembered size,
 maximized and stacking state. No SDK session or vault data is recreated. Pending
 backend results are checked against both current window ID and desired visibility.
 
@@ -812,3 +861,58 @@ restored twice through its SNI item, checking the main surface disappears/reappe
 with a new native ID. An X11 profile also verified the actual Window → Hide to tray
 menu click. The symbolic icon name/path were checked over D-Bus. Clippy retains only
 the three existing menu/opacity warnings.
+
+## Vault scrolling input and row continuity
+
+Virtualized lists use keyed rows and distinct spacer keys to preserve widget and
+paragraph state as the viewport moves. A synthetic 10,000-item CPU benchmark
+measures construction/diff/layout (roughly 0.5–1.2 ms in local debug runs), with
+optional full offscreen rasterization via `BW_SCROLL_PROFILE_DRAW=1`. Screenshot
+rasterization includes allocation/conversion and is not compositor/input latency;
+do not infer GPU requirements or a frame rate from these numbers alone. The
+pinned Iced keyed Column's edit heuristic fails simultaneous viewport removals
+and insertions, so virtual rows use explicit identity reconciliation instead.
+
+Precise touchpad pixel events pass straight through. Discrete wheel events in
+pinned Iced otherwise jump 60 logical pixels per line. Interpolate those steps
+across a fixed 60 ms interval, with a 1 px immediate response and uniform
+intermediate positions. This replaces the earlier 35% immediate jump plus
+exponential settling tail. Repeated steps preserve distance and finish within
+60 ms of the last event; reversal, keyboard/click input, focus loss, list
+replacement and boundaries cancel pending movement. No permanent redraw timer.
+Keep the viewport's pixel offset; virtualization never snaps to row boundaries.
+Modal animations remain disabled. Assess the complete native window on the user's
+KDE/Wayland session; Xvfb screenshots and offscreen raster timings do not establish
+smoothness. A full-window synthetic CPU run (10,000 items, embedded fixture
+fonts, 1024×800 logical at 1.5× raster scale) measured construction/diff/layout
+median 0.718 ms, p95 0.834 ms; offscreen draw plus screenshot allocation/conversion
+median 28.526 ms, p95 29.533 ms. These remain diagnostic timings, not presentation
+latency. The native preview selected the physical RTX 5080 through Vulkan.
+A 1,200-step pixel-input regression checks exact monotonic offsets and constant
+virtual content height across row replacement, then checks a single wheel step
+with a table rebuild on each intermediate frame. No reverse movement occurs in
+that controlled test; native wheel/touchpad acceptance remains necessary before
+calling the user's reported forward/backward jump fixed.
+
+Unmodified Page Up/Page Down scroll the main vault by the visible height minus
+one row. Respect widget event capture, app/window scope, edit forms and active
+modal/overlay state. They do not change the selected item or trigger a detail
+fetch. Test row-state continuity and page-key routing; verify actual scrolling on KDE/Wayland separately.
+
+## Protected-entry detail requests
+
+Keep the master-password reprompt open across viewport/layout notifications and
+background SDK completions; those are not replacement user actions. A list
+viewport notification can arrive without visible scrolling, for example when
+mounting a dialog. Deliberate vault navigation still cancels the prompt and its
+one-shot grants. Focus the secure password field on opening and retry; Enter
+submits, and input is disabled while validation runs. Before replaying a confirmed
+request, check its cipher, revision, action and permissions again so a changed
+list index cannot select another entry. Password buffers are cleared on dismissal.
+
+The 1Password importer represents software licenses as SecureNote entries with
+notes/custom fields. SDK integration tests cover their encrypted round trip,
+wrong-password refusal, successful one-use read authorization, preserved license
+fields and permission enforcement. UI regressions reproduce the disappearing
+prompt under an internal viewport notification and reject late confirmations
+after navigation.

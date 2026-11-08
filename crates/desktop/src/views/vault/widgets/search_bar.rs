@@ -19,7 +19,7 @@ pub fn view<'a>(query: &'a str) -> Element<'a, SearchMessage, AppTheme> {
         .id(SEARCH_ID)
         .on_input(SearchMessage::QueryChanged)
         .icon(icons::SEARCH.input_icon(14.0, text_input::Side::Left))
-        .size(14)
+        .size(crate::text_size(14))
         .padding([4, 4])
         .width(Fill)
         .style(|theme: &AppTheme, _status| text_input::Style {

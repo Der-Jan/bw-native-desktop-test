@@ -26,17 +26,17 @@ pub fn view<'a>(
         .height(60);
 
     let title = text(fl!("login-email-title"))
-        .size(28)
+        .size(crate::text_size(28))
         .color(colors.text_primary);
 
     let card = layout::auth_card(card_content(email, remember_email, colors));
 
     let create_account_link = row![
         text(format!("{} ", fl!("login-email-new-prompt")))
-            .size(14)
+            .size(crate::text_size(14))
             .color(colors.text_secondary),
         text(fl!("login-email-create-account"))
-            .size(14)
+            .size(crate::text_size(14))
             .color(colors.accent),
     ]
     .align_y(Alignment::Center);
@@ -71,11 +71,11 @@ fn card_content<'a>(
     let remember_checkbox = checkbox(remember_email)
         .label(fl!("login-email-remember"))
         .on_toggle(LoginMessage::ToggleRememberEmail)
-        .size(18)
+        .size(crate::text_size(18))
         .spacing(8);
 
     let continue_button = buttons::primary(
-        container(text(fl!("login-email-continue")).size(16))
+        container(text(fl!("login-email-continue")).size(crate::text_size(16)))
             .center_x(Fill)
             .padding([4, 8]),
     )
@@ -83,7 +83,7 @@ fn card_content<'a>(
     .width(Fill);
 
     let or_text = text(fl!("login-email-or"))
-        .size(14)
+        .size(crate::text_size(14))
         .color(colors.text_primary)
         .center();
 
@@ -91,7 +91,7 @@ fn card_content<'a>(
         container(
             row![
                 icons::BWI_HANDSHAKE.render(16.0, colors.accent),
-                text(fl!("login-email-sso")).size(16),
+                text(fl!("login-email-sso")).size(crate::text_size(16)),
             ]
             .spacing(8)
             .align_y(Alignment::Center),

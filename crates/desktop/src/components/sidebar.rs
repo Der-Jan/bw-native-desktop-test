@@ -226,9 +226,13 @@ fn icon_rail<'a>(
 // ── Expanded panel ─────────────────────────────────────────────────────────
 
 fn group_label<'a>(label: String, colors: &AppColors) -> Element<'a, SidebarMessage, AppTheme> {
-    container(text(label).size(12).color(colors.nav_text))
-        .padding([6, 12])
-        .into()
+    container(
+        text(label)
+            .size(crate::text_size(12))
+            .color(colors.nav_text),
+    )
+    .padding([6, 12])
+    .into()
 }
 
 fn group_header<'a>(
@@ -244,7 +248,9 @@ fn group_header<'a>(
     };
     buttons::ghost_icon(
         row![
-            text(label).size(12).color(colors.nav_text),
+            text(label)
+                .size(crate::text_size(12))
+                .color(colors.nav_text),
             Space::new().width(Fill),
             chevron.render(18.0, colors.nav_text)
         ]
@@ -583,7 +589,9 @@ fn parent_header_row<'a>(
     let label_btn = buttons::ghost(
         row![
             icon.render(18.0, colors.nav_text),
-            text(label).size(16).color(colors.nav_text),
+            text(label)
+                .size(crate::text_size(16))
+                .color(colors.nav_text),
         ]
         .spacing(8)
         .align_y(Alignment::Center),
@@ -669,9 +677,14 @@ fn nav_row<'a>(
     colors: &AppColors,
 ) -> Element<'a, SidebarMessage, AppTheme> {
     buttons::ghost(
-        row![icon, text(label.into()).size(16).color(colors.nav_text)]
-            .spacing(8)
-            .align_y(Alignment::Center),
+        row![
+            icon,
+            text(label.into())
+                .size(crate::text_size(16))
+                .color(colors.nav_text)
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
         is_selected,
         colors.sidebar_selected,
         colors.nav_item_hover,
@@ -698,9 +711,14 @@ fn standalone_item<'a>(
     let is_active = active_section == section;
 
     buttons::ghost(
-        row![icon, text(label.into()).size(16).color(colors.nav_text)]
-            .spacing(8)
-            .align_y(Alignment::Center),
+        row![
+            icon,
+            text(label.into())
+                .size(crate::text_size(16))
+                .color(colors.nav_text)
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
         is_active,
         colors.sidebar_selected,
         colors.nav_item_hover,

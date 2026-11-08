@@ -96,7 +96,9 @@ pub(super) fn collections_selector<'a>(
     };
 
     let trigger: Element<'a, CipherEditMessage, AppTheme> = {
-        let label_text = text(summary.clone()).size(14).color(colors.text_primary);
+        let label_text = text(summary.clone())
+            .size(crate::text_size(14))
+            .color(colors.text_primary);
         let chevron = icons::BWI_ANGLE_DOWN.render(14.0, colors.text_secondary);
         let content = row![label_text, Space::new().width(Fill), chevron]
             .spacing(8)
@@ -130,7 +132,7 @@ pub(super) fn collections_selector<'a>(
         options.push(
             container(
                 text(fl!("form-collections-empty-in-org"))
-                    .size(12)
+                    .size(crate::text_size(12))
                     .color(colors.text_muted),
             )
             .padding([8, 12])
@@ -143,8 +145,10 @@ pub(super) fn collections_selector<'a>(
             options.push(
                 buttons::ghost(
                     row![
-                        checkbox(selected).size(16).spacing(0),
-                        text(c.name.clone()).size(14).color(colors.text_primary),
+                        checkbox(selected).size(crate::text_size(16)).spacing(0),
+                        text(c.name.clone())
+                            .size(crate::text_size(14))
+                            .color(colors.text_primary),
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center),

@@ -319,7 +319,6 @@ menu-view-generator-history = 生成器历史
 menu-view-zoom-in = 放大
 menu-view-zoom-out = 缩小
 menu-view-reset-zoom = 重置缩放
-menu-view-toggle-fullscreen = 切换全屏
 
 ## Menu — Account
 menu-account-change-password = 更改主密码

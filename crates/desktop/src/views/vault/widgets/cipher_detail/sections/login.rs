@@ -72,7 +72,7 @@ pub(in super::super) fn login_card<'a>(
     if fields.is_empty() {
         fields.push(
             text(fl!("detail-empty-credentials"))
-                .size(14)
+                .size(crate::text_size(14))
                 .color(colors.text_muted)
                 .into(),
         );

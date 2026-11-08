@@ -412,7 +412,7 @@ impl Application {
         let scroll = self.core.scroll_to.take();
         let restore_offset = self.restore_offset.take();
         let mut measured_offset = self.list_offset;
-        let show_icons = self.core.settings.show_favicons && !self.core.remote();
+        let show_icons = self.core.settings.show_favicons;
         let uid = self.core.active;
         let favicon = self.core.favicon.clone();
         let textures = &mut self.icon_textures;

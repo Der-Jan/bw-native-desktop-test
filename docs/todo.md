@@ -32,8 +32,9 @@ the first runtime/session and demo-storage slice is implemented; remaining work 
   grants, detail/copy/edit/save/delete gates and fresh export authorization are wired.
   Add policy-aware selective field display (current `view_password=false` fails closed
   for full details), broader organization export policy and platform acceptance.
-- **Favicon privacy and secret-safe diagnostics** `[M]` — per-profile icon service,
-  anonymous transport and redaction; no silent public fallback for private profiles.
+- **Secret-safe diagnostics** `[M]` — continue the general redaction audit.
+  Profile-scoped favicon requests are implemented with account TLS/mTLS, no OAuth
+  headers, no redirects/public fallback and no raw domain/error logging.
 - **Remaining login challenges and encrypted sync** `[L]` — password/TOTP/email
   login, OS-protected tokens and full read-sync snapshots are wired; unsupported
   challenges fail explicitly. Remaining sync work includes polling/WSS, complete
@@ -140,17 +141,15 @@ under `views/register/` plus a new `Register` screen variant or inlined into `Lo
 
 "Use single sign-on" button on login email screen. Provider selection + browser redirect.
 
-### Per-user `icons_url` for self-hosted `[M]` `[blocked: login command]`
+### Website icons for server accounts — implemented
 
-All users currently resolve to `https://icons.bitwarden.net` via
-[services/favicon/](../crates/desktop/src/services/favicon/mod.rs). Add
-`icons_url: String` on `UserEntry` ([services/sdk/](../crates/desktop/src/services/sdk/)),
-populate from `/api/config`'s `environment.icons` at login (cloud defaults: US
-`icons.bitwarden.net`, EU `icons.bitwarden.eu` per the Angular clients'
-`default-environment.service.ts`), expose
-`ClientManager::icons_url(&uid) -> Option<String>`, and swap the resolver closure in
-[app/lifecycle.rs](../crates/desktop/src/app/lifecycle.rs) (per-fetch closure → re-auth
-picks up the new URL without restart, fallback to US cloud when `None`).
+The native client uses the account server's `/icons/<hostname>/icon.png`, including
+base subpaths, through its revocable TLS/mTLS transport. The global icon-service
+resolver and US-cloud fallback were removed. Lazy in-memory caching, request and
+decoder limits, profile/session revocation and texture invalidation are implemented.
+See [login/sync requirements](login-sync-requirements.md). Automatically adopting a
+separate cloud or server-advertised icon origin remains deferred; it must have an
+explicit transport permission instead of silently receiving website domains.
 
 ### `LoginView` per-`AuthPage` field grouping `[M]` `[defer: Registration view]`
 

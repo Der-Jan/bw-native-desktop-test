@@ -93,8 +93,16 @@ Restart restores encrypted repositories before local unlock. Collections are
 materialized only after SDK key unlock and are cleared on lock. Successful sync
 purges old plaintext views before reload, preserves selection by cipher ID when
 possible, and displays the committed timestamp. Failure keeps the old cache and
-shows retry/status instead of reporting an empty vault. Public favicon lookup is
-disabled for real vaults until profile-scoped icon transport is implemented.
+shows retry/status instead of reporting an empty vault. Website icons now use
+`<account server base>/icons/<hostname>/icon.png`, preserving a configured subpath
+and the account's mTLS identity/private CA. Requests send no OAuth credentials,
+follow no redirects and have no public-service fallback. The existing appearance
+setting controls lookup; icons stay in memory only. Lock, logout, sync/session
+replacement, profile changes and disabling icons invalidate the source/cache.
+Late requests cannot populate a recreated cache. Responses are capped at 2 MiB;
+decoding is capped at 4096×4096 and 32 MiB before resizing to 32px. Missing or
+rejected icons retain the existing item marker. Separate cloud/custom icon-service
+URLs are not configured automatically.
 
 Key/password/KDF/security-stamp changes require a new login; automatic key migration
 is deferred. Policies/domains/Send payloads are retained in the typed encrypted

@@ -62,6 +62,7 @@ pub struct Application {
     pub ssh_viewport_open: bool,
     pub magnify_query: String,
     pub font_description: String,
+    favicon_version: u64,
     pub icon_textures: std::collections::HashMap<String, egui::TextureHandle>,
     pub send_editor: Option<crate::ui::sends::SendDraft>,
     pub send_query: String,
@@ -124,6 +125,7 @@ impl Application {
             ssh_viewport_open: false,
             magnify_query: String::new(),
             font_description,
+            favicon_version: 0,
             icon_textures: Default::default(),
             send_editor: None,
             send_query: String::new(),
@@ -131,6 +133,11 @@ impl Application {
         }
     }
     fn cleanup(&mut self, ctx: &egui::Context) {
+        let favicon_version = self.core.favicon.version();
+        if self.favicon_version != favicon_version {
+            self.favicon_version = favicon_version;
+            self.icon_textures.clear();
+        }
         if self.clear_epoch != self.core.clear_epoch {
             self.clear_epoch = self.core.clear_epoch;
             self.password = Zeroizing::default();

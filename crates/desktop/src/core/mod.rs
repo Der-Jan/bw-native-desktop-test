@@ -249,9 +249,7 @@ impl Core {
             ssh_agent: services::ssh_agent::AgentRuntime::new(),
             ssh_approval: None,
             clipboard: services::clipboard::ClipboardManager::new(),
-            favicon: services::favicon::FaviconService::new(Arc::new(|_| {
-                "https://icons.bitwarden.net".into()
-            })),
+            favicon: services::favicon::FaviconService::new(),
             timeout: services::session_timeout::SessionTimeout::new(),
             events,
             receiver,

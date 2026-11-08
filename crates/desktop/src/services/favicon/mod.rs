@@ -4,20 +4,24 @@
 //! `(uid, hostname)` pair returns [`IconState::Pending`] and spawns a fetch;
 //! subsequent calls are pure read-lock lookups. Fetch completions broadcast
 //! a [`FaviconMessage::IconResolved`] that the App subscription turns into
-//! a redraw. Nothing persists — matches the Angular clients.
+//! a redraw. Icons stay in memory only; requests use the account’s scoped
+//! TLS/mTLS transport, with no external icon-service fallback.
 //!
 //! `view()` only calls `get()` for virtualized rows on screen, so "first
 //! sight of a hostname in the viewport" is what triggers a fetch.
 
 use std::{
     collections::HashMap,
-    sync::{Arc, OnceLock, RwLock},
+    sync::{
+        Arc, OnceLock, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use eframe::egui::ColorImage;
 use tokio::sync::{Semaphore, broadcast};
 
-use crate::domain::UserId;
+use crate::{domain::UserId, services::sdk::FaviconSource};
 
 pub type Hostname = String;
 
@@ -32,10 +36,6 @@ const ICON_CORNER_RADIUS: f32 = 4.0;
 
 const FETCH_CONCURRENCY: usize = 5;
 const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-/// Hard cap on a favicon response body. A malicious icon server could
-/// otherwise serve a multi-GB body — `bytes()` would buffer it whole, and
-/// with `FETCH_CONCURRENCY` parallel fetches that's a one-line OOM.
-const MAX_FAVICON_BYTES: u64 = 2 * 1024 * 1024;
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -46,10 +46,9 @@ pub struct FaviconService {
 }
 
 struct FaviconInner {
-    http: reqwest::Client,
+    version: AtomicU64,
     caches: RwLock<HashMap<UserId, UserCache>>,
     fetch_budget: Arc<Semaphore>,
-    resolve_icons_url: Arc<dyn Fn(&UserId) -> String + Send + Sync>,
     /// Runtime handle captured at construction. `get()` spawns from `view()`
     /// which is a synchronous context; using the handle explicitly avoids
     /// relying on tokio TLS being set on every UI render pass.
@@ -61,15 +60,15 @@ struct FaviconInner {
     tx: broadcast::Sender<FaviconMessage>,
 }
 
-#[derive(Default)]
 struct UserCache {
+    id: uuid::Uuid,
+    source: FaviconSource,
     entries: HashMap<Hostname, IconState>,
 }
 
-/// `Pending` exists to dedupe in-flight fetches; it renders identically to
-/// `Missing`. `Found` carries a [`Arc<ColorImage>`] built from
-/// [`Arc<ColorImage>::from_rgba`] at fetch time — clones share the internal `Id`
-/// so iced's GPU texture cache hits on every re-render for the session.
+/// `Pending` deduplicates in-flight requests and renders like `Missing`.
+/// Decoded pixels are shared; the UI uploads a texture once per hostname and
+/// clears those textures when the source/cache version changes.
 #[derive(Clone)]
 pub enum IconState {
     Pending,
@@ -85,25 +84,14 @@ pub enum FaviconMessage {
 }
 
 impl FaviconService {
-    pub fn new(resolve_icons_url: Arc<dyn Fn(&UserId) -> String + Send + Sync>) -> Self {
-        let http = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .user_agent(concat!(
-                "bitwarden-desktop-next/",
-                env!("CARGO_PKG_VERSION")
-            ))
-            .use_rustls_tls()
-            .build()
-            .expect("reqwest client should build with rustls");
-
+    pub fn new() -> Self {
         let (tx, _rx) = broadcast::channel::<FaviconMessage>(1024);
 
         Self {
             inner: Arc::new(FaviconInner {
-                http,
+                version: AtomicU64::new(0),
                 caches: RwLock::new(HashMap::new()),
                 fetch_budget: Arc::new(Semaphore::new(FETCH_CONCURRENCY)),
-                resolve_icons_url,
                 runtime: tokio::runtime::Handle::current(),
                 tx,
             }),
@@ -114,6 +102,10 @@ impl FaviconService {
     /// `Subscription::run`-style call uses [`broadcast::Sender::subscribe`]
     /// to mint a fresh receiver, so this can be called freely from
     /// `App::subscription`.
+    pub fn version(&self) -> u64 {
+        self.inner.version.load(Ordering::Relaxed)
+    }
+
     pub fn event_sender(&self) -> broadcast::Sender<FaviconMessage> {
         self.inner.tx.clone()
     }
@@ -128,9 +120,10 @@ impl FaviconService {
                 .caches
                 .read()
                 .expect("favicon cache lock poisoned");
-            if let Some(cache) = caches.get(uid)
-                && let Some(state) = cache.entries.get(hostname)
-            {
+            let Some(cache) = caches.get(uid).filter(|cache| cache.source.current()) else {
+                return IconState::Missing;
+            };
+            if let Some(state) = cache.entries.get(hostname) {
                 return state.clone();
             }
         }
@@ -156,31 +149,59 @@ impl FaviconService {
     /// stay alive until they finish but their results no-op when the cache
     /// entry is gone.
     pub fn evict_user(&self, uid: &UserId) {
-        self.inner
+        if self
+            .inner
             .caches
             .write()
             .expect("favicon cache lock poisoned")
-            .remove(uid);
+            .remove(uid)
+            .is_some()
+        {
+            self.inner.version.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
+    pub fn set_source(&self, uid: UserId, source: Option<FaviconSource>) {
+        let mut caches = self.inner.caches.write().expect("favicon cache poisoned");
+        match source {
+            Some(source) => {
+                if !caches
+                    .get(&uid)
+                    .is_some_and(|cache| cache.source.same_authority(&source))
+                {
+                    self.inner.version.fetch_add(1, Ordering::Relaxed);
+                    caches.insert(
+                        uid,
+                        UserCache {
+                            id: uuid::Uuid::new_v4(),
+                            source,
+                            entries: HashMap::new(),
+                        },
+                    );
+                }
+            }
+            None => {
+                if caches.remove(&uid).is_some() {
+                    self.inner.version.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+    }
     fn claim_and_spawn(&self, uid: UserId, hostname: Hostname) {
-        // Double-check under write lock: a concurrent `get()` for the same
-        // row across a quick scroll could have already inserted Pending.
-        {
-            let mut caches = self
-                .inner
-                .caches
-                .write()
-                .expect("favicon cache lock poisoned");
-            let cache = caches.entry(uid).or_default();
+        let (source, cache_id) = {
+            let mut caches = self.inner.caches.write().expect("favicon cache poisoned");
+            let Some(cache) = caches.get_mut(&uid).filter(|cache| cache.source.current()) else {
+                return;
+            };
             if cache.entries.contains_key(&hostname) {
                 return;
             }
             cache.entries.insert(hostname.clone(), IconState::Pending);
-        }
-        let inner = Arc::clone(&self.inner);
+            (cache.source.clone(), cache.id)
+        };
+        let inner = self.inner.clone();
         self.inner.runtime.spawn(async move {
-            fetch_and_commit(inner, uid, hostname).await;
+            fetch_and_commit(inner, uid, hostname, source, cache_id).await;
         });
     }
 }
@@ -215,12 +236,20 @@ pub fn hostname_for_fetch(uri: &str) -> Option<Hostname> {
 
 // ── Fetch pipeline ─────────────────────────────────────────────────────────
 
-async fn fetch_and_commit(inner: Arc<FaviconInner>, uid: UserId, hostname: Hostname) {
-    let state = fetch_one(&inner, &uid, &hostname).await;
+async fn fetch_and_commit(
+    inner: Arc<FaviconInner>,
+    uid: UserId,
+    hostname: Hostname,
+    source: FaviconSource,
+    cache_id: uuid::Uuid,
+) {
+    let state = fetch_one(&inner, &source, &hostname).await;
 
     let committed = {
         let mut caches = inner.caches.write().expect("favicon cache lock poisoned");
-        if let Some(cache) = caches.get_mut(&uid) {
+        if let Some(cache) = caches.get_mut(&uid).filter(|cache| {
+            cache.id == cache_id && cache.source.same_authority(&source) && source.current()
+        }) {
             cache.entries.insert(hostname.clone(), state);
             true
         } else {
@@ -235,66 +264,19 @@ async fn fetch_and_commit(inner: Arc<FaviconInner>, uid: UserId, hostname: Hostn
     }
 }
 
-async fn fetch_one(inner: &FaviconInner, uid: &UserId, hostname: &Hostname) -> IconState {
-    // Dropping the permit on return is what enforces the concurrency cap.
+async fn fetch_one(inner: &FaviconInner, source: &FaviconSource, hostname: &Hostname) -> IconState {
     let Ok(_permit) = inner.fetch_budget.clone().acquire_owned().await else {
         return IconState::Missing;
     };
-
-    let url = format!(
-        "{}/{}/icon.png",
-        (inner.resolve_icons_url)(uid).trim_end_matches('/'),
-        hostname
-    );
-    let resp = inner.http.get(&url).timeout(FETCH_TIMEOUT).send().await;
-    match resp {
-        Ok(r) if r.status().is_success() => match read_capped(r, MAX_FAVICON_BYTES).await {
-            Ok(body) => decode_to_handle(body).await.unwrap_or_else(|e| {
-                tracing::debug!(host = %hostname, error = %e, "favicon decode failed");
-                IconState::Missing
-            }),
-            Err(e) => {
-                tracing::debug!(host = %hostname, error = %e, "favicon body read failed");
-                IconState::Missing
-            }
-        },
-        Ok(r) => {
-            tracing::debug!(host = %hostname, status = %r.status(), "favicon non-success");
-            IconState::Missing
-        }
-        Err(e) => {
-            tracing::debug!(host = %hostname, error = %e, "favicon request failed");
-            IconState::Missing
-        }
+    match tokio::time::timeout(FETCH_TIMEOUT, source.fetch(hostname)).await {
+        Ok(Ok(bytes)) => decode_to_handle(bytes).await.unwrap_or(IconState::Missing),
+        _ => IconState::Missing,
     }
-}
-
-/// Read the response body in chunks, rejecting once the running total
-/// exceeds `max`. Catches both honest-Content-Length giants (cheap reject)
-/// and chunked-transfer abusers (mid-stream cancel). `chunk()` doesn't
-/// require reqwest's `stream` feature.
-async fn read_capped(mut resp: reqwest::Response, max: u64) -> Result<Vec<u8>, String> {
-    if let Some(len) = resp.content_length()
-        && len > max
-    {
-        return Err(format!("body too large ({len} > {max})"));
-    }
-    let mut total: u64 = 0;
-    let mut buf: Vec<u8> = Vec::new();
-    while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
-        total = total.saturating_add(chunk.len() as u64);
-        if total > max {
-            return Err(format!("body exceeded {max} bytes"));
-        }
-        buf.extend_from_slice(&chunk);
-    }
-    Ok(buf)
 }
 
 // ── Decode + alpha-mask pipeline ──────────────────────────────────────────
 
-/// Decode raw bytes on a blocking worker, apply the rounded-rect mask, and
-/// wrap in an iced handle. `image` decode is pure CPU; with up to 5 landing
+/// Decode raw bytes on a blocking worker and apply the rounded-rect mask. `image` decode is pure CPU; with up to 5 landing
 /// at once we keep tokio's worker threads free.
 async fn decode_to_handle(raw: Vec<u8>) -> Result<IconState, DecodeError> {
     let rgba = tokio::task::spawn_blocking(move || decode_and_mask(&raw))
@@ -317,7 +299,13 @@ impl std::fmt::Display for DecodeError {
 }
 
 fn decode_and_mask(raw: &[u8]) -> Result<::image::RgbaImage, ::image::ImageError> {
-    let img = ::image::load_from_memory(raw)?;
+    let mut reader = ::image::ImageReader::new(std::io::Cursor::new(raw)).with_guessed_format()?;
+    let mut limits = ::image::Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(32 * 1024 * 1024);
+    reader.limits(limits);
+    let img = reader.decode()?;
     // We render at a fixed 32 px regardless of the source size so the alpha
     // mask stays exact.
     let resized = img.resize_exact(
@@ -507,6 +495,16 @@ mod tests {
         let mut img = opaque_white_32();
         apply_rounded_mask(&mut img, -1.0);
         assert!(img.pixels().all(|p| p.0[3] == 255));
+    }
+
+    #[test]
+    fn compressed_icons_cannot_exceed_decoder_dimension_limits() {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(4097, 1)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        assert!(png.get_ref().len() < 2 * 1024 * 1024);
+        assert!(decode_and_mask(png.get_ref()).is_err());
     }
 
     #[test]

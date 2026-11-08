@@ -150,6 +150,7 @@ impl Core {
                     Ok(Ok(p)) => {
                         core.profile = Some(p);
                         core.profile_error = None;
+                        core.refresh_agent();
                         core.notify("Server settings saved", false)
                     }
                     Ok(Err(e)) => core.profile_error = Some(e),
@@ -185,6 +186,7 @@ impl Core {
                             core.profile = Some(p);
                         }
                         core.profile_error = None;
+                        core.refresh_agent();
                         core.notify("Client certificate imported", false)
                     }
                     Ok(Err(e)) => core.profile_error = Some(e),
@@ -217,6 +219,7 @@ impl Core {
                             core.profile = Some(p);
                         }
                         core.profile_error = None;
+                        core.refresh_agent();
                     }
                     Ok(Err(e)) => core.profile_error = Some(e),
                     Err(_) => core.profile_error = Some("CA import failed".into()),
@@ -241,6 +244,7 @@ impl Core {
             Ok(p) => {
                 self.profile = Some(p);
                 self.profile_error = None;
+                self.refresh_agent();
             }
             Err(e) => self.profile_error = Some(e),
         }

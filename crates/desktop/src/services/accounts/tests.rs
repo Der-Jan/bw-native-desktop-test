@@ -216,6 +216,33 @@ impl Fixture {
                 let req = String::from_utf8_lossy(&bytes).to_string();
                 let first = req.lines().next().unwrap_or("").to_string();
                 received.lock().unwrap().push((req.clone(), fingerprint));
+                if first.starts_with("GET /vault/icons/") {
+                    if first.contains("redirect.test/") {
+                        let _ = stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: https://untrusted.invalid/icon.png\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    } else if first.contains("oversized.test/") {
+                        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2097153\r\nConnection: close\r\n\r\n");
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            server_delay.load(Ordering::SeqCst),
+                        ));
+                        let mut png = std::io::Cursor::new(Vec::new());
+                        image::DynamicImage::new_rgba8(4, 4)
+                            .write_to(&mut png, image::ImageFormat::Png)
+                            .unwrap();
+                        let data = if first.contains("invalid.test/") {
+                            b"not an image".to_vec()
+                        } else {
+                            png.into_inner()
+                        };
+                        let header = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            data.len()
+                        );
+                        let _ = stream.write_all(header.as_bytes());
+                        let _ = stream.write_all(&data);
+                    }
+                    continue;
+                }
                 let (status, body, extra) = if first.contains("/redirect ") {
                     (
                         "302 Found",
@@ -702,7 +729,8 @@ impl Fixture {
         )
         .await
         .unwrap();
-        let mut manager = crate::services::sdk::ClientManager::empty();
+        let mut manager =
+            crate::services::sdk::test_support::manager_with_profiles(self.store.clone());
         let uid = manager.accept_login(candidate, &attempt).unwrap();
         (manager, uid)
     }
@@ -1532,4 +1560,172 @@ async fn browser_authority_uses_the_server_identity_and_revokes_on_lock() {
     assert!(!browser.current());
     assert!(!browser.unlocked());
     assert!(browser.approved_browser_key().await.is_err());
+}
+
+#[tokio::test]
+async fn favicon_uses_account_mtls_subpath_without_oauth_and_caches_once() {
+    use crate::services::favicon::{FaviconService, IconState};
+    let fixture = Fixture::new();
+    let (mut manager, uid) = fixture.account().await;
+    let source = manager.favicon_source_for(&uid).unwrap();
+    let service = FaviconService::new();
+    assert!(matches!(
+        service.get(&uid, "example.test"),
+        IconState::Missing
+    ));
+    service.set_source(uid, Some(source.clone()));
+    let version = service.version();
+    service.set_source(uid, manager.favicon_source_for(&uid));
+    assert_eq!(
+        version,
+        service.version(),
+        "equivalent sources retain their cache"
+    );
+    let mut updates = service.event_sender().subscribe();
+    assert!(matches!(
+        service.get(&uid, "example.test"),
+        IconState::Pending
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(3), updates.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        service.get(&uid, "example.test"),
+        IconState::Found(_)
+    ));
+    assert!(matches!(
+        service.get(&uid, "example.test"),
+        IconState::Found(_)
+    ));
+    {
+        let requests = fixture.requests.lock().unwrap();
+        let icons: Vec<_> = requests
+            .iter()
+            .filter(|(req, _)| req.starts_with("GET /vault/icons/"))
+            .collect();
+        assert_eq!(icons.len(), 1);
+        assert!(
+            icons[0]
+                .0
+                .starts_with("GET /vault/icons/example.test/icon.png HTTP/1.1\r\n")
+        );
+        assert!(!icons[0].0.to_ascii_lowercase().contains("authorization:"));
+        assert!(!icons[0].0.to_ascii_lowercase().contains("cookie:"));
+        assert_eq!(
+            icons[0].1,
+            fixture
+                .store
+                .get(fixture.profile.id)
+                .unwrap()
+                .certificate
+                .unwrap()
+                .fingerprint
+        );
+    }
+    manager.lock(&uid).unwrap().finish().await;
+    assert!(!source.current());
+    assert!(source.fetch("example.test").await.is_err());
+    assert!(matches!(
+        service.get(&uid, "example.test"),
+        IconState::Missing
+    ));
+}
+
+#[tokio::test]
+async fn favicon_rejects_redirects_oversized_invalid_and_revoked_sources() {
+    use crate::services::favicon::{FaviconService, IconState};
+    let fixture = Fixture::new();
+    let (manager, uid) = fixture.account().await;
+    let source = manager.favicon_source_for(&uid).unwrap();
+    assert!(source.fetch("redirect.test").await.is_err());
+    assert!(source.fetch("oversized.test").await.is_err());
+    let before = fixture.requests.lock().unwrap().len();
+    for host in [
+        "127.0.0.1",
+        "localhost",
+        "hidden.onion",
+        "example.test/../../api/sync",
+        "example.test?x=y",
+    ] {
+        assert!(source.fetch(host).await.is_err());
+    }
+    assert_eq!(before, fixture.requests.lock().unwrap().len());
+    let service = FaviconService::new();
+    service.set_source(uid, Some(source.clone()));
+    let mut updates = service.event_sender().subscribe();
+    service.get(&uid, "invalid.test");
+    tokio::time::timeout(std::time::Duration::from_secs(3), updates.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        service.get(&uid, "invalid.test"),
+        IconState::Missing
+    ));
+    let mut profile = fixture
+        .store
+        .get(manager.profile_for(&uid).unwrap())
+        .unwrap();
+    profile.server_ca_pem = None;
+    fixture
+        .store
+        .save(profile.clone(), Some(profile.revision))
+        .unwrap();
+    let before = fixture.requests.lock().unwrap().len();
+    assert!(!source.current());
+    assert!(source.fetch("example.test").await.is_err());
+    assert_eq!(before, fixture.requests.lock().unwrap().len());
+    assert!(matches!(
+        service.get(&uid, "invalid.test"),
+        IconState::Missing
+    ));
+}
+
+#[tokio::test]
+async fn favicon_late_response_cannot_repopulate_a_recreated_cache() {
+    use crate::services::favicon::{FaviconService, IconState};
+    let fixture = Fixture::new();
+    let (manager, uid) = fixture.account().await;
+    let source = manager.favicon_source_for(&uid).unwrap();
+    let service = FaviconService::new();
+    service.set_source(uid, Some(source.clone()));
+    let mut updates = service.event_sender().subscribe();
+    fixture.sync_delay.store(200, Ordering::SeqCst);
+    service.get(&uid, "example.test");
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while !fixture
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(r, _)| r.starts_with("GET /vault/icons/"))
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    service.evict_user(&uid);
+    service.set_source(uid, Some(source));
+    // A late request from before disable/re-enable must not populate the new
+    // cache even when the account session and hostname are still identical.
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(350), updates.recv())
+            .await
+            .is_err()
+    );
+    fixture.sync_delay.store(0, Ordering::SeqCst);
+    assert!(matches!(
+        service.get(&uid, "example.test"),
+        IconState::Pending
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(3), updates.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        service.get(&uid, "example.test"),
+        IconState::Found(_)
+    ));
 }

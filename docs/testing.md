@@ -73,3 +73,10 @@ Always action, alternate durations, Enter focus and Escape denial. A synthetic
 Helium run confirms that Enter pairs once and the next request needs no prompt;
 Light and Dark native views and expanded details were inspected. The expanded
 Settings passes the Wayland sizing test (1206px window, 1182px content).
+
+Website icons for server accounts pass disposable TLS tests: required client
+identity/private CA, `/vault/` subpath preservation, absence of OAuth/cookie
+headers, lazy deduplication, blocked redirects/oversized/invalid responses,
+profile and lock revocation, and late responses after cache recreation. A compact
+PNG with excessive dimensions is rejected before full decoding. The checkpoint
+passes 185 desktop tests and one fixture test (three OS tests ignored).

@@ -135,6 +135,16 @@ impl Core {
         });
     }
     pub fn refresh_agent(&mut self) {
+        if let Some(uid) = self.active {
+            self.favicon.set_source(
+                uid,
+                if self.settings.show_favicons && !self.quit_requested {
+                    self.manager.favicon_source_for(&uid)
+                } else {
+                    None
+                },
+            );
+        }
         self.browser
             .configure(self.settings.browser_integration && !self.quit_requested);
         self.browser.set_session(

@@ -629,6 +629,7 @@ generator-title = Generator
 generator-tab-password = Password
 generator-tab-passphrase = Passphrase
 generator-tab-username = Username
+generator-tab-history = History
 
 # Password tab
 generator-length = Length

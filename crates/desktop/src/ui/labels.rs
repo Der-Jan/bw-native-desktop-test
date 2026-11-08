@@ -341,6 +341,7 @@ pub fn text(english: &str) -> String {
         "PIN (required)" => crate::fl!("login-unlock-pin-placeholder"),
         "PIN unlock is not yet supported" => crate::fl!("login-toast-pin-unsupported"),
         "Passkey" => crate::fl!("detail-field-passkey"),
+        "History" => crate::fl!("generator-tab-history"),
         "Passphrase" => crate::fl!("generator-tab-passphrase"),
         "Passport" => crate::fl!("detail-section-passport"),
         "Passport number" => crate::fl!("detail-field-pp-passport-number"),

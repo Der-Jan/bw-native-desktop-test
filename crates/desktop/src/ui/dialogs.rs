@@ -156,44 +156,41 @@ impl Application {
         }
     }
     fn settings(&mut self, ctx: &egui::Context) {
-        let mut open = true;
         let mut changed = false;
-        egui::Window::new(super::labels::text("Settings"))
-            .id(Id::unique("settings"))
-            .open(&mut open)
-            .default_width(550.)
-            .collapsible(false)
-            .show(ctx, |ui| {
+        let open =
+            self.native_tool_window(ctx, "settings", "Settings", [640., 760.], |this, ui| {
+                let app = this;
                 egui::ScrollArea::vertical()
-                    .max_height(600.)
+                    .auto_shrink([false, false])
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                     .show(ui, |ui| {
                         ui.heading(super::labels::text("Appearance"));
-                        let previous_language = self.core.settings.language.clone();
+                        let previous_language = app.core.settings.language.clone();
                         egui::ComboBox::from_id_salt("language")
-                            .selected_text(if self.core.settings.language.is_empty() {
+                            .selected_text(if app.core.settings.language.is_empty() {
                                 "System language".into()
                             } else {
-                                services::i18n::language_label(&self.core.settings.language)
+                                services::i18n::language_label(&app.core.settings.language)
                             })
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
-                                    &mut self.core.settings.language,
+                                    &mut app.core.settings.language,
                                     String::new(),
                                     "System language",
                                 );
                                 for language in services::i18n::available_languages() {
                                     let tag = language.to_string();
                                     ui.selectable_value(
-                                        &mut self.core.settings.language,
+                                        &mut app.core.settings.language,
                                         tag.clone(),
                                         services::i18n::language_label(&tag),
                                     );
                                 }
                             });
-                        if previous_language != self.core.settings.language {
-                            if self.core.settings.language.is_empty() {
+                        if previous_language != app.core.settings.language {
+                            if app.core.settings.language.is_empty() {
                                 services::i18n::init();
-                            } else if let Ok(tag) = self.core.settings.language.parse() {
+                            } else if let Ok(tag) = app.core.settings.language.parse() {
                                 services::i18n::set_language(tag);
                             }
                             changed = true;
@@ -202,7 +199,7 @@ impl Application {
                         {
                             changed |= ui
                                 .checkbox(
-                                    &mut self.core.settings.allow_screenshots,
+                                    &mut app.core.settings.allow_screenshots,
                                     "Allow screenshots",
                                 )
                                 .changed();
@@ -215,13 +212,13 @@ impl Application {
                         ui.label(crate::fl!("settings-appearance-theme-heading"));
                         egui::ComboBox::from_id_salt("theme")
                             .selected_text(super::labels::text(
-                                &self.core.settings.theme.to_string(),
+                                &app.core.settings.theme.to_string(),
                             ))
                             .show_ui(ui, |ui| {
                                 for theme in crate::theme::ThemePreference::ALL {
                                     changed |= ui
                                         .selectable_value(
-                                            &mut self.core.settings.theme,
+                                            &mut app.core.settings.theme,
                                             theme,
                                             super::labels::text(&theme.to_string()),
                                         )
@@ -231,21 +228,21 @@ impl Application {
                         ui.horizontal(|ui| {
                             ui.label(format!(
                                 "Zoom: {:.0}%",
-                                self.core.settings.zoom_factor.scale() * 100.
+                                app.core.settings.zoom_factor.scale() * 100.
                             ));
                             if ui.button("−").clicked() {
-                                changed |= self.core.settings.zoom_factor.step_out();
+                                changed |= app.core.settings.zoom_factor.step_out();
                             }
                             if ui.button("+").clicked() {
-                                changed |= self.core.settings.zoom_factor.step_in();
+                                changed |= app.core.settings.zoom_factor.step_in();
                             }
                             if ui.button("Reset").clicked() {
-                                changed |= self.core.settings.zoom_factor.reset();
+                                changed |= app.core.settings.zoom_factor.reset();
                             }
                         });
                         changed |= ui
                             .checkbox(
-                                &mut self.core.settings.show_favicons,
+                                &mut app.core.settings.show_favicons,
                                 super::labels::text("Show website icons"),
                             )
                             .changed();
@@ -253,33 +250,33 @@ impl Application {
                         ui.heading("Desktop");
                         changed |= ui
                             .checkbox(
-                                &mut self.core.settings.show_tray_icon,
+                                &mut app.core.settings.show_tray_icon,
                                 super::labels::text("Show tray icon"),
                             )
                             .changed();
                         changed |= ui
                             .checkbox(
-                                &mut self.core.settings.minimize_to_tray,
+                                &mut app.core.settings.minimize_to_tray,
                                 super::labels::text("Minimize to tray"),
                             )
                             .changed();
                         changed |= ui
                             .checkbox(
-                                &mut self.core.settings.close_to_tray,
+                                &mut app.core.settings.close_to_tray,
                                 super::labels::text("Close to tray"),
                             )
                             .changed();
                         ui.add_enabled(
                             false,
                             egui::Checkbox::new(
-                                &mut self.core.settings.open_at_login,
+                                &mut app.core.settings.open_at_login,
                                 "Open at device login (not implemented)",
                             ),
                         );
                         ui.separator();
                         ui.heading(super::labels::text("Security"));
-                        if let Some(uid) = self.core.active {
-                            let mut prefs = self.core.settings.preferences_for(&uid);
+                        if let Some(uid) = app.core.active {
+                            let mut prefs = app.core.settings.preferences_for(&uid);
                             let previous = prefs;
                             duration(ui, "Lock after", &mut prefs.lock_after, LOCK_AFTER_PRESETS);
                             duration(
@@ -328,7 +325,7 @@ impl Application {
                                     }
                                 });
                             if prefs != previous {
-                                self.core.settings.user_preferences.insert(uid, prefs);
+                                app.core.settings.user_preferences.insert(uid, prefs);
                                 changed = true;
                             }
                         }
@@ -336,163 +333,224 @@ impl Application {
                         ui.heading(super::labels::text("SSH agent"));
                         changed |= ui
                             .checkbox(
-                                &mut self.core.settings.ssh_agent,
+                                &mut app.core.settings.ssh_agent,
                                 super::labels::text("Enable SSH agent"),
                             )
                             .changed();
-                        ui.label(self.core.ssh_agent.status());
-                        ui.monospace(self.core.ssh_agent.path().display().to_string());
+                        ui.label(app.core.ssh_agent.status());
+                        ui.monospace(app.core.ssh_agent.path().display().to_string());
                         ui.horizontal(|ui| {
-                            ui.monospace(self.core.ssh_agent.shell_setup());
+                            ui.monospace(app.core.ssh_agent.shell_setup());
                             if ui.button("Copy setup").clicked() {
-                                self.core.clipboard.copy(
-                                    self.core.ssh_agent.shell_setup(),
+                                app.core.clipboard.copy(
+                                    app.core.ssh_agent.shell_setup(),
                                     services::clipboard::Sensitivity::Normal,
                                 );
                             }
                         });
-                        if self.core.remote()
+                        if app.core.remote()
                             && ui
                                 .button("Test account connection (without sync)")
                                 .clicked()
                         {
-                            self.core.probe_account();
+                            app.core.probe_account();
                         }
                         if ui.button("Server / mTLS settings").clicked() {
-                            self.profile_open = true;
-                            self.core.ensure_profiles();
-                            if let Some(id) = self
+                            app.profile_open = true;
+                            app.core.ensure_profiles();
+                            if let Some(id) = app
                                 .core
                                 .active
-                                .and_then(|uid| self.core.manager.profile_for(&uid))
+                                .and_then(|uid| app.core.manager.profile_for(&uid))
                             {
-                                self.core.profile =
-                                    self.core.profiles.as_ref().and_then(|s| s.get(id));
+                                app.core.profile =
+                                    app.core.profiles.as_ref().and_then(|s| s.get(id));
                             }
                         }
                     });
             });
-        self.core.settings_open = open;
+        self.core.settings_open = open && !self.profile_open;
         if changed {
             self.core.save_settings();
+            ctx.request_repaint();
         }
     }
     fn generator(&mut self, ctx: &egui::Context) {
-        let mut open = true;
-        egui::Window::new(super::labels::text("Generator"))
-            .id(Id::unique("generator"))
-            .open(&mut open)
-            .default_width(500.)
-            .collapsible(false)
-            .show(ctx, |ui| {
+        let open = self.native_tool_window(ctx, "generator", "Generator", [600., 540.], |this, ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                let app = this;
                 ui.horizontal(|ui| {
-                    for (i, label) in ["Password", "Passphrase", "Username"].iter().enumerate() {
-                        ui.selectable_value(&mut self.generator_mode, i, *label);
+                    for (i, label) in ["Password", "Passphrase", "Username", "History"].iter().enumerate() {
+                        let selected = app.generator_mode == i;
+                        let response = ui.add_sized([120., 34.], egui::Button::new(super::labels::text(label)).selected(selected));
+                        if response.clicked() { app.generator_mode = i; }
+                        if selected {
+                            ui.painter().line_segment([response.rect.left_bottom(), response.rect.right_bottom()], egui::Stroke::new(3., ui.visuals().selection.bg_fill));
+                        }
                     }
                 });
-                if self.generator_mode == 0 {
-                    ui.add(egui::Slider::new(&mut self.generator_length, 5..=128).text("Length"));
+                ui.separator();
+                if app.generator_mode == 3 {
+                    app.generator_history(ui);
+                    return;
+                }
+                if app.generator_mode == 0 {
+                    ui.add(egui::Slider::new(&mut app.generator_length, 5..=128).text("Length"));
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut self.generator_lower, super::labels::text("a–z"));
-                        ui.checkbox(&mut self.generator_upper, super::labels::text("A–Z"));
-                        ui.checkbox(&mut self.generator_numbers, super::labels::text("0–9"));
-                        ui.checkbox(&mut self.generator_special, super::labels::text("!@#$"));
+                        ui.checkbox(&mut app.generator_lower, super::labels::text("a–z"));
+                        ui.checkbox(&mut app.generator_upper, super::labels::text("A–Z"));
+                        ui.checkbox(&mut app.generator_numbers, super::labels::text("0–9"));
+                        ui.checkbox(&mut app.generator_special, super::labels::text("!@#$"));
                     });
-                    ui.checkbox(&mut self.generator_avoid_ambiguous,super::labels::text("Avoid ambiguous characters"));
-                    ui.add(egui::Slider::new(&mut self.generator_min_numbers,0..=9).text("Minimum numbers"));
-                    ui.add(egui::Slider::new(&mut self.generator_min_special,0..=9).text("Minimum special characters"));
-                } else if self.generator_mode == 1 {
-                    ui.add(egui::Slider::new(&mut self.generator_words, 3..=20).text("Words"));
+                    ui.checkbox(&mut app.generator_avoid_ambiguous,super::labels::text("Avoid ambiguous characters"));
+                    ui.add(egui::Slider::new(&mut app.generator_min_numbers,0..=9).text("Minimum numbers"));
+                    ui.add(egui::Slider::new(&mut app.generator_min_special,0..=9).text("Minimum special characters"));
+                } else if app.generator_mode == 1 {
+                    ui.add(egui::Slider::new(&mut app.generator_words, 3..=20).text("Words"));
                     ui.label("Separator");
-                    ui.text_edit_singleline(&mut self.generator_separator);
-                    ui.checkbox(&mut self.generator_upper, super::labels::text("Capitalize"));
-                    ui.checkbox(&mut self.generator_numbers, super::labels::text("Include number"));
+                    ui.text_edit_singleline(&mut app.generator_separator);
+                    ui.checkbox(&mut app.generator_upper, super::labels::text("Capitalize"));
+                    ui.checkbox(&mut app.generator_numbers, super::labels::text("Include number"));
                 } else {
-                    egui::ComboBox::from_id_salt("username-kind").selected_text(["Word","Subaddress","Catch-all"][self.username_mode]).show_ui(ui,|ui|{for(i,label)in["Word","Subaddress","Catch-all"].iter().enumerate(){ui.selectable_value(&mut self.username_mode,i,*label);}});
-                    if self.username_mode==1 {ui.label("Email");ui.text_edit_singleline(&mut self.username_email);}
-                    if self.username_mode==2 {ui.label("Domain");ui.text_edit_singleline(&mut self.username_domain);}
-                    ui.checkbox(&mut self.generator_upper, super::labels::text("Capitalize"));
-                    ui.checkbox(&mut self.generator_numbers, super::labels::text("Include number"));
+                    egui::ComboBox::from_id_salt("username-kind").selected_text(["Word","Subaddress","Catch-all"][app.username_mode]).show_ui(ui,|ui|{for(i,label)in["Word","Subaddress","Catch-all"].iter().enumerate(){ui.selectable_value(&mut app.username_mode,i,*label);}});
+                    if app.username_mode==1 {ui.label("Email");ui.text_edit_singleline(&mut app.username_email);}
+                    if app.username_mode==2 {ui.label("Domain");ui.text_edit_singleline(&mut app.username_domain);}
+                    ui.checkbox(&mut app.generator_upper, super::labels::text("Capitalize"));
+                    ui.checkbox(&mut app.generator_numbers, super::labels::text("Include number"));
                 }
                 if ui
-                    .add_enabled(!self.core.generator.busy, egui::Button::new(super::labels::text("Generate")))
+                    .add_enabled(!app.core.generator.busy, egui::Button::new(super::labels::text("Generate")))
                     .clicked()
                 {
-                    let request = match self.generator_mode {
+                    let request = match app.generator_mode {
                         1 => Generate::Passphrase(PassphraseGeneratorRequest {
-                            num_words: self.generator_words.clamp(3, 20),
-                            word_separator: self.generator_separator.clone(),
-                            capitalize: self.generator_upper,
-                            include_number: self.generator_numbers,
+                            num_words: app.generator_words.clamp(3, 20),
+                            word_separator: app.generator_separator.clone(),
+                            capitalize: app.generator_upper,
+                            include_number: app.generator_numbers,
                         }),
-                        2 => Generate::Username(match self.username_mode {
-                            1=>serde_json::from_value(serde_json::json!({"subaddress":{"type":"random","email":self.username_email}})).expect("SDK subaddress schema"),
-                            2=>serde_json::from_value(serde_json::json!({"catchall":{"type":"random","domain":self.username_domain}})).expect("SDK catch-all schema"),
-                            _=>UsernameGeneratorRequest::Word{capitalize:self.generator_upper,include_number:self.generator_numbers}
+                        2 => Generate::Username(match app.username_mode {
+                            1=>serde_json::from_value(serde_json::json!({"subaddress":{"type":"random","email":app.username_email}})).expect("SDK subaddress schema"),
+                            2=>serde_json::from_value(serde_json::json!({"catchall":{"type":"random","domain":app.username_domain}})).expect("SDK catch-all schema"),
+                            _=>UsernameGeneratorRequest::Word{capitalize:app.generator_upper,include_number:app.generator_numbers}
                         }),
                         _ => Generate::Password(PasswordGeneratorRequest {
-                            length: self.generator_length.clamp(5, 128),
-                            lowercase: self.generator_lower,
-                            uppercase: self.generator_upper,
-                            numbers: self.generator_numbers,
-                            special: self.generator_special,
-                            avoid_ambiguous:self.generator_avoid_ambiguous,
-                            min_number:self.generator_numbers.then_some(self.generator_min_numbers),
-                            min_special:self.generator_special.then_some(self.generator_min_special),
+                            length: app.generator_length.clamp(5, 128),
+                            lowercase: app.generator_lower,
+                            uppercase: app.generator_upper,
+                            numbers: app.generator_numbers,
+                            special: app.generator_special,
+                            avoid_ambiguous:app.generator_avoid_ambiguous,
+                            min_number:app.generator_numbers.then_some(app.generator_min_numbers),
+                            min_special:app.generator_special.then_some(app.generator_min_special),
                             ..Default::default()
                         }),
                     };
-                    self.core.generate(request);
+                    app.core.generate(request);
                 }
-                if self.core.generator.busy {
+                if app.core.generator.busy {
                     ui.spinner();
                 }
                 ui.separator();
                 ui.label(
-                    egui::RichText::new(self.core.generator.output.as_str())
+                    egui::RichText::new(app.core.generator.output.as_str())
                         .monospace()
                         .size(19.),
                 );
                 if ui.button(super::labels::text("Copy")).clicked() {
-                    self.core.clipboard.copy(
-                        self.core.generator.output.to_string(),
+                    app.core.clipboard.copy(
+                        app.core.generator.output.to_string(),
                         services::clipboard::Sensitivity::Sensitive,
                     );
                 }
-                ui.collapsing("History", |ui| {
-                    if let Some(uid) = self.core.active {
-                        if ui.button(super::labels::text("Clear history")).clicked() {
-                            self.core.manager.clear_password_history(&uid);
-                        }
-                        egui::ScrollArea::vertical()
-                            .max_height(220.)
-                            .show(ui, |ui| {
-                                for entry in self.core.manager.password_history(&uid) {
-                                    ui.horizontal(|ui| {
-                                        ui.label(
-                                            entry
-                                                .created
-                                                .with_timezone(&chrono::Local)
-                                                .format("%H:%M")
-                                                .to_string(),
-                                        );
-                                        ui.label(&entry.value);
-                                        if ui.small_button(super::labels::text("Copy")).clicked() {
-                                            self.core.clipboard.copy(
-                                                entry.value,
-                                                services::clipboard::Sensitivity::Sensitive,
-                                            );
-                                        }
-                                    });
-                                }
-                            });
-                    }
-                });
             });
+        });
         if !open {
             self.core.generator.clear();
         }
         self.core.generator_open = open;
+    }
+    fn generator_history(&mut self, ui: &mut egui::Ui) {
+        let Some(uid) = self.core.active else {
+            return;
+        };
+        if ui.button(super::labels::text("Clear history")).clicked() {
+            self.core.manager.clear_password_history(&uid);
+        }
+        let entries = self.core.manager.password_history(&uid);
+        if entries.is_empty() {
+            ui.weak(crate::fl!("generator-history-empty"));
+        }
+        for entry in entries {
+            ui.horizontal(|ui| {
+                ui.label(
+                    entry
+                        .created
+                        .with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d %H:%M")
+                        .to_string(),
+                );
+                if ui.small_button(super::labels::text("Copy")).clicked() {
+                    self.core.clipboard.copy(
+                        entry.value.clone(),
+                        services::clipboard::Sensitivity::Sensitive,
+                    );
+                }
+                ui.add(egui::Label::new(egui::RichText::new(&entry.value).monospace()).wrap());
+            });
+            ui.separator();
+        }
+    }
+    fn native_tool_window(
+        &mut self,
+        ctx: &egui::Context,
+        id: &'static str,
+        title: &str,
+        size: [f32; 2],
+        mut content: impl FnMut(&mut Self, &mut egui::Ui),
+    ) -> bool {
+        let mut open = true;
+        let scope = self.core.scope();
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of(("tool-window", id)),
+            egui::ViewportBuilder::default()
+                .with_title(format!("{} – Bitwarden", super::labels::text(title)))
+                .with_app_id(crate::assets::DESKTOP_APP_ID)
+                .with_icon(crate::assets::window_icon().unwrap_or_default())
+                .with_inner_size(size)
+                .with_min_inner_size([560., 350.]),
+            |ui, class| {
+                let child = ui.ctx().clone();
+                ui.style_mut().interaction.selectable_labels = false;
+                ui.style_mut().spacing.scroll = egui::style::ScrollStyle::solid();
+                ui.style_mut().spacing.scroll.bar_width = 12.;
+                ui.style_mut().spacing.scroll.foreground_color = true;
+                if !child.input(|i| i.events.is_empty()) {
+                    self.core.record_activity();
+                }
+                child.send_viewport_cmd(egui::ViewportCommand::ContentProtected(
+                    !self.core.settings.allow_screenshots,
+                ));
+                if child.input(|i| i.viewport().close_requested())
+                    || child.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape))
+                {
+                    open = false;
+                } else if class == egui::ViewportClass::EmbeddedWindow {
+                    content(self, ui);
+                } else {
+                    egui::CentralPanel::default().show(ui, |ui| content(self, ui));
+                }
+                self.drain_clipboard(&child, scope.clone(), None);
+            },
+        );
+        if !open {
+            ctx.send_viewport_cmd_to(
+                egui::ViewportId::from_hash_of(("tool-window", id)),
+                egui::ViewportCommand::Close,
+            );
+            ctx.request_repaint_of(egui::ViewportId::ROOT);
+        }
+        open
     }
     fn export(&mut self, ctx: &egui::Context) {
         let mut open = true;

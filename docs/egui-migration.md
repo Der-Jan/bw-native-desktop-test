@@ -130,3 +130,12 @@ Window app IDs now match the packager's desktop entry basename. The local-build
 desktop registration helper supplies the existing blue Bitwarden shield; the
 yellow/white W was KDE's Wayland fallback for an unresolved desktop entry.
 Auxiliary windows share the app ID and cached shield image.
+
+Settings and Generator now use separate resizable native windows, sharing the
+desktop palette, fonts and app icon. Escape closes the focused tool window.
+Their scrollbars reserve space and show a solid, contrasting handle. Generator
+uses four framed tabs with a colored active underline: Password, Passphrase,
+Username and History. History has its own content page; the menu's Generator
+history action selects it directly. Clipboard copies retain sensitive-data TTL
+handling, child-window interaction records activity, and screen-capture
+protection follows the configured preference on supported platforms.

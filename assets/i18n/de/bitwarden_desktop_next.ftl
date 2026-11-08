@@ -524,6 +524,7 @@ generator-title = Generator
 generator-tab-password = Passwort
 generator-tab-passphrase = Passphrase
 generator-tab-username = Nutzername
+generator-tab-history = Verlauf
 
 # Password tab
 generator-length = Länge

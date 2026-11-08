@@ -178,6 +178,10 @@ impl Application {
                 self.core.menu_action(action);
                 self.focus_search = true;
             }
+            GeneratorHistory => {
+                self.generator_mode = 3;
+                self.core.menu_action(action);
+            }
             _ => self.core.menu_action(action),
         }
     }

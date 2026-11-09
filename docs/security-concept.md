@@ -45,9 +45,12 @@ storage/deletion and account-scoped HTTP mTLS are now implemented for pre-sync
 review. See [login requirements](login-sync-requirements.md) and
 [mTLS requirements](mtls-requirements.md) for precise coverage and limitations.
 Full read sync is implemented with atomic encrypted SDK-SQLite snapshots and
-read-only repositories; server mutations and notifications remain disabled. Windows ACL/platform validation, server-wide token
-revocation, unsupported login challenges, favicon policy and full organization
-policy parity remain open. Dropping UI/SDK strings does not guarantee erasure of
+read-only repositories; server mutations and notifications remain disabled.
+Windows ACL/platform validation, remaining Vaultwarden login challenges and
+Vaultwarden-supported organization policies remain open. Profile-scoped website
+icons are implemented. Targeted session revocation has no supported endpoint in
+the audited Vaultwarden versions; global deauthorization is not normal logout.
+See the Vaultwarden compatibility audit in [login requirements](login-sync-requirements.md). Dropping UI/SDK strings does not guarantee erasure of
 all allocator or widget copies. This remains a prototype under review.
 
 ## Verification

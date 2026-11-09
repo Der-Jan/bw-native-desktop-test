@@ -24,23 +24,25 @@ the first runtime/session and demo-storage slice is implemented; remaining work 
 - **Production storage platform validation** `[M]` — validate Windows ACLs and
   macOS/Windows credential-store behavior. AEAD credential persistence with OS
   keys, private Unix paths, pending-login recovery and orphan cleanup are implemented.
-- **Server session revocation and platform durability** `[L]` — assess supported
-  per-session/device revocation APIs and validate Windows durability. Vaultwarden's
-  security-stamp reset deauthorizes all devices and must not be invoked as ordinary
-  logout; a global session reset needs a separate explicit user action. Installation-local IDs, runtime
-  revocation, token-key deletion, plaintext UI purge, retained removal markers and
-  SQLite/metadata cleanup now cover production account records as well as demos.
+- **Platform durability** `[L]` — validate Windows durability and credential-store
+  behavior. Targeted server token/session revocation is blocked by the audited
+  Vaultwarden 1.37.5 API; `clear-token` is push-only and the security-stamp reset
+  affects all devices. Keep offline-safe local logout and do not substitute a
+  global reset. Revisit when a supported targeted API exists; see the audit in
+  [login/sync requirements](login-sync-requirements.md).
 - **Protected action authorization parity** `[M]` — one-use account/revision/action
   grants, detail/copy/edit/save/delete gates and fresh export authorization are wired.
   Add policy-aware selective field display (current `view_password=false` fails closed
-  for full details), broader organization export policy and platform acceptance.
+  for full details), Vaultwarden-supported policy enforcement and platform acceptance.
 - **Secret-safe diagnostics** `[M]` — continue the general redaction audit.
   Profile-scoped favicon requests are implemented with account TLS/mTLS, no OAuth
   headers, no redirects/public fallback and no raw domain/error logging.
 - **Remaining login challenges and encrypted sync** `[L]` — password/TOTP/email
   login, OS-protected tokens and full read-sync snapshots are wired; unsupported
   challenges fail explicitly. Remaining sync work includes polling/WSS, complete
-  policies and key migrations, online CRUD, attachments and Send. Follow
+  Vaultwarden-supported policies and key migrations, online CRUD, attachments and
+  Send. Exclude Bitwarden-only passwordless passkey login and unsupported Enterprise
+  policies. Follow
   [login and sync requirements](login-sync-requirements.md), including SDK proof,
   challenge handling, token persistence, transactional snapshots and online writes.
 - **Native mTLS completion** `[L]` — scoped login/probe HTTP transport, import,
@@ -128,20 +130,25 @@ master password can authenticate (not just unlock an existing `fake-data`-seeded
 Handle CAPTCHA / device-verification responses (toast + retry); sanitise SDK errors per
 the toast rule. 2FA screens are out of scope — see "Two-factor authentication" below.
 
-### Two-factor authentication `[L]`
+### Remaining Vaultwarden authentication `[L]`
 
-After a successful `ContinueWithEmail`, the server may demand TOTP / Duo / WebAuthn /
-email code. Each is its own `AuthPage` variant under `LoginView`. Independent of the
-login-command landing, but any 2FA-enabled account can't finish logging in without these.
+TOTP and email 2FA are implemented. Remaining supported server methods are
+WebAuthn/FIDO2 2FA, YubiKey OTP and Duo, subject to server configuration. Device
+approval is a separate supported login flow. Passwordless passkey vault login is
+not supported by audited Vaultwarden and is outside scope. Keep unsupported
+challenges explicit and fail closed; see the compatibility audit in
+[login/sync requirements](login-sync-requirements.md).
 
 ### Registration view `[M]`
 
 "Create account" link on login email screen. Email, password, hint fields. New sub-view
 under `views/register/` plus a new `Register` screen variant or inlined into `LoginView`.
 
-### SSO login flow `[L]`
+### Vaultwarden OIDC SSO login flow `[L]`
 
-"Use single sign-on" button on login email screen. Provider selection + browser redirect.
+Implement only when supported/enabled by the configured Vaultwarden server.
+Browser authorization redirect with bound state/nonce, PKCE and callback handling;
+no direct SAML flow or Bitwarden-only SSO organization-policy requirement.
 
 ### Website icons for server accounts — implemented
 

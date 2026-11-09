@@ -4,6 +4,61 @@ Status: login and full read-sync implemented for review; writes/notifications de
 in [security concept](security-concept.md). Networking must obey the
 [mTLS transport policy](mtls-requirements.md), including when no identity is set.
 
+## Vaultwarden scope and audited compatibility
+
+The implementation target is Vaultwarden, not full Bitwarden Enterprise/Electron
+feature parity. Enable only functionality supported by the configured Vaultwarden
+server; presence in the SDK is not sufficient. Optional server features may be
+configured off, and a supported server feature is not necessarily implemented in
+this client yet.
+
+Audit: 2026-11-09, stable [Vaultwarden 1.37.5](https://github.com/dani-garcia/vaultwarden/releases/tag/1.37.5),
+commit `6ed6921cc2b0e03b4d74189574d2a5e71c512e97`. The same relevant route/policy
+boundaries were checked on main `17b159beff4b892f07f61f38ce2fe452e55251c1`.
+This is a source audit, not discovery of the user's installed server version.
+
+| Method | Vaultwarden 1.37.5 | Native client |
+| --- | --- | --- |
+| Master password, TOTP, email 2FA | Supported; email depends on server setup | Implemented |
+| FIDO2/WebAuthn as second factor | Supported/configurable | Open |
+| YubiKey OTP, Duo | Supported/configurable | Open |
+| Login approved on another device (`authRequest`) | Supported | Open |
+| OIDC SSO | Supported when enabled by the server | Open |
+| Passwordless passkey login to the vault | Explicitly unsupported | Outside scope |
+| Direct SAML login flow | Not the server's OIDC SSO protocol | Outside scope |
+
+Sources: [identity grant/challenge handling](https://github.com/dani-garcia/vaultwarden/blob/1.37.5/src/api/identity.rs),
+[2FA routes](https://github.com/dani-garcia/vaultwarden/blob/1.37.5/src/api/core/two_factor/mod.rs),
+[passkey-login placeholder](https://github.com/dani-garcia/vaultwarden/blob/1.37.5/src/api/core/mod.rs).
+WebAuthn 2FA is distinct from passwordless vault login and from passkeys stored for
+other websites. API-key grants also exist server-side but are not a commitment to
+add another desktop login flow.
+
+Organization-policy scope follows Vaultwarden's actual `OrgPolicyType` and its
+server behavior. Applicable examples include mandatory 2FA, master-password and
+generator rules, personal ownership, disabling Send, PIN restrictions, restricted
+item types and URI matching defaults. Do not implement Bitwarden-only maximum
+vault-timeout, personal-vault export prohibition or RequireSso policies: these
+are explicitly commented out as unsupported in
+[Vaultwarden's policy enum](https://github.com/dani-garcia/vaultwarden/blob/1.37.5/src/db/models/org_policy.rs).
+OIDC can still be required by server configuration independently of an org policy.
+Collection/item permissions remain mandatory and are distinct from these policies.
+
+Logout API audit: no registered endpoint for revoking only the current app's
+access/refresh token or device session was found in the audited versions. In
+particular, `/devices/identifier/<device_id>/clear-token` removes only a push
+notification token, not login tokens. `/accounts/security-stamp` invalidates all
+sessions and deletes all devices. Neither is a substitute for targeted session
+revocation. Do not probe guessed OAuth revocation endpoints or use the global
+reset during normal logout. See
+[registered account routes and implementations](https://github.com/dani-garcia/vaultwarden/blob/1.37.5/src/api/core/accounts.rs).
+Local logout continues to revoke in-flight authority and remove protected tokens
+and the local cache, including offline. If a future supported Vaultwarden API
+provides targeted revocation, add a bounded best-effort request through the
+account's TLS/mTLS transport before deleting the credential, without making
+local logout depend on network availability. Global deauthorization would need
+a separate explicit action and is not part of this task.
+
 ## Current implementation and SDK proof
 
 The pre-sync implementation now covers HTTPS US/EU/self-hosted profiles, anonymous
@@ -142,7 +197,7 @@ local master-password unlock, and remote sync are separate states.
 4. Handle server-requested device verification, CAPTCHA and 2FA as typed outcomes.
    Initial supported methods must be explicit (for example TOTP/email); unsupported
    Duo/WebAuthn/SSO methods show a usable explanation and retain no authenticated
-   session. Full Electron parity requires the remaining methods, not bypasses.
+   session. Only Vaultwarden-supported remaining methods are in scope; never bypass a challenge.
 5. Publish an authenticated account only after required challenges and local
    persistence succeed. A persistence failure may offer explicit session-only
    operation, never fake a remembered login. Respect server-directed password/KDF
@@ -156,8 +211,8 @@ and transport generation. Cancelled login and account switching cannot attach
 tokens or crypto state to a new target. Pending certificates are referenced by
 profile ID, never by a mutable global active-account pointer.
 
-SSO is a later explicit milestone: browser launch, cryptographically bound
-state/nonce and PKCE where the protocol uses it, validated callback routing,
+Vaultwarden OIDC SSO is a later explicit milestone: browser launch, cryptographically bound
+state/nonce and PKCE, validated callback routing,
 timeouts, and SDK account-key acquisition. An external browser needs its own
 certificate configuration; the Rust identity is not automatically available there.
 

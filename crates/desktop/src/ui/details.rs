@@ -130,16 +130,18 @@ impl Application {
                     .map(|editor| editor.data["name"].as_str().filter(|name| !name.is_empty()).unwrap_or("New item").to_owned())
                     .or_else(|| self.core.detail.as_ref().map(|detail| detail.name.clone()))
                     .unwrap_or_default();
-                ui.horizontal_top(|ui| {
-                    let title_width = (ui.available_width() - 32.).max(0.);
-                    ui.allocate_ui_with_layout(egui::vec2(title_width, 0.), egui::Layout::top_down(egui::Align::Min), |ui| {
-                        ui.set_min_width(title_width);
-                        ui.add(egui::Label::new(egui::RichText::new(title).size(18.)).wrap());
-                    });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    // Lay out the button first so the title uses the actual
+                    // remaining space, including theme padding and item spacing.
                     if ui.button("×").on_hover_text("Close (Escape)").clicked() {
                         self.core.close_details();
                         self.list_focus = true;
                     }
+                    let title_width = ui.available_width();
+                    ui.allocate_ui_with_layout(egui::vec2(title_width, 0.), egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.set_min_width(title_width);
+                        ui.add(egui::Label::new(egui::RichText::new(title).size(18.)).wrap());
+                    });
                 });
                 ui.separator();
                 if self.core.editor.is_some() {
@@ -197,7 +199,7 @@ impl Application {
                             ui.weak("Folder:");
                             ui.label(&folder_name);
                         });
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             edit = ui.add_enabled(detail.edit && detail.view_password && self.core.active.is_some_and(|uid|self.core.manager.policy_rules_for(&uid).allows_write(detail.r#type,detail.organization_id)), egui::Button::new(super::labels::text("Edit"))).clicked();
                             ui.add_enabled_ui(!self.core.remote(), |ui| {
                                 delete = ui.button("Move to trash").clicked();
@@ -644,21 +646,15 @@ fn read_field(ui: &mut egui::Ui, label: &str, text: &str, hidden: bool) -> bool 
     ui.add_space(5.);
     ui.weak(super::labels::text(label));
     let mut copy = false;
-    ui.horizontal_top(|ui| {
-        ui.allocate_ui_with_layout(
-            egui::vec2((ui.available_width() - 52.).max(50.), 0.),
-            egui::Layout::top_down(egui::Align::Min),
-            |ui| {
-                ui.add(
-                    egui::Label::new(if hidden {
-                        "••••••••"
-                    } else {
-                        text
-                    })
-                    .wrap()
-                    .selectable(false),
-                );
-            },
+    ui.horizontal_wrapped(|ui| {
+        ui.add(
+            egui::Label::new(if hidden {
+                "••••••••"
+            } else {
+                text
+            })
+            .wrap()
+            .selectable(false),
         );
         copy = ui.small_button(super::labels::text("Copy")).clicked();
     });

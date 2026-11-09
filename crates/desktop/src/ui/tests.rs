@@ -341,3 +341,58 @@ fn native_wayland_settings_fit_the_available_screen() {
         "Settings are scrollable despite available screen space"
     );
 }
+
+#[tokio::test]
+async fn hovering_details_does_not_change_the_width_available_to_the_list() {
+    for editing in [false, true] {
+        for name in [
+            "Company Jira",
+            "A long entry title that should wrap within the details panel instead of pushing the list out of the window",
+        ] {
+            let (ctx, mut app) = setup();
+            app.core.new_item(bitwarden_vault::CipherType::Login);
+            app.core.editor.as_mut().unwrap().data["name"] = serde_json::json!(name);
+            app.core.editor.as_mut().unwrap().data["login"]["username"] =
+                serde_json::json!("long-username-".repeat(40));
+            app.core.editor.as_mut().unwrap().data["notes"] =
+                serde_json::json!("Long notes that wrap across several lines. ".repeat(20));
+            if !editing {
+                app.core.detail = Some(app.core.editor.take().unwrap().cipher().unwrap());
+            }
+            let mut settled_width = None;
+            for index in 0..100 {
+                let mut list_width = 0.;
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1200., 840.),
+                        )),
+                        events: vec![egui::Event::PointerMoved(egui::pos2(
+                            1000. + (index % 40) as f32,
+                            120. + index as f32,
+                        ))],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        // Actual app spacing: a close button is wider than its glyph.
+                        ui.spacing_mut().button_padding = egui::vec2(10., 6.);
+                        ui.spacing_mut().item_spacing = egui::vec2(8., 6.);
+                        app.details_panel(ui);
+                        list_width = ui.available_width();
+                    },
+                );
+                output.textures_delta.clear();
+                if index == 5 {
+                    settled_width = Some(list_width);
+                }
+                if let Some(expected) = settled_width {
+                    assert!(
+                        (list_width - expected).abs() < 0.1,
+                        "hover frame {index}, editing={editing}, title={name:?}: list width changed from {expected} to {list_width}"
+                    );
+                }
+            }
+        }
+    }
+}

@@ -72,7 +72,7 @@ all allocator or widget copies. This remains a prototype under review.
 ## Verification
 
 Current verification (archive, creation, attachments and incoming-sync implementation): `cargo test --workspace`
-passes 251 desktop tests plus one generator test (three desktop tests ignored).
+passes 252 desktop tests plus one generator test (three desktop tests ignored).
 `cargo clippy --workspace --all-targets` passes with existing warnings; the release
 workspace builds. The native Wayland settings-fit test also passes explicitly.
 Creation/attachment regressions cover server-assigned IDs, personal and organization
@@ -104,7 +104,16 @@ private Xvfb display: attachment names/actions render, New opens the item editor
 and Save retains an encrypted new-entry draft when the fixture credential store
 is intentionally unavailable. A further isolated archive-view check confirms
 the Unarchive action, decrypted folder name and local Created / Last changed
-timestamps in entry details. These checks do not contact a user server.
+timestamps in entry details. A layout regression replays 100 hover frames for
+short/long titles, long usernames and long notes in read and edit views; the details panel must leave the list
+width unchanged. The close button is measured before assigning the title its
+remaining width, avoiding accumulated overflow from theme-dependent padding.
+A native Xvfb check additionally keeps the divider at x=810 over 120 pointer
+moves, drags it to x=730, and keeps that user-selected width over another 120
+moves. A synthetic saved entry with a long username and notes also keeps its
+divider at x=810 over 150 pointer moves. The actions row and Copy rows wrap instead of reserving guessed button widths
+or forcing narrow panels wider.
+These checks do not contact a user server.
 Automatic-save integration tests prove that successful saves trigger uploads,
 failures do not retry indefinitely, switching accounts cannot misroute a save,
 search/selection survive refresh and protected details remain gated. Folder

@@ -33,14 +33,16 @@ the first runtime/session and demo-storage slice is implemented; remaining work 
 - **Protected action authorization parity** `[M]` — one-use account/revision/action
   grants, detail/copy/edit/save/delete gates and fresh export authorization are wired.
   Add policy-aware selective field display (current `view_password=false` fails closed
-  for full details), Vaultwarden-supported policy enforcement and platform acceptance.
+  for full details) and platform acceptance. Vaultwarden generator, item-type, personal
+  ownership and URI-default policies are enforced from the encrypted snapshot;
+  master-password requirements are checked at login. See the policy scope below.
 - **Secret-safe diagnostics** `[M]` — continue the general redaction audit.
   Profile-scoped favicon requests are implemented with account TLS/mTLS, no OAuth
   headers, no redirects/public fallback and no raw domain/error logging.
 - **Remaining login challenges and encrypted sync** `[L]` — password/TOTP/email
   login, OS-protected tokens and full read-sync snapshots are wired; unsupported
   challenges fail explicitly. Remaining sync work includes polling/WSS, complete
-  Vaultwarden-supported policies and key migrations, online CRUD, attachments and
+  key migrations, online CRUD, attachments and
   Send. Exclude Bitwarden-only passwordless passkey login and unsupported Enterprise
   policies. Follow
   [login and sync requirements](login-sync-requirements.md), including SDK proof,

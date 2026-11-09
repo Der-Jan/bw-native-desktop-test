@@ -111,6 +111,7 @@ struct Fixture {
     ca_key: PKey<Private>,
     sync_response: Arc<Mutex<(u16, serde_json::Value)>>,
     sync_delay: Arc<std::sync::atomic::AtomicU64>,
+    login_policy: Arc<Mutex<Option<serde_json::Value>>>,
 }
 impl Fixture {
     fn new() -> Self {
@@ -156,6 +157,8 @@ impl Fixture {
         let sync_payload = sync_response.clone();
         let sync_delay = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let server_delay = sync_delay.clone();
+        let login_policy = Arc::new(Mutex::new(None::<serde_json::Value>));
+        let server_login_policy = login_policy.clone();
         let thread = std::thread::spawn(move || {
             while !done.load(Ordering::SeqCst) {
                 let (stream, _) = match listener.accept() {
@@ -302,7 +305,16 @@ impl Fixture {
                     if req.contains("twoFactorToken=123456")
                         || req.contains("grant_type=refresh_token")
                     {
-                        ("200 OK", response.clone(), "")
+                        let policy = server_login_policy.lock().unwrap().clone();
+                        let response = if let Some(policy) = policy {
+                            let mut data: serde_json::Value =
+                                serde_json::from_str(&response).unwrap();
+                            data["MasterPasswordPolicy"] = policy;
+                            data.to_string()
+                        } else {
+                            response.clone()
+                        };
+                        ("200 OK", response, "")
                     } else {
                         (
                             "400 Bad Request",
@@ -335,6 +347,7 @@ impl Fixture {
             ca_key: cakey,
             sync_response,
             sync_delay,
+            login_policy,
         }
     }
     fn bundle(&self, name: &str, key: &PKey<Private>, leaf: &X509) -> PathBuf {
@@ -1728,4 +1741,342 @@ async fn favicon_late_response_cannot_repopulate_a_recreated_cache() {
         service.get(&uid, "example.test"),
         IconState::Found(_)
     ));
+}
+
+fn org_policy(payload: &mut serde_json::Value, org: Uuid, kind: i64, data: serde_json::Value) {
+    let orgs = payload["profile"]["organizations"].as_array_mut().unwrap();
+    if !orgs
+        .iter()
+        .any(|o| o["id"].as_str() == Some(&org.to_string()))
+    {
+        orgs.push(serde_json::json!({"id":org,"name":"Synthetic policy organization","enabled":true,"usePolicies":true,"type":2,"status":2}));
+    }
+    payload["policies"].as_array_mut().unwrap().push(serde_json::json!({"id":Uuid::new_v4(),"organizationId":org,"type":kind,"enabled":true,"data":data}));
+}
+
+#[tokio::test]
+async fn organization_generator_and_uri_rules_survive_encrypted_offline_restart() {
+    use crate::services::sdk::{ClientExt, test_support::encrypted_sync_response, vault_sync};
+    use bitwarden_generators::{PassphraseGeneratorRequest, PasswordGeneratorRequest};
+    let f = Fixture::new();
+    let (manager, uid) = f.account().await;
+    let stale = manager.client_for(&uid).unwrap();
+    assert!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .generate_password(PasswordGeneratorRequest::default())
+            .await
+            .is_err(),
+        "Before first server sync the policy is unknown"
+    );
+    let mut payload = encrypted_sync_response(&manager, uid, "Policy-bound login").await;
+    let id: bitwarden_vault::CipherId = payload["ciphers"][0]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let org = Uuid::new_v4();
+    org_policy(
+        &mut payload,
+        org,
+        2,
+        serde_json::json!({"minLength":24,"useUppercase":true,"useLowercase":true,"numberCount":4,"specialCount":3,"minNumberWords":6,"capitalize":true,"includeNumber":true}),
+    );
+    org_policy(
+        &mut payload,
+        org,
+        16,
+        serde_json::json!({"uriMatchDetection":3}),
+    );
+    *f.sync_response.lock().unwrap() = (200, payload);
+    vault_sync::synchronize(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        stale
+            .generate_password(PasswordGeneratorRequest::default())
+            .await
+            .is_err()
+    );
+    let weak = PasswordGeneratorRequest {
+        length: 5,
+        lowercase: false,
+        uppercase: false,
+        numbers: false,
+        special: false,
+        ..Default::default()
+    };
+    let generated = manager
+        .client_for(&uid)
+        .unwrap()
+        .generate_password(weak)
+        .await
+        .unwrap();
+    assert_eq!(generated.len(), 24);
+    assert!(generated.chars().any(|c| c.is_ascii_uppercase()));
+    assert!(generated.chars().any(|c| c.is_ascii_lowercase()));
+    assert!(generated.chars().filter(|c| c.is_ascii_digit()).count() >= 4);
+    assert!(
+        generated
+            .chars()
+            .filter(|c| "!@#$%^&*".contains(*c))
+            .count()
+            >= 3
+    );
+    let passphrase = manager
+        .client_for(&uid)
+        .unwrap()
+        .generate_passphrase(PassphraseGeneratorRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(passphrase.split(' ').count(), 6);
+    assert!(passphrase.chars().any(|c| c.is_ascii_digit()));
+    let mut view = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    view.login.as_mut().unwrap().uris = Some(
+        serde_json::from_value(serde_json::json!([
+            {"uri":"https://new.example.test"},{"uri":"https://explicit.example.test","match":5}
+        ]))
+        .unwrap(),
+    );
+    let saved = manager
+        .client_for(&uid)
+        .unwrap()
+        .save_cipher(view)
+        .await
+        .unwrap();
+    let uris = saved.login.unwrap().uris.unwrap();
+    assert_eq!(
+        uris[0].r#match, None,
+        "Default matching remains dynamic instead of freezing today's organization setting"
+    );
+    assert_eq!(
+        manager.policy_rules_for(&uid).uri_default,
+        Some(bitwarden_vault::UriMatchType::Exact)
+    );
+    assert_eq!(uris[1].r#match, Some(bitwarden_vault::UriMatchType::Never));
+    drop(manager);
+    let restored = crate::services::sdk::production::test_load(&f.root, &f.store).await;
+    restored
+        .unlock_data_for(&uid)
+        .unwrap()
+        .unlock("synthetic-password".into())
+        .await
+        .unwrap();
+    assert_eq!(restored.policy_rules_for(&uid).generator.min_length, 24);
+    assert_eq!(
+        restored
+            .client_for(&uid)
+            .unwrap()
+            .generate_password(PasswordGeneratorRequest::default())
+            .await
+            .unwrap()
+            .len(),
+        24
+    );
+    assert_eq!(
+        restored
+            .client_for(&uid)
+            .unwrap()
+            .full_cipher(id)
+            .await
+            .unwrap()
+            .login
+            .unwrap()
+            .uris
+            .unwrap()[0]
+            .r#match,
+        None
+    );
+    assert_eq!(
+        restored.policy_rules_for(&uid).uri_default,
+        Some(bitwarden_vault::UriMatchType::Exact)
+    );
+}
+
+#[tokio::test]
+async fn personal_ownership_blocks_local_edit_and_save_without_blocking_read_or_copy() {
+    use crate::services::sdk::{
+        Action, ClientExt, test_support::encrypted_sync_response, vault_sync,
+    };
+    let f = Fixture::new();
+    let (manager, uid) = f.account().await;
+    let mut payload = encrypted_sync_response(&manager, uid, "Personal item").await;
+    let id = payload["ciphers"][0]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    org_policy(&mut payload, Uuid::new_v4(), 5, serde_json::json!({}));
+    *f.sync_response.lock().unwrap() = (200, payload);
+    vault_sync::synchronize(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .list_ciphers()
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .full_cipher_for(id, Action::Edit)
+            .await
+            .is_err()
+    );
+    let mut view = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher_for(id, Action::Copy)
+        .await
+        .unwrap();
+    view.name = "Blocked local edit".into();
+    assert!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .save_cipher(view)
+            .await
+            .is_err()
+    );
+    assert_eq!(manager.local_edit_count(&uid), 0);
+    assert_eq!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .full_cipher(id)
+            .await
+            .unwrap()
+            .name,
+        "Personal item"
+    );
+}
+
+#[tokio::test]
+async fn restricted_types_block_list_read_copy_and_ssh_agent_and_policy_removal_restores_them() {
+    use crate::services::sdk::{
+        Action, ClientExt, test_support::encrypted_ssh_sync_response, vault_sync,
+    };
+    let f = Fixture::new();
+    let (manager, uid) = f.account().await;
+    let (mut payload, _) = encrypted_ssh_sync_response(&manager, uid).await;
+    let id = payload["ciphers"][1]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    org_policy(&mut payload, Uuid::new_v4(), 15, serde_json::json!([5]));
+    *f.sync_response.lock().unwrap() = (200, payload.clone());
+    vault_sync::synchronize(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .list_ciphers()
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    for action in [Action::Read, Action::Copy, Action::Edit] {
+        assert!(
+            manager
+                .client_for(&uid)
+                .unwrap()
+                .full_cipher_for(id, action)
+                .await
+                .is_err()
+        );
+    }
+    assert!(
+        manager
+            .agent_session_for(&uid)
+            .unwrap()
+            .identities()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    payload["policies"][0]["enabled"] = false.into();
+    *f.sync_response.lock().unwrap() = (200, payload);
+    vault_sync::synchronize(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .list_ciphers()
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        manager
+            .agent_session_for(&uid)
+            .unwrap()
+            .identities()
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn organization_master_password_requirement_prevents_publishing_a_weak_login() {
+    let f = Fixture::new();
+    *f.login_policy.lock().unwrap() =
+        Some(serde_json::json!({"EnforceOnLogin":true,"MinLength":64,"MinComplexity":null}));
+    let transport = Transport::new(&f.store, f.import()).unwrap();
+    let pending = PendingLogin::prepare(
+        Attempt::new(),
+        transport,
+        "test@example.invalid".into(),
+        Zeroizing::new("synthetic-password".into()),
+        Uuid::new_v4(),
+    )
+    .await
+    .unwrap();
+    let result = pending
+        .submit(Some((
+            Factor::Authenticator,
+            Zeroizing::new("123456".into()),
+        )))
+        .await;
+    assert!(result.unwrap_err().contains("stronger master password"));
+    assert!(
+        !f.root.join("accounts").exists(),
+        "No local account or token is published after policy failure"
+    );
 }

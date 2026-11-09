@@ -323,11 +323,13 @@ impl Application {
                                 &mut prefs.minimize_on_copy,
                                 super::labels::text("Hide to tray after copy"),
                             );
+                            let pin_disabled = app.core.manager.policy_rules_for(&uid).pin_disabled;
+                            if pin_disabled {prefs.pin_unlock = false;}
                             ui.add_enabled(
                                 false,
                                 egui::Checkbox::new(
                                     &mut prefs.pin_unlock,
-                                    "Unlock with PIN (not implemented)",
+                                    if pin_disabled {"PIN unlock disabled by organization"} else {"Unlock with PIN (not implemented)"},
                                 ),
                             );
                             ui.add_enabled(
@@ -353,6 +355,17 @@ impl Application {
                                 changed = true;
                             }
                         }
+                        ui.separator();
+                        ui.heading("Organization policies");
+                        if let Some(uid) = app.core.active.filter(|_|app.core.unlocked()) {
+                            let rules = app.core.manager.policy_rules_for(&uid);
+                            if app.core.remote() && app.core.manager.last_sync(&uid).is_none() {ui.weak("Synchronize this account to load organization policies.");}
+                            else if rules.summaries.is_empty() {ui.weak("No active organization policies in the latest sync.");}
+                            else {
+                                ui.weak("Applied from the latest synchronized account snapshot.");
+                                for (org,description) in &rules.summaries { ui.label(format!("{org}: {description}")); }
+                            }
+                        } else { ui.weak("Unlock an account to view its organization policies."); }
                         ui.separator();
                         ui.heading(super::labels::text("Browser integration"));
                         changed |= ui.checkbox(&mut app.core.settings.browser_integration, "Allow browser unlock from this desktop app").changed();
@@ -453,10 +466,26 @@ impl Application {
         let open = self.native_tool_window(ctx, "generator", "Generator", [600., 540.], |this, ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 let app = this;
+                let policy_rules = app.core.active.map(|uid|app.core.manager.policy_rules_for(&uid)).unwrap_or_default();
+                let policy = &policy_rules.generator;
+                let policies_ready = !app.core.remote() || app.core.active.is_some_and(|uid|app.core.manager.last_sync(&uid).is_some());
+                if !policies_ready {ui.weak("Synchronize this account to load generator policies first.");}
+                if let Some(mode) = policy.mode && app.generator_mode < 2 { app.generator_mode = mode; }
+                if app.generator_mode == 0 {
+                    app.generator_length = app.generator_length.max(policy.min_length);
+                    app.generator_upper |= policy.upper; app.generator_lower |= policy.lower;
+                    app.generator_numbers |= policy.numbers; app.generator_special |= policy.special;
+                    app.generator_min_numbers = app.generator_min_numbers.max(policy.min_numbers);
+                    app.generator_min_special = app.generator_min_special.max(policy.min_special);
+                } else if app.generator_mode == 1 {
+                    app.generator_words = app.generator_words.max(policy.min_words);
+                    app.generator_upper |= policy.capitalize; app.generator_numbers |= policy.include_number;
+                }
+                if policy.enabled {ui.weak("Organization generator requirements are applied.");}
                 ui.horizontal(|ui| {
                     for (i, label) in ["Password", "Passphrase", "Username", "History"].iter().enumerate() {
                         let selected = app.generator_mode == i;
-                        let response = ui.add_sized([120., 34.], egui::Button::new(super::labels::text(label)).selected(selected));
+                        let response = ui.add_enabled_ui(i >= 2 || policy.mode.is_none_or(|mode|mode == i), |ui| ui.add_sized([120., 34.], egui::Button::new(super::labels::text(label)).selected(selected))).inner;
                         if response.clicked() { app.generator_mode = i; }
                         if selected {
                             ui.painter().line_segment([response.rect.left_bottom(), response.rect.right_bottom()], egui::Stroke::new(3., ui.visuals().selection.bg_fill));
@@ -469,31 +498,31 @@ impl Application {
                     return;
                 }
                 if app.generator_mode == 0 {
-                    ui.add(egui::Slider::new(&mut app.generator_length, 5..=128).text("Length"));
+                    ui.add(egui::Slider::new(&mut app.generator_length, policy.min_length.max(5)..=128).text("Length"));
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut app.generator_lower, super::labels::text("a–z"));
-                        ui.checkbox(&mut app.generator_upper, super::labels::text("A–Z"));
-                        ui.checkbox(&mut app.generator_numbers, super::labels::text("0–9"));
-                        ui.checkbox(&mut app.generator_special, super::labels::text("!@#$"));
+                        ui.add_enabled(!policy.lower, egui::Checkbox::new(&mut app.generator_lower, super::labels::text("a–z")));
+                        ui.add_enabled(!policy.upper, egui::Checkbox::new(&mut app.generator_upper, super::labels::text("A–Z")));
+                        ui.add_enabled(!policy.numbers, egui::Checkbox::new(&mut app.generator_numbers, super::labels::text("0–9")));
+                        ui.add_enabled(!policy.special, egui::Checkbox::new(&mut app.generator_special, super::labels::text("!@#$")));
                     });
                     ui.checkbox(&mut app.generator_avoid_ambiguous,super::labels::text("Avoid ambiguous characters"));
-                    ui.add(egui::Slider::new(&mut app.generator_min_numbers,0..=9).text("Minimum numbers"));
-                    ui.add(egui::Slider::new(&mut app.generator_min_special,0..=9).text("Minimum special characters"));
+                    ui.add(egui::Slider::new(&mut app.generator_min_numbers,policy.min_numbers..=9).text("Minimum numbers"));
+                    ui.add(egui::Slider::new(&mut app.generator_min_special,policy.min_special..=9).text("Minimum special characters"));
                 } else if app.generator_mode == 1 {
-                    ui.add(egui::Slider::new(&mut app.generator_words, 3..=20).text("Words"));
+                    ui.add(egui::Slider::new(&mut app.generator_words, policy.min_words.max(3)..=20).text("Words"));
                     ui.label("Separator");
                     ui.text_edit_singleline(&mut app.generator_separator);
-                    ui.checkbox(&mut app.generator_upper, super::labels::text("Capitalize"));
-                    ui.checkbox(&mut app.generator_numbers, super::labels::text("Include number"));
+                    ui.add_enabled(app.generator_mode != 1 || !policy.capitalize, egui::Checkbox::new(&mut app.generator_upper, super::labels::text("Capitalize")));
+                    ui.add_enabled(app.generator_mode != 1 || !policy.include_number, egui::Checkbox::new(&mut app.generator_numbers, super::labels::text("Include number")));
                 } else {
                     egui::ComboBox::from_id_salt("username-kind").selected_text(["Word","Subaddress","Catch-all"][app.username_mode]).show_ui(ui,|ui|{for(i,label)in["Word","Subaddress","Catch-all"].iter().enumerate(){ui.selectable_value(&mut app.username_mode,i,*label);}});
                     if app.username_mode==1 {ui.label("Email");ui.text_edit_singleline(&mut app.username_email);}
                     if app.username_mode==2 {ui.label("Domain");ui.text_edit_singleline(&mut app.username_domain);}
-                    ui.checkbox(&mut app.generator_upper, super::labels::text("Capitalize"));
-                    ui.checkbox(&mut app.generator_numbers, super::labels::text("Include number"));
+                    ui.add_enabled(app.generator_mode != 1 || !policy.capitalize, egui::Checkbox::new(&mut app.generator_upper, super::labels::text("Capitalize")));
+                    ui.add_enabled(app.generator_mode != 1 || !policy.include_number, egui::Checkbox::new(&mut app.generator_numbers, super::labels::text("Include number")));
                 }
                 if ui
-                    .add_enabled(!app.core.generator.busy, egui::Button::new(super::labels::text("Generate")))
+                    .add_enabled(!app.core.generator.busy && (app.generator_mode == 2 || policies_ready), egui::Button::new(super::labels::text("Generate")))
                     .clicked()
                 {
                     let request = match app.generator_mode {

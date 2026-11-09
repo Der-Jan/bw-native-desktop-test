@@ -34,6 +34,7 @@ pub use favicon::FaviconSource;
 mod client_ext;
 mod loader;
 mod local_edits;
+pub mod policies;
 pub mod production;
 pub mod refresh;
 mod removal;

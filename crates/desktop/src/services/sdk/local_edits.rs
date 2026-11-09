@@ -12,6 +12,10 @@ impl SessionClient {
         let _lease = session.state.gate.write().await;
         session.ensure_unlocked()?;
         let client = session.state.client()?;
+        let rules = session.policy_rules();
+        if !rules.allows_write(view.r#type, view.organization_id) {
+            return Err(super::policies::DENIED.into());
+        }
         let id = view
             .id
             .ok_or("Creating server entries is not implemented yet")?;

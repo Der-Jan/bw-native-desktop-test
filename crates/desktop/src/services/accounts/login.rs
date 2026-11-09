@@ -306,6 +306,11 @@ impl PendingLogin {
                     .into(),
             );
         }
+        if let Some(policy) = get(&data, "masterPasswordPolicy") {
+            crate::services::sdk::policies::validate_login(policy, &self.password, &self.email)
+                .await?;
+            self.attempt.check()?;
+        }
         let access = get(&data, "access_token")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())

@@ -40,8 +40,10 @@ impl AgentSession {
         }
     }
     pub async fn identities(&self) -> Result<Vec<AgentIdentity>, String> {
+        let session = self.token.clone();
         self.client()
-            .run(|client| async move {
+            .run(move |client| async move {
+                let rules = session.policy_rules();
                 let repo = client
                     .platform()
                     .state()
@@ -49,7 +51,8 @@ impl AgentSession {
                     .map_err(|_| DENIED)?;
                 let mut result = Vec::new();
                 for encrypted in repo.list().await.map_err(|_| DENIED)? {
-                    if encrypted.r#type != CipherType::SshKey
+                    if !rules.allows_read(encrypted.r#type, encrypted.organization_id)
+                        || encrypted.r#type != CipherType::SshKey
                         || encrypted.deleted_date.is_some()
                         || encrypted.archived_date.is_some()
                         || !encrypted.view_password

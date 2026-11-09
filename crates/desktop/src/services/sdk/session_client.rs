@@ -19,8 +19,9 @@ pub struct SessionClient {
 impl SessionClient {
     /// Decrypt item and navigation metadata under the same revocable operation lease.
     pub async fn list_vault(self) -> Result<(Vec<CipherListView>, Vec<FolderView>), String> {
-        self.run(|client| async move {
-            let items = client.clone().list_ciphers().await?;
+        let session = self.session.clone();
+        self.run(move |client| async move {
+            let items = permitted_list(&client, &session).await?;
             let folders = client.list_folders().await?;
             Ok((items, folders))
         })
@@ -52,6 +53,18 @@ macro_rules! forward {
             async fn full_cipher(self, cipher_id: CipherId) -> Result<CipherView,String> {
                 self.full_cipher_for(cipher_id,Action::Read).await
             }
+            async fn list_ciphers(self) -> Result<Vec<CipherListView>,String> {
+                let session=self.session.clone();
+                self.run(move |client|async move { permitted_list(&client,&session).await }).await
+            }
+            async fn generate_password(self, req: PasswordGeneratorRequest) -> Result<String,String> {
+                let session=self.session.clone();
+                self.run(move |client|async move {client.generate_password(session.generator_rules()?.password(req)?).await}).await
+            }
+            async fn generate_passphrase(self, req: PassphraseGeneratorRequest) -> Result<String,String> {
+                let session=self.session.clone();
+                self.run(move |client|async move {client.generate_passphrase(session.generator_rules()?.passphrase(req)?).await}).await
+            }
             async fn save_cipher(self, cipher_view: CipherView) -> Result<CipherView,String> {
                 if !self.session.state.writable.load(std::sync::atomic::Ordering::SeqCst) {
                     return self.save_local(cipher_view).await;
@@ -59,6 +72,7 @@ macro_rules! forward {
                 let session=self.session();
                 self.run(move |client|async move {
                     ensure_writable(&session)?;
+                    if !session.policy_rules().allows_write(cipher_view.r#type,cipher_view.organization_id) {return Err(super::policies::DENIED.into());}
                     if let Some(id)=cipher_view.id { check_cipher(&client,&session,id,Action::Write,None).await?; }
                     let result=client.save_cipher(cipher_view).await;
                     session.state.grants.clear();result
@@ -95,10 +109,9 @@ macro_rules! forward {
 
 forward! {
     validate_master_password(encrypted_user_key: String, password: String) -> ();
-    list_ciphers() -> Vec<CipherListView>;
+
     list_folders() -> Vec<FolderView>;
-    generate_password(req: PasswordGeneratorRequest) -> String;
-    generate_passphrase(req: PassphraseGeneratorRequest) -> String;
+
     generate_username(req: UsernameGeneratorRequest) -> String;
 }
 
@@ -204,6 +217,39 @@ impl SessionClient {
     }
 }
 
+async fn permitted_list(
+    client: &PasswordManagerClient,
+    session: &SessionToken,
+) -> Result<Vec<CipherListView>, String> {
+    let rules = session.policy_rules();
+    let repo = client
+        .platform()
+        .state()
+        .get::<bitwarden_vault::Cipher>()
+        .map_err(|_| PERMISSION_DENIED)?;
+    let ciphers = repo
+        .list()
+        .await
+        .map_err(|_| PERMISSION_DENIED)?
+        .into_iter()
+        .filter(|c| rules.allows_read(c.r#type, c.organization_id))
+        .collect();
+    let result = client
+        .vault()
+        .ciphers()
+        .decrypt_list_with_failures(ciphers)
+        .await;
+    if !result.failures.is_empty() {
+        tracing::warn!(
+            count = result.failures.len(),
+            "some ciphers failed to decrypt"
+        );
+    }
+    let mut items = result.successes;
+    items.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(items)
+}
+
 fn ensure_writable(session: &SessionToken) -> Result<(), String> {
     if !session
         .state
@@ -230,6 +276,12 @@ pub(super) async fn check_cipher(
         .await
         .map_err(|_| PERMISSION_DENIED)?
         .ok_or(PERMISSION_DENIED)?;
+    let rules = session.policy_rules();
+    if !rules.allows_read(item.r#type, item.organization_id)
+        || (action == Action::Edit && !rules.allows_write(item.r#type, item.organization_id))
+    {
+        return Err(super::policies::DENIED.into());
+    }
     if !item.view_password
         || (matches!(action, Action::Write | Action::Edit | Action::Delete) && !item.edit)
         || (action == Action::Delete && item.permissions.as_ref().is_some_and(|p| !p.delete))
@@ -265,7 +317,11 @@ async fn check_export(
         .list()
         .await
         .map_err(|_| PERMISSION_DENIED)?;
-    if ciphers.iter().any(|c| !c.view_password) {
+    let rules = session.policy_rules();
+    if ciphers
+        .iter()
+        .any(|c| !c.view_password || !rules.allows_read(c.r#type, c.organization_id))
+    {
         return Err(PERMISSION_DENIED.into());
     }
     session

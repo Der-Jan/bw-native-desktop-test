@@ -36,6 +36,7 @@ pub(super) struct LocalEdit {
 }
 bitwarden_state::register_setting_key!(pub(super) const CACHE:Persisted="native_encrypted_vault_snapshot_v1");
 pub(super) struct Snapshot {
+    pub policies: Arc<super::policies::Rules>,
     pub persisted: Persisted,
     pub ciphers: HashMap<String, Cipher>,
     pub folders: HashMap<String, Folder>,
@@ -118,6 +119,7 @@ impl Snapshot {
                 wrapped_key,
             });
         }
+        let policies = super::policies::Rules::from_response(response)?;
         let mut ciphers = HashMap::new();
         for model in response
             .ciphers
@@ -191,6 +193,7 @@ impl Snapshot {
             ciphers.insert(id.clone(), cipher);
         }
         Ok(Arc::new(Self {
+            policies,
             persisted,
             ciphers,
             folders,

@@ -160,9 +160,37 @@ rejected icons retain the existing item marker. Separate cloud/custom icon-servi
 URLs are not configured automatically.
 
 Key/password/KDF/security-stamp changes require a new login; automatic key migration
-is deferred. Policies/domains/Send payloads are retained in the typed encrypted
-snapshot but have no full feature UI or complete client-policy enforcement yet.
+is deferred. Domains/Send payloads are retained in the typed encrypted snapshot
+but have no full feature UI yet. Organization-policy coverage is described below.
 There is no background polling, WSS, attachment transfer or online write queue.
+
+## Implemented Vaultwarden organization policies
+
+Policies are compiled from the same immutable encrypted snapshot as items and
+memberships. They survive offline restart; changes take effect after a successful
+sync. Invalid, duplicate, foreign-organization or unknown enabled policies reject
+the new snapshot instead of weakening the previous rules. Applicable roles and
+memberships follow the official client's exemptions; generator and restricted-item
+rules also apply to owners/admins.
+
+- Generator requirements merge across applicable organizations and are enforced
+  both in the UI and at the SDK service boundary. Password/passphrase generation
+  for remote accounts waits for the first policy-bearing sync.
+- Restricted item types filter the list and guard direct read/copy/edit and SSH
+  identities/signing. Personal ownership blocks local edits/saves of personal
+  items while retaining permitted read/copy access.
+- URI matching defaults appear in the editor; inherited defaults remain unset in
+  stored items, so later policy changes still apply. Explicit item overrides remain.
+- PIN prohibition disables the PIN preference (PIN unlock is not implemented).
+- Identity master-password requirements marked enforce-on-login are checked before
+  publishing an authenticated account. An inadequate password requires a change in
+  the web vault; no password-change workflow is claimed here.
+
+Settings show active policies and distinguish server-enforced 2FA/membership rules
+from Send, recovery, autotype and FillAssist workflows unavailable in this app.
+No unsupported Bitwarden-only timeout, export or RequireSso policy is invented.
+Browser pairing releases an account key to the official extension; that extension
+handles its own policies. Native item guards do not restrict that key's capabilities.
 
 ## Server profiles and account identity
 
@@ -268,6 +296,14 @@ Treat conflict, validation failure and an unknown server outcome separately.
 After timeout following a sent mutation, reconcile before retrying; do not blindly
 replay creates or deletes. Initial release has no offline mutation queue. A later
 queue requires encrypted persistence, conflict semantics and idempotency design.
+
+For future writable sync, preserve a base revision and encrypted base/local/server
+versions. Vaultwarden rejects stale `lastKnownRevisionDate` updates; resync and
+compare before retrying. Proposed behavior: merge independent field changes, ask
+for same-field conflicts and retain both versions until resolved. Treat deletion
+versus edit, organization/permission changes, attachments and unknown post-timeout
+outcomes explicitly. Do not silently pick a timestamp winner or retry a stale write.
+This is a design requirement, not an implemented write-sync feature.
 
 Send requires its own SDK repository, encryption/upload, real access ID and
 profile web-vault link handling. It must not appear operational while backed by

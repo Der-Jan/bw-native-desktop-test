@@ -162,7 +162,7 @@ impl Application {
                         ui.style_mut().interaction.selectable_labels = false;
                         ui.heading(name);
                         ui.horizontal(|ui| {
-                            edit = ui.add_enabled(detail.edit && detail.view_password, egui::Button::new(super::labels::text("Edit"))).clicked();
+                            edit = ui.add_enabled(detail.edit && detail.view_password && self.core.active.is_some_and(|uid|self.core.manager.policy_rules_for(&uid).allows_write(detail.r#type,detail.organization_id)), egui::Button::new(super::labels::text("Edit"))).clicked();
                             ui.add_enabled_ui(!self.core.remote(), |ui| {
                                 delete = ui.button("Move to trash").clicked();
                             });
@@ -321,6 +321,10 @@ impl Application {
         let mut save = false;
         let mut cancel = false;
         let mut generate = false;
+        let uri_policy_default = self
+            .core
+            .active
+            .and_then(|uid| self.core.manager.policy_rules_for(&uid).uri_default);
         if let Some(editor) = self.core.editor.as_mut() {
             ui.add_enabled_ui(!editor.busy, |ui| {
                 ui.horizontal(|ui| {
@@ -446,6 +450,46 @@ impl Application {
                                 for (i, uri) in uris.iter_mut().enumerate() {
                                     ui.push_id(i, |ui| {
                                         edit_field(ui, uri, "uri", "URL", false);
+                                        let labels = [
+                                            "Base domain",
+                                            "Host",
+                                            "Starts with",
+                                            "Exact",
+                                            "Regular expression",
+                                            "Never",
+                                        ];
+                                        let default = uri_policy_default
+                                            .map(|v| {
+                                                format!(
+                                                    "Default: {} (organization)",
+                                                    labels[v as usize]
+                                                )
+                                            })
+                                            .unwrap_or_else(|| "Default".into());
+                                        let mut matching =
+                                            uri["match"].as_u64().filter(|v| *v <= 5);
+                                        egui::ComboBox::from_id_salt("uri-matching")
+                                            .selected_text(
+                                                matching
+                                                    .map(|v| labels[v as usize])
+                                                    .unwrap_or(default.as_str()),
+                                            )
+                                            .show_ui(ui, |ui| {
+                                                ui.selectable_value(
+                                                    &mut matching,
+                                                    None,
+                                                    default.as_str(),
+                                                );
+                                                for (value, label) in labels.iter().enumerate() {
+                                                    ui.selectable_value(
+                                                        &mut matching,
+                                                        Some(value as u64),
+                                                        *label,
+                                                    );
+                                                }
+                                            });
+                                        uri["match"] =
+                                            matching.map(Value::from).unwrap_or(Value::Null);
                                         if ui.small_button("Remove URL").clicked() {
                                             remove = Some(i);
                                         }

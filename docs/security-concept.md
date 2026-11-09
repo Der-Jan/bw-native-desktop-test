@@ -47,7 +47,11 @@ review. See [login requirements](login-sync-requirements.md) and
 Full read sync is implemented with atomic encrypted SDK-SQLite snapshots and
 read-only repositories; server mutations and notifications remain disabled.
 Windows ACL/platform validation, remaining Vaultwarden login challenges and
-Vaultwarden-supported organization policies remain open. Profile-scoped website
+organization enrollment/recovery workflows remain open. Vaultwarden organization
+policy enforcement now covers generator requirements, restricted item types,
+personal ownership, PIN prohibition and URI defaults, with login-time master-password
+checks. The encrypted snapshot carries the last synced policy state offline;
+server-managed and unavailable features are identified in Settings. Profile-scoped website
 icons are implemented. Targeted session revocation has no supported endpoint in
 the audited Vaultwarden versions; global deauthorization is not normal logout.
 See the Vaultwarden compatibility audit in [login requirements](login-sync-requirements.md). Dropping UI/SDK strings does not guarantee erasure of
@@ -55,9 +59,13 @@ all allocator or widget copies. This remains a prototype under review.
 
 ## Verification
 
-Current verification: `cargo test --workspace --locked` passes 247 desktop tests plus
-one generator test. `cargo clippy --workspace --all-targets --locked` reports only
-the three existing desktop warnings. Added regression checks cover one-use grants,
+Current verification (organization-policy implementation): `cargo test --workspace`
+passes 194 desktop tests plus one generator test (three desktop tests ignored).
+`cargo clippy --workspace --all-targets` passes with existing warnings; the release
+workspace builds. The native Wayland settings-fit test also passes explicitly.
+Policy regressions use real SDK-encrypted disposable accounts over mandatory mTLS
+and cover offline restart, backend generator enforcement, list/read/copy/SSH
+restrictions, personal ownership, policy removal and login rejection. Added regression checks cover one-use grants,
 stored-policy enforcement when a caller removes reprompt, cancelled authorization,
 wrong password/expired PKCS#12 rejection, mandatory real TLS client authentication,
 SDK Identity transport injection, TOTP/email login, credential rotation under

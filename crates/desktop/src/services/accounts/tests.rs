@@ -113,6 +113,7 @@ struct Fixture {
     sync_delay: Arc<std::sync::atomic::AtomicU64>,
     login_policy: Arc<Mutex<Option<serde_json::Value>>>,
     write_mode: Arc<std::sync::atomic::AtomicU8>,
+    folder_mode: Arc<std::sync::atomic::AtomicU8>,
 }
 impl Fixture {
     fn new() -> Self {
@@ -164,6 +165,8 @@ impl Fixture {
         // 4 concurrent server change; 7 slow reply; 8 accept one then reject.
         let write_mode = Arc::new(std::sync::atomic::AtomicU8::new(0));
         let server_write_mode = write_mode.clone();
+        let folder_mode = Arc::new(std::sync::atomic::AtomicU8::new(1));
+        let server_folder_mode = folder_mode.clone();
         let thread = std::thread::spawn(move || {
             while !done.load(Ordering::SeqCst) {
                 let (stream, _) = match listener.accept() {
@@ -224,6 +227,87 @@ impl Fixture {
                 let req = String::from_utf8_lossy(&bytes).to_string();
                 let first = req.lines().next().unwrap_or("").to_string();
                 received.lock().unwrap().push((req.clone(), fingerprint));
+                let mut parts = first.split_whitespace();
+                let verb = parts.next().unwrap_or("");
+                let path = parts.next().unwrap_or("");
+                if path.starts_with("/vault/api/folders")
+                    && matches!(verb, "POST" | "PUT" | "DELETE")
+                {
+                    // 1 accept; 2 apply/lose reply; 3 drop before applying;
+                    // 4 reject; 5 redirect; 6 slow reply; 7 malformed reply; 8 expire auth.
+                    let mode = server_folder_mode.load(Ordering::SeqCst);
+                    if mode == 3 {
+                        continue;
+                    }
+                    let mut status = "200 OK";
+                    let mut body = serde_json::json!({});
+                    let mut extra = "";
+                    if mode == 4 {
+                        status = "400 Bad Request";
+                    } else if mode == 5 {
+                        status = "302 Found";
+                        extra = "Location: https://untrusted.invalid/folders\r\n";
+                    } else if mode == 8 {
+                        status = "401 Unauthorized";
+                    } else {
+                        let mut payload = sync_payload.lock().unwrap();
+                        let id = path.strip_prefix("/vault/api/folders/");
+                        if verb == "DELETE" {
+                            let folders = payload.1["folders"].as_array_mut().unwrap();
+                            if folders.iter().any(|f| f["id"].as_str() == id) {
+                                folders.retain(|f| f["id"].as_str() != id);
+                                for cipher in payload.1["ciphers"].as_array_mut().unwrap() {
+                                    if cipher["folderId"].as_str() == id {
+                                        cipher["folderId"] = serde_json::Value::Null;
+                                    }
+                                }
+                            } else {
+                                status = "400 Bad Request";
+                            }
+                        } else {
+                            let request: serde_json::Value =
+                                serde_json::from_str(req.split_once("\r\n\r\n").unwrap().1)
+                                    .unwrap();
+                            let folders = payload.1["folders"].as_array_mut().unwrap();
+                            if verb == "POST" {
+                                body = serde_json::json!({"id":Uuid::new_v4(),"name":request["name"],"revisionDate":chrono::Utc::now().to_rfc3339(),"object":"folder"});
+                                folders.push(body.clone());
+                            } else if let Some(folder) =
+                                folders.iter_mut().find(|f| f["id"].as_str() == id)
+                            {
+                                folder["name"] = request["name"].clone();
+                                folder["revisionDate"] = serde_json::json!(
+                                    (chrono::Utc::now() + chrono::Duration::seconds(1))
+                                        .to_rfc3339()
+                                );
+                                body = folder.clone();
+                            } else {
+                                status = "400 Bad Request";
+                            }
+                        }
+                        if mode == 2 {
+                            continue;
+                        }
+                        if mode == 6 {
+                            std::thread::sleep(std::time::Duration::from_millis(400));
+                        }
+                        if mode == 7 {
+                            body = serde_json::json!({});
+                        }
+                    }
+                    let body = if verb == "DELETE" && status == "200 OK" {
+                        String::new()
+                    } else {
+                        body.to_string()
+                    };
+                    let header = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{extra}\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(header.as_bytes());
+                    let _ = stream.write_all(body.as_bytes());
+                    continue;
+                }
                 if first.starts_with("PUT /vault/api/ciphers/") {
                     let mode = server_write_mode.load(Ordering::SeqCst);
                     let body: serde_json::Value =
@@ -445,6 +529,7 @@ impl Fixture {
             sync_delay,
             login_policy,
             write_mode,
+            folder_mode,
         }
     }
     fn bundle(&self, name: &str, key: &PKey<Private>, leaf: &X509) -> PathBuf {
@@ -3105,4 +3190,496 @@ async fn automatic_sync_does_not_reveal_a_protected_entry_after_its_revision_cha
             .await
             .is_err()
     );
+}
+
+fn folder_writes(f: &Fixture) -> usize {
+    f.requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(r, _)| {
+            r.lines().next().is_some_and(|line| {
+                line.contains("/vault/api/folders") && !line.starts_with("GET ")
+            })
+        })
+        .count()
+}
+#[tokio::test]
+async fn folder_management_create_rename_delete_are_encrypted_and_keep_items() {
+    use crate::services::sdk::{
+        ClientExt,
+        folder_management::{self, Change},
+    };
+    let (f, manager, uid, _) = staged_write_fixture().await;
+    let created = folder_management::change(
+        manager.client_for(&uid).unwrap(),
+        Change::Create("Private folder / nested".into()),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(created.applied, "{:?}", created.report.problems);
+    assert!(created.report.problems.is_empty());
+    let folders = manager
+        .client_for(&uid)
+        .unwrap()
+        .list_folders()
+        .await
+        .unwrap();
+    let folder = folders
+        .iter()
+        .find(|f| f.name == "Private folder / nested")
+        .unwrap();
+    let id = folder.id.unwrap();
+    let revision = folder.revision_date;
+    let renamed = folder_management::change(
+        manager.client_for(&uid).unwrap(),
+        Change::Rename {
+            id,
+            revision,
+            name: "Renamed private folder".into(),
+        },
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(renamed.applied, "{:?}", renamed.report.problems);
+    let folders = manager
+        .client_for(&uid)
+        .unwrap()
+        .list_folders()
+        .await
+        .unwrap();
+    let folder = folders.iter().find(|f| f.id == Some(id)).unwrap();
+    assert_eq!(folder.name, "Renamed private folder");
+    let deleted = folder_management::change(
+        manager.client_for(&uid).unwrap(),
+        Change::Delete {
+            id,
+            revision: folder.revision_date,
+        },
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(deleted.applied, "{:?}", deleted.report.problems);
+    assert!(!manager.has_folder_intent(&uid));
+    assert_eq!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .list_ciphers()
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        !manager
+            .client_for(&uid)
+            .unwrap()
+            .list_folders()
+            .await
+            .unwrap()
+            .iter()
+            .any(|f| f.id == Some(id))
+    );
+    assert_eq!(folder_writes(&f), 3);
+    assert_eq!(
+        put_count(&f),
+        1,
+        "Only the folder PUT was sent; item drafts were not uploaded by folder operations"
+    );
+    for (request, peer) in f.requests.lock().unwrap().iter() {
+        assert!(!request.contains("Private folder / nested"));
+        assert!(!request.contains("Renamed private folder"));
+        assert!(!peer.is_empty());
+    }
+    for suffix in [".sqlite", ".sqlite-wal"] {
+        if let Ok(bytes) = std::fs::read(f.root.join(format!("{uid}{suffix}"))) {
+            for name in ["Private folder / nested", "Renamed private folder"] {
+                assert!(!bytes.windows(name.len()).any(|w| w == name.as_bytes()));
+            }
+        }
+    }
+}
+#[tokio::test]
+async fn folder_management_deleting_assigned_folder_preserves_items_children_and_local_drafts() {
+    use crate::services::sdk::{
+        ClientExt,
+        folder_management::{self, Change},
+    };
+    let (f, manager, uid, cipher_id) = staged_write_fixture().await;
+    let folders = manager
+        .client_for(&uid)
+        .unwrap()
+        .list_folders()
+        .await
+        .unwrap();
+    let folder = &folders[0];
+    let id = folder.id.unwrap();
+    let revision = folder.revision_date;
+    folder_management::change(
+        manager.client_for(&uid).unwrap(),
+        Change::Create(format!("{}/child", folder.name)),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    let outcome = folder_management::change(
+        manager.client_for(&uid).unwrap(),
+        Change::Delete { id, revision },
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(outcome.applied, "{:?}", outcome.report.problems);
+    let items = manager
+        .client_for(&uid)
+        .unwrap()
+        .list_ciphers()
+        .await
+        .unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, Some(cipher_id));
+    assert!(items[0].folder_id.is_none());
+    assert_eq!(manager.local_conflicts(&uid), vec![cipher_id]);
+    let draft = manager
+        .client_for(&uid)
+        .unwrap()
+        .review_local(cipher_id)
+        .await
+        .unwrap();
+    assert_eq!(draft.name, "Synthetic local upload title");
+    assert!(draft.folder_id.is_none());
+    assert_eq!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .list_folders()
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "Nested folder is independent and must survive parent deletion"
+    );
+    assert_eq!(put_count(&f), 0);
+}
+#[tokio::test]
+async fn folder_management_rename_preflight_rejects_stale_and_foreign_targets() {
+    use crate::services::sdk::{
+        ClientExt,
+        folder_management::{self, Change},
+    };
+    let (f, manager, uid, _) = staged_write_fixture().await;
+    let folders = manager
+        .client_for(&uid)
+        .unwrap()
+        .list_folders()
+        .await
+        .unwrap();
+    let folder = &folders[0];
+    let count = f.requests.lock().unwrap().len();
+    assert!(
+        folder_management::change(
+            manager.client_for(&uid).unwrap(),
+            Change::Rename {
+                id: bitwarden_vault::FolderId::new_v4(),
+                revision: folder.revision_date,
+                name: "Foreign".into()
+            },
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(f.requests.lock().unwrap().len(), count);
+    f.sync_response.lock().unwrap().1["folders"][0]["revisionDate"] =
+        serde_json::json!((chrono::Utc::now() + chrono::Duration::seconds(10)).to_rfc3339());
+    let outcome = folder_management::change(
+        manager.client_for(&uid).unwrap(),
+        Change::Rename {
+            id: folder.id.unwrap(),
+            revision: folder.revision_date,
+            name: "Stale rename".into(),
+        },
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!outcome.applied);
+    assert!(!outcome.report.problems.is_empty());
+    assert_eq!(folder_writes(&f), 0);
+    assert!(!manager.has_folder_intent(&uid));
+}
+#[tokio::test]
+async fn folder_management_lost_create_reply_is_reconciled_without_duplicate_creation() {
+    use crate::services::sdk::{
+        ClientExt,
+        folder_management::{self, Change},
+        vault_sync,
+    };
+    let (f, manager, uid, _) = staged_write_fixture().await;
+    f.folder_mode.store(2, Ordering::SeqCst);
+    let outcome = folder_management::change(
+        manager.client_for(&uid).unwrap(),
+        Change::Create("Lost-reply folder".into()),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(outcome.applied, "{:?}", outcome.report.problems);
+    assert!(outcome.report.problems.is_empty());
+    assert!(!manager.has_folder_intent(&uid));
+    assert_eq!(folder_writes(&f), 1);
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(folder_writes(&f), 1);
+    assert_eq!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .list_folders()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|f| f.name == "Lost-reply folder")
+            .count(),
+        1
+    );
+}
+#[tokio::test]
+async fn folder_management_unknown_create_survives_restart_and_is_never_replayed() {
+    use crate::services::sdk::{
+        folder_management::{self, Change},
+        vault_sync,
+    };
+    let (f, mut manager, uid, _) = staged_write_fixture().await;
+    f.folder_mode.store(3, Ordering::SeqCst);
+    let outcome = folder_management::change(
+        manager.client_for(&uid).unwrap(),
+        Change::Create("Uncertain folder".into()),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!outcome.applied);
+    assert!(manager.has_folder_intent(&uid));
+    assert_eq!(folder_writes(&f), 1);
+    manager.lock(&uid).unwrap().finish().await;
+    drop(manager);
+    let restored = crate::services::sdk::production::test_load(&f.root, &f.store).await;
+    restored
+        .unlock_data_for(&uid)
+        .unwrap()
+        .unlock("synthetic-password".into())
+        .await
+        .unwrap();
+    assert!(restored.has_folder_intent(&uid));
+    f.folder_mode.store(1, Ordering::SeqCst);
+    vault_sync::download(
+        restored.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(restored.has_folder_intent(&uid));
+    assert!(
+        folder_management::change(
+            restored.client_for(&uid).unwrap(),
+            Change::Create("Must not duplicate".into()),
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(folder_writes(&f), 1);
+    restored
+        .client_for(&uid)
+        .unwrap()
+        .dismiss_folder_intent()
+        .await
+        .unwrap();
+    assert!(!restored.has_folder_intent(&uid));
+    assert_eq!(folder_writes(&f), 1);
+}
+#[tokio::test]
+async fn folder_management_rejection_and_redirect_are_not_retried_or_followed() {
+    use crate::services::sdk::folder_management::{self, Change};
+    for mode in [4, 5, 8] {
+        let (f, manager, uid, _) = staged_write_fixture().await;
+        f.folder_mode.store(mode, Ordering::SeqCst);
+        let outcome = folder_management::change(
+            manager.client_for(&uid).unwrap(),
+            Change::Create("Rejected folder".into()),
+            f.root.clone(),
+            f.store.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(!outcome.applied);
+        assert!(!outcome.report.problems.is_empty());
+        assert_eq!(folder_writes(&f), 1);
+        assert_eq!(manager.has_folder_intent(&uid), mode == 5);
+        assert!(
+            f.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(r, _)| !r.contains("Host: untrusted.invalid"))
+        );
+    }
+}
+#[tokio::test]
+async fn folder_management_lock_during_create_keeps_intent_and_recovers_without_replay() {
+    use crate::services::sdk::{
+        ClientExt,
+        folder_management::{self, Change},
+        vault_sync,
+    };
+    let (f, mut manager, uid, _) = staged_write_fixture().await;
+    f.folder_mode.store(6, Ordering::SeqCst);
+    let task = tokio::spawn(folder_management::change(
+        manager.client_for(&uid).unwrap(),
+        Change::Create("Locked folder fixture".into()),
+        f.root.clone(),
+        f.store.clone(),
+    ));
+    for _ in 0..200 {
+        if folder_writes(&f) > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(folder_writes(&f), 1);
+    manager.lock(&uid).unwrap().finish().await;
+    assert!(task.await.unwrap().is_err());
+    drop(manager);
+    let restored = crate::services::sdk::production::test_load(&f.root, &f.store).await;
+    restored
+        .unlock_data_for(&uid)
+        .unwrap()
+        .unlock("synthetic-password".into())
+        .await
+        .unwrap();
+    assert!(restored.has_folder_intent(&uid));
+    vault_sync::download(
+        restored.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!restored.has_folder_intent(&uid));
+    assert_eq!(folder_writes(&f), 1);
+    assert!(
+        restored
+            .client_for(&uid)
+            .unwrap()
+            .list_folders()
+            .await
+            .unwrap()
+            .iter()
+            .any(|f| f.name == "Locked folder fixture")
+    );
+}
+
+#[tokio::test]
+async fn folder_management_app_actions_refresh_sidebar_and_clear_deleted_folder_filter() {
+    use crate::services::vault_navigation::FolderFilter;
+    let (f, manager, uid, cipher_id) = staged_write_fixture().await;
+    let mut core = core_for_automatic_save(manager).await;
+    core.open_folder(None, false);
+    core.folder_editor.as_mut().unwrap().name = "UI folder fixture".into();
+    core.submit_folder();
+    finish_automatic_sync(&mut core, uid).await;
+    assert!(core.folder_editor.is_none());
+    let folder = core
+        .current_cache()
+        .unwrap()
+        .folders
+        .iter()
+        .find(|f| f.name == "UI folder fixture")
+        .unwrap();
+    let id = folder.id;
+    core.open_folder(Some(id), false);
+    assert_eq!(
+        core.folder_editor.as_ref().unwrap().name,
+        "UI folder fixture"
+    );
+    core.folder_editor.as_mut().unwrap().name = "Renamed UI fixture".into();
+    core.submit_folder();
+    finish_automatic_sync(&mut core, uid).await;
+    assert_eq!(
+        core.current_cache()
+            .unwrap()
+            .folders
+            .iter()
+            .find(|f| f.id == id)
+            .unwrap()
+            .name,
+        "Renamed UI fixture"
+    );
+    let mut filter = core.filter;
+    filter.folder = FolderFilter::Folder(id);
+    core.set_filter(filter);
+    core.open_folder(Some(id), true);
+    core.submit_folder();
+    finish_automatic_sync(&mut core, uid).await;
+    assert!(core.folder_editor.is_none());
+    assert_eq!(core.filter.folder, FolderFilter::None);
+    assert!(
+        !core
+            .current_cache()
+            .unwrap()
+            .folders
+            .iter()
+            .any(|f| f.id == id)
+    );
+    assert!(
+        core.current_cache()
+            .unwrap()
+            .all
+            .iter()
+            .any(|i| i.id == Some(cipher_id))
+    );
+    assert_eq!(folder_writes(&f), 3);
+}
+#[tokio::test]
+async fn folder_management_app_keeps_rejected_form_but_closes_uncertain_creation() {
+    for mode in [4, 3] {
+        let (f, manager, uid, _) = staged_write_fixture().await;
+        f.folder_mode.store(mode, Ordering::SeqCst);
+        let mut core = core_for_automatic_save(manager).await;
+        core.open_folder(None, false);
+        core.folder_editor.as_mut().unwrap().name = "Preserved form fixture".into();
+        core.submit_folder();
+        finish_automatic_sync(&mut core, uid).await;
+        assert_eq!(folder_writes(&f), 1);
+        if mode == 4 {
+            let editor = core.folder_editor.as_ref().unwrap();
+            assert!(!editor.busy);
+            assert!(editor.error.is_some());
+            assert_eq!(editor.name, "Preserved form fixture");
+        } else {
+            assert!(core.folder_editor.is_none());
+            assert!(core.manager.has_folder_intent(&uid));
+        }
+    }
 }

@@ -90,6 +90,11 @@ pub(super) fn reconcile(
         return Ok(fresh);
     };
     let mut persisted = fresh.persisted.clone();
+    persisted.folder_intent = old
+        .persisted
+        .folder_intent
+        .clone()
+        .filter(|intent| !intent.confirmed(&fresh));
     for (id, draft) in &old.persisted.local_edits {
         let remote = fresh.ciphers.get(id);
         if let Some(remote) = remote

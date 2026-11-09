@@ -49,7 +49,7 @@ pub struct Application {
     pub username_mode: usize,
     pub username_email: String,
     pub username_domain: String,
-    pub folder_name: String,
+    pub folder_seen: Option<uuid::Uuid>,
     pub export_format: usize,
     pub export_password: Zeroizing<String>,
     pub export_confirm: Zeroizing<String>,
@@ -112,7 +112,7 @@ impl Application {
             username_mode: 0,
             username_email: String::new(),
             username_domain: String::new(),
-            folder_name: String::new(),
+            folder_seen: None,
             export_format: 0,
             export_password: Zeroizing::default(),
             export_confirm: Zeroizing::default(),
@@ -148,7 +148,7 @@ impl Application {
             self.export_password = Zeroizing::default();
             self.export_confirm = Zeroizing::default();
             self.export_organization = None;
-            self.folder_name.clear();
+
             self.magnify_query.clear();
             self.reveal = false;
             self.send_editor = None;

@@ -458,28 +458,6 @@ impl Core {
             Err(e) => self.notify(e, true),
         }
     }
-    pub fn create_folder(&mut self, name: String) {
-        let Some(scope) = self.scope() else {
-            return;
-        };
-        if self.remote() || name.trim().is_empty() {
-            return;
-        }
-        let Some(client) = self.manager.client_for(&scope.uid) else {
-            return;
-        };
-        self.spawn_scoped(
-            scope,
-            client.create_folder(name),
-            |core, result| match result {
-                Ok(_) => {
-                    core.new_folder_open = false;
-                    core.load_vault();
-                }
-                Err(e) => core.notify(e, true),
-            },
-        );
-    }
 }
 fn filter(
     cache: &VaultCache,

@@ -13,6 +13,20 @@ use zeroize::{Zeroize, Zeroizing};
 pub struct Folder {
     pub id: FolderId,
     pub name: String,
+    pub revision: chrono::DateTime<chrono::Utc>,
+}
+pub struct FolderEditor {
+    pub id: uuid::Uuid,
+    pub target: Option<(FolderId, chrono::DateTime<chrono::Utc>)>,
+    pub name: String,
+    pub deleting: bool,
+    pub busy: bool,
+    pub error: Option<String>,
+}
+impl Drop for FolderEditor {
+    fn drop(&mut self) {
+        self.name.zeroize();
+    }
 }
 #[derive(Default)]
 pub struct VaultCache {

@@ -42,7 +42,9 @@ the first runtime/session and demo-storage slice is implemented; remaining work 
 - **Remaining login challenges and encrypted sync** `[L]` — password/TOTP/email
   login, OS-protected tokens and full read-sync snapshots are wired; unsupported
   challenges fail explicitly. Remaining sync work includes polling/WSS, complete
-  key migrations, server creation/deletion and folder writes, attachments and Send.
+  key migrations, server item creation/deletion, attachments and Send.
+  Folder create/rename/delete now use encrypted, account-scoped requests with
+  durable intent, read-after-write reconciliation and preserved entries/drafts.
   Existing-entry update sync is implemented: automatic uploads after Save, manual
   retry, revision conflicts,
   encrypted draft retention, read-after-write reconciliation and per-item durable

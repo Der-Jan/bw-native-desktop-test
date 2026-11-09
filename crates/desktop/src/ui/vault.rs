@@ -146,7 +146,10 @@ impl Application {
                                     .collect::<Vec<_>>()
                             })
                             .unwrap_or_default();
-                        self.group(ui, NavigationGroup::Folders, "Folders", |_, ui| {
+                        self.group(ui, NavigationGroup::Folders, "Folders", |app, ui| {
+                            if ui.small_button("+ New folder").clicked() {
+                                app.core.open_folder(None, false);
+                            }
                             ui.selectable_value(
                                 &mut filter.folder,
                                 FolderFilter::All,
@@ -161,8 +164,25 @@ impl Application {
                                 ui.selectable_value(
                                     &mut filter.folder,
                                     FolderFilter::Folder(id),
-                                    name,
-                                );
+                                    &name,
+                                )
+                                .context_menu(|ui| {
+                                    if ui.button("Rename folder…").clicked() {
+                                        app.core.open_folder(Some(id), false);
+                                        ui.close();
+                                    }
+                                    if ui.button("New subfolder…").clicked() {
+                                        app.core.open_folder(None, false);
+                                        if let Some(editor) = app.core.folder_editor.as_mut() {
+                                            editor.name = format!("{name}/");
+                                        }
+                                        ui.close();
+                                    }
+                                    if ui.button("Delete folder…").clicked() {
+                                        app.core.open_folder(Some(id), true);
+                                        ui.close();
+                                    }
+                                });
                             }
                         });
                         let collections = self
@@ -367,6 +387,22 @@ impl Application {
                     }
                 });
             }
+        }
+        if self
+            .core
+            .active
+            .is_some_and(|uid| self.core.manager.has_folder_intent(&uid))
+        {
+            ui.group(|ui| {
+                ui.label("A folder request is awaiting reconciliation. Synchronize to check its outcome before repeating it.");
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Check server").clicked() {self.core.check_folder_outcome();}
+                    ui.menu_button("Dismiss pending record…",|ui| {
+                        ui.label("This only clears the local request record. The server may already have applied the change. Check your folders before creating another copy.");
+                        if ui.button("Confirm dismiss").clicked() {self.core.dismiss_folder_intent();ui.close();}
+                    });
+                });
+            });
         }
         let area = ui.available_rect_before_wrap();
         let list_id = Id::unique("vault-list-focus");

@@ -17,7 +17,7 @@ impl Application {
             || self.core.import_open
             || self.core.about_open
             || self.core.fingerprint_open
-            || self.core.new_folder_open
+            || self.core.folder_editor.is_some()
     }
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
         if !self.core.settings_open {
@@ -67,24 +67,7 @@ impl Application {
                 });
             self.core.fingerprint_open = open;
         }
-        if self.core.new_folder_open {
-            let mut open = true;
-            let mut create = false;
-            egui::Window::new(super::labels::text("New folder"))
-                .open(&mut open)
-                .collapsible(false)
-                .show(ctx, |ui| {
-                    ui.label("Folder name (use / for nested folders)");
-                    let response = ui.text_edit_singleline(&mut self.folder_name);
-                    create = ui.button("Create folder").clicked()
-                        || (response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)));
-                });
-            self.core.new_folder_open = open;
-            if create {
-                self.core
-                    .create_folder(std::mem::take(&mut self.folder_name));
-            }
-        }
+        self.folder_dialog(ctx);
         if self.core.export_open {
             self.export(ctx);
         }
@@ -158,7 +141,7 @@ impl Application {
                 self.core.export_request = None;
                 self.core.import_open = false;
                 self.core.fingerprint_open = false;
-                self.core.new_folder_open = false;
+                self.core.folder_editor = None;
             }
         }
     }
@@ -749,4 +732,64 @@ fn duration(ui: &mut egui::Ui, label: &str, value: &mut DurationSecs, presets: &
 fn settings_height(content_height: f32, monitor: Option<egui::Vec2>) -> f32 {
     let limit = monitor.map_or(content_height + 24., |size| (size.y - 96.).max(350.));
     (content_height + 24.).clamp(350., limit.max(350.))
+}
+
+impl Application {
+    fn folder_dialog(&mut self, ctx: &egui::Context) {
+        let Some(editor) = self.core.folder_editor.as_ref() else {
+            if let Some(previous) = self.folder_seen.take() {
+                ctx.send_viewport_cmd_to(
+                    egui::ViewportId::from_hash_of(("folder-editor", previous)),
+                    egui::ViewportCommand::Close,
+                );
+            }
+            return;
+        };
+        let id = editor.id;
+        let fresh = self.folder_seen != Some(id);
+        self.folder_seen = Some(id);
+        let title = if editor.deleting {
+            "Delete folder"
+        } else if editor.target.is_some() {
+            "Rename folder"
+        } else {
+            "New folder"
+        };
+        let mut submit = false;
+        let mut cancel = false;
+        ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(("folder-editor",id)),egui::ViewportBuilder::default()
+            .with_title(title).with_app_id(crate::assets::DESKTOP_APP_ID).with_icon(crate::assets::window_icon().unwrap_or_default())
+            .with_inner_size([500.,280.]).with_min_inner_size([360.,220.]).with_active(fresh),|ui,_class| {
+            if fresh {ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);}
+            cancel=ui.ctx().input(|i|i.viewport().close_requested()||i.key_pressed(Key::Escape));
+            egui::CentralPanel::default().show(ui,|ui| {
+                let Some(editor)=self.core.folder_editor.as_mut() else{return;};
+                ui.heading(title);
+                ui.add_enabled_ui(!editor.busy,|ui| {
+                    if editor.deleting {
+                        ui.label(format!("Delete “{}”?",editor.name));
+                        ui.label("Entries will be kept in the vault without this folder. Other folders, including nested folders, are kept.");
+                    } else {
+                        ui.label("Folder name (use / for nested folders)");
+                        let response=ui.add(egui::TextEdit::singleline(&mut editor.name).char_limit(1000).desired_width(f32::INFINITY));
+                        if fresh {response.request_focus();}
+                        if response.lost_focus()&&ui.input(|i|i.key_pressed(Key::Enter)) {submit=true;}
+                    }
+                    if let Some(error)=&editor.error {ui.colored_label(egui::Color32::RED,error);}
+                    ui.horizontal(|ui| {
+                        let cancel_button=ui.button("Cancel");
+                        if fresh&&editor.deleting {cancel_button.request_focus();}
+                        cancel|=cancel_button.clicked();
+                        submit|=ui.add_enabled(editor.deleting||!editor.name.trim().is_empty(),egui::Button::new(if editor.deleting {"Delete folder"} else {"Save"})).clicked();
+                    });
+                });
+                if editor.busy {ui.horizontal(|ui|{ui.spinner();ui.label("Synchronizing folder…");});}
+            });
+        });
+        if cancel {
+            self.core.folder_editor = None;
+        } else if submit {
+            self.core.submit_folder();
+        }
+    }
 }

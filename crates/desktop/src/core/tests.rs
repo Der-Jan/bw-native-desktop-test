@@ -166,3 +166,13 @@ async fn synchronization_does_not_discard_an_open_editor_or_allow_a_new_edit_mid
     );
     assert!(core.editor.is_none());
 }
+
+#[tokio::test]
+async fn synchronization_preserves_an_open_folder_dialog() {
+    let mut core = core();
+    core.open_folder(None, false);
+    let id = core.folder_editor.as_ref().unwrap().id;
+    core.synchronize();
+    assert_eq!(core.folder_editor.as_ref().unwrap().id, id);
+    assert!(core.sync.is_empty());
+}

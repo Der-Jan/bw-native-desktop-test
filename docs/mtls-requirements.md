@@ -1,8 +1,8 @@
 # Native desktop mTLS requirements
 
-Status: HTTP login/probe, read sync and existing-entry update sync implemented for review, 2026-11-09.
+Status: HTTP login/probe, read sync, existing-entry updates and folder management implemented for review, 2026-11-09.
 The egui frontend preserves these contracts (2026-11-08); see
-[migration validation](egui-migration.md). WSS, creation/deletion and attachment transfers are deferred.
+[migration validation](egui-migration.md). WSS, item creation/deletion and attachment transfers are deferred.
 Implement this with the [security lifecycle](security-concept.md) and
 [login and sync flow](login-sync-requirements.md).
 
@@ -61,7 +61,7 @@ Each login inherits a separate account profile snapshot and client pool, even fo
 accounts sharing a host. Allowed HTTPS origins include the port; base paths survive
 endpoint resolution. Discovery cannot expand permission. All redirects are blocked.
 The same client identity covers config, prelogin, token/2FA, profile and explicit
-probe/refresh, full read-sync and existing-entry PUT requests. SDK API and Identity receive the same scoped policy through
+probe/refresh, full read-sync, existing-entry PUT and folder POST/PUT/DELETE requests. SDK API and Identity receive the same scoped policy through
 the small vendored builder patch. An expired identity fails before a request, even
 on a reusable connection. Replacing a profile invalidates its old transports by
 revision. The explicit probe builds the replacement transport immediately; existing

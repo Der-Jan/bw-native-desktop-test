@@ -32,6 +32,7 @@ pub use browser::BrowserSession;
 mod favicon;
 pub use favicon::FaviconSource;
 mod client_ext;
+pub mod folder_management;
 mod loader;
 mod local_edits;
 pub mod policies;
@@ -304,6 +305,12 @@ impl ClientManager {
                         e.cipher.reprompt == bitwarden_vault::CipherRepromptType::Password
                     })
             })
+    }
+    pub fn has_folder_intent(&self, uid: &UserId) -> bool {
+        self.users
+            .get(uid)
+            .and_then(|e| e.session.snapshot.current())
+            .is_some_and(|s| s.persisted.folder_intent.is_some())
     }
     pub fn last_sync(&self, uid: &UserId) -> Option<chrono::DateTime<chrono::Utc>> {
         self.users

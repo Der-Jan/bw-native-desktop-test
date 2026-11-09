@@ -125,7 +125,7 @@ async fn synchronize_inner(
     }
     Ok(result)
 }
-async fn fetch(
+pub(super) async fn fetch(
     session: &SessionToken,
     root: PathBuf,
     store: ProfileStore,
@@ -195,7 +195,7 @@ async fn fetch(
     Ok((snapshot, record, transport))
 }
 /// Caller holds the exclusive lease. Invalid fresh data never replaces the cache.
-async fn apply(
+pub(super) async fn apply(
     session: &SessionToken,
     client: &bitwarden_pm::PasswordManagerClient,
     snapshot: std::sync::Arc<Snapshot>,
@@ -325,7 +325,7 @@ fn validate_account_keys(snapshot: &Snapshot, record: &AccountRecord) -> Result<
     if let bitwarden_core::key_management::account_cryptographic_state::WrappedAccountCryptographicState::V1{private_key}=&record.crypto_state && profile.private_key.as_ref().is_some_and(|key|key!=&private_key.to_string()){return Err("Der private Kontoschlüssel wurde geändert. Bitte erneut anmelden.".into())}
     Ok(())
 }
-fn report(session: SessionToken) -> Result<Report, String> {
+pub(super) fn report(session: SessionToken) -> Result<Report, String> {
     let snapshot = session
         .state
         .snapshot

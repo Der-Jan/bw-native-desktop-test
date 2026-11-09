@@ -297,6 +297,7 @@ impl Core {
                                 Some(model::Folder {
                                     id: f.id?,
                                     name: f.name,
+                                    revision: f.revision_date,
                                 })
                             })
                             .collect(),
@@ -361,6 +362,9 @@ impl Core {
             self.sync_account(uid, true);
         }
     }
+    pub fn check_folder_outcome(&mut self) {
+        self.download();
+    }
     fn download(&mut self) {
         if let Some(uid) = self.active {
             self.sync_account(uid, false);
@@ -372,7 +376,8 @@ impl Core {
                 continue;
             }
             if self.sync.get(&uid).is_some_and(|s| s.busy)
-                || (self.active == Some(uid) && self.editor.is_some())
+                || (self.active == Some(uid)
+                    && (self.editor.is_some() || self.folder_editor.is_some()))
             {
                 self.saved_uploads.insert(uid);
                 continue;
@@ -380,7 +385,7 @@ impl Core {
             self.sync_account(uid, true);
         }
     }
-    fn reload_after_sync(&mut self) {
+    pub(super) fn reload_after_sync(&mut self) {
         let query = std::mem::take(&mut self.query);
         let selected = self.selected;
         let details = self.detail_open;
@@ -391,7 +396,7 @@ impl Core {
         self.load_vault();
     }
     fn sync_account(&mut self, uid: UserId, upload: bool) {
-        if self.active == Some(uid) && self.editor.is_some() {
+        if self.active == Some(uid) && (self.editor.is_some() || self.folder_editor.is_some()) {
             self.notify("Save or cancel the open edit before synchronizing.", false);
             return;
         }

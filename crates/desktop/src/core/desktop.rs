@@ -399,11 +399,7 @@ impl Core {
                     self.export_open = true;
                 }
             }
-            NewFolder => {
-                if !self.remote() {
-                    self.new_folder_open = true;
-                }
-            }
+            NewFolder => self.open_folder(None, false),
             NewItem(kind) => self.new_item(kind),
             CopyUsername => {
                 if let Some(id) = self.selected {

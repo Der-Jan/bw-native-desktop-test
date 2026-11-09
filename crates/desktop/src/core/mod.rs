@@ -2,6 +2,7 @@
 //! No renderer or window toolkit participates in account authority decisions.
 mod account;
 mod desktop;
+mod folders;
 pub mod generator;
 pub mod model;
 mod profile;
@@ -160,7 +161,7 @@ pub struct Core {
     pub import_open: bool,
     pub about_open: bool,
     pub fingerprint_open: bool,
-    pub new_folder_open: bool,
+    pub folder_editor: Option<model::FolderEditor>,
     pub browser: services::browser_integration::BrowserRuntime,
     pub browser_approval: Option<Arc<services::browser_integration::Approval>>,
     pub browser_registration_busy: bool,
@@ -244,7 +245,7 @@ impl Core {
             import_open: false,
             about_open: false,
             fingerprint_open: false,
-            new_folder_open: false,
+            folder_editor: None,
             browser: services::browser_integration::BrowserRuntime::new(),
             browser_approval: None,
             browser_registration_busy: false,
@@ -366,7 +367,7 @@ impl Core {
         self.export_open = false;
         self.export_request = None;
         self.import_open = false;
-        self.new_folder_open = false;
+        self.folder_editor = None;
         self.fingerprint_open = false;
         self.clipboard.clear_owned();
         self.magnify_requested = false;

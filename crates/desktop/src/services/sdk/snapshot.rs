@@ -28,6 +28,8 @@ pub(super) struct Persisted {
     pub response: SyncResponseModel,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub local_edits: HashMap<String, LocalEdit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_intent: Option<super::folder_management::Intent>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct LocalEdit {
@@ -78,6 +80,7 @@ impl Snapshot {
                 downloaded_at,
                 response,
                 local_edits: HashMap::new(),
+                folder_intent: None,
             },
             server_user_id,
             local_account_id,

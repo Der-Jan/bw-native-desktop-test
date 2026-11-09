@@ -1,6 +1,6 @@
 # Native desktop login and sync requirements
 
-Status: login, full read sync and revision-checked existing-entry updates implemented for review, 2026-11-09. Creation/deletion and notifications remain deferred. Depends on the lifecycle and persistence contracts
+Status: login, full read sync and revision-checked existing-entry updates implemented for review, 2026-11-09. Item creation/deletion and notifications remain deferred. Depends on the lifecycle and persistence contracts
 in [security concept](security-concept.md). Networking must obey the
 [mTLS transport policy](mtls-requirements.md), including when no identity is set.
 
@@ -68,7 +68,8 @@ profile identity verification and SDK account-key unlock. Local account UUIDs ar
 independent of server user IDs and email addresses. Full downloads run after
 login/unlock and preserve local drafts. Every successful edit save automatically
 synchronizes existing-entry changes. File → Synchronize remains available for
-manual refresh/retry. Creation/deletion, folder mutations, import/export and
+manual refresh/retry. Folder create/rename/delete are synchronized immediately.
+Item creation/deletion, import/export and
 Send remain disabled for real accounts.
 
 Credentials are AES-256-GCM ciphertext in private files; random encryption keys
@@ -107,7 +108,7 @@ Do not enable SDK `test-fixtures` in production or persist SDK auth tokens in SQ
 
 Not implemented in this slice: CAPTCHA/new-device challenge completion, SSO,
 WebAuthn/security-key/Duo/recovery-code login, password-change workflows,
-notifications, periodic background polling, online CRUD, import/export and Send. Errors are explicit; no downgrade is attempted.
+notifications, periodic background polling, item creation/deletion, import/export and Send. Errors are explicit; no downgrade is attempted.
 The remaining sections describe the acceptance contract for the later sync work,
 not a claim that those features are already available.
 
@@ -134,7 +135,8 @@ without replacing the previous snapshot. Legacy organization collections without
 `type` map to the SDK SharedCollection type. SDK crypto initializes wrapped org
 keys and validates the derived list. SDK field decryption retains its upstream
 lenient behavior for some legacy cipher fields; this is not a strict cryptographic
-audit of every field. Full-data mutations stay disabled.
+audit of every field. Remote cipher editing enables strict field decryption;
+ownership/type changes and attachment mutations stay disabled.
 
 Client-managed read-only repository adapters expose ciphers and folders from one
 shared immutable snapshot Arc. This is an index over the SDK-SQLite snapshot,
@@ -229,6 +231,46 @@ Automatic-save integration tests also cover successful upload, failures without
 retry loops, retained conflicts, switching away during save, preserved search and
 selection/details, and protected entries remaining hidden after revision changes.
 No real account is used by this harness.
+
+## Implemented folder management
+
+File → New folder and the sidebar's New folder action work for real accounts.
+Right-click an existing folder to rename, create a nested folder, or delete it.
+Native windows focus the name input; Enter submits creation/rename and Escape
+closes the dialog. Deletion has a separate confirmation with Cancel initially
+focused. Names are trimmed and limited to 1000 characters. Slash-separated names
+provide nesting, matching the existing folder filter. Rename/delete affects only
+the selected folder; other folder names, including nested folders, are preserved.
+
+Folder changes use SDK user-key encryption and the account's scoped TLS/mTLS
+transport: POST `/folders`, PUT `/folders/<id>`, DELETE `/folders/<id>`. A full
+read-only preflight validates account keys/membership and compares the target's
+cached revision/encrypted name with the current snapshot. Stale/foreign targets
+are rejected. Vaultwarden has no conditional revision parameter for these folder
+writes, so preflight cannot eliminate a change racing the subsequent request.
+
+A create/rename/delete intent is durably stored with encrypted names before the
+request. Successful create/rename replies must return the expected ciphertext
+and a valid server ID; the response and intent removal commit together. Full
+read-after-write sync reconciles missing replies by exact encrypted name/ID or
+confirmed deletion. Requests are never automatically replayed; a pending record
+survives restart and prevents another folder mutation until reconciled or explicitly
+dismissed. Check server performs a read-only refresh. Dismissing a record does not
+undo a server change and warns against accidentally creating another copy.
+Known validation/authentication rejections keep the form available for correction;
+an uncertain create closes its form and displays the pending-operation notice.
+
+Deleting a folder keeps all entries and lets the server remove their folder
+assignments. Nested folders are independent and remain. A deleted selected folder
+changes the navigation filter to No folder. Local cipher drafts are retained;
+those referring to a removed folder become conflicts for explicit review. Folder
+operations do not upload unrelated item drafts. An existing editor or active sync
+is preserved rather than replaced by a folder operation.
+
+Disposable mandatory-mTLS tests cover lifecycle, encryption, server IDs, preserved
+entries/nested folders/drafts, stale and foreign targets, lost/unapplied requests,
+restart, lock during dispatch, authentication rejection, redirects and application
+sidebar/form updates. The same actions are available in explicit local demo mode.
 
 ## Implemented Vaultwarden organization policies
 
@@ -355,8 +397,8 @@ the latest committed snapshot. Apply results only to the correct account and
 generation; invalidation prevents both stale UI updates and storage commits.
 Membership removal and key changes invalidate permissions and decrypted caches.
 
-Existing-entry write sync is implemented above. Creation, deletion and folder
-mutations remain disabled until their own server ID, concurrency and ambiguous
+Existing-entry edits and folder management are implemented above. Item creation
+and deletion remain disabled until their own server ID, concurrency and ambiguous
 outcome handling is proven. Preserve the current separation between validation
 failure, revision conflict and unknown server outcome. Do not blindly replay
 creates/deletes or extend edit retry semantics to those operations.
@@ -387,7 +429,7 @@ server and checks expiry even when manual refresh would otherwise be throttled.
 | L3 | Restart locked, offline unlock, rotated refresh token, credential-store lock/failure and permanent session invalidation |
 | Y1 | Initial/update/deletion sync; org membership/key changes; failure during apply preserves the old snapshot |
 | Y2 | Overlapping refreshes coalesce; WSS reconnect/poll fallback; lock/logout during fetch/apply cannot revive state |
-| Y3 | Existing-entry edit/conflict/ambiguous-result tests pass; create/delete and folder-write gates remain open |
+| Y3 | Existing-entry edits and folder management pass conflict/ambiguous-result tests; item create/delete gates remain open |
 | Y4 | Two profiles with equal server UUID/email remain isolated; sort preference survives refresh and selection stays on the same cipher ID |
 
 Use synthetic fixtures and an instrumented server/proxy to observe every HTTP and

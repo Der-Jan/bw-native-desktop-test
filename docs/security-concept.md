@@ -48,7 +48,9 @@ Full read sync is implemented with atomic encrypted SDK-SQLite snapshots and
 read-only repository adapters. Successful saves automatically upload existing-entry
 edits with revision checks, durable encrypted intent and per-item acknowledgments; startup
 refresh remains download-only. Conflicts retain separate drafts and require
-explicit review/reapplication. Creation/deletion and notifications remain disabled.
+explicit review/reapplication. Folder create/rename/delete use the same account transport with durable encrypted
+intent and read-only reconciliation; folder deletion preserves entries. Item
+creation/deletion and notifications remain disabled.
 Windows ACL/platform validation, remaining Vaultwarden login challenges and
 organization enrollment/recovery workflows remain open. Vaultwarden organization
 policy enforcement now covers generator requirements, restricted item types,
@@ -63,7 +65,7 @@ all allocator or widget copies. This remains a prototype under review.
 ## Verification
 
 Current verification (organization-policy implementation): `cargo test --workspace`
-passes 213 desktop tests plus one generator test (three desktop tests ignored).
+passes 223 desktop tests plus one generator test (three desktop tests ignored).
 `cargo clippy --workspace --all-targets` passes with existing warnings; the release
 workspace builds. The native Wayland settings-fit test also passes explicitly.
 Write-sync regressions cover revision conflicts, lost responses, partial batches,
@@ -82,7 +84,11 @@ The GUI review uses an isolated profile; no user server or credentials were used
 The synthetic conflict GUI check exercises retained draft review and reapplication.
 Automatic-save integration tests prove that successful saves trigger uploads,
 failures do not retry indefinitely, switching accounts cannot misroute a save,
-search/selection survive refresh and protected details remain gated.
+search/selection survive refresh and protected details remain gated. Folder
+management is covered by mandatory-mTLS integration tests and an isolated native
+GUI check using synthetic demo data: create and rename with Enter, separate
+native deletion confirmation, safe Enter cancellation, and confirmed deletion
+with the item count unchanged.
 Read-sync regressions cover encrypted full-snapshot fetch over mandatory mTLS,
 coalescing, replacement/deletions, failed HTTP/incomplete payload preservation,
 lock during fetch, organization-key rollback/removal, namespace isolation and

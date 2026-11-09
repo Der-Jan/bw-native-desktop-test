@@ -1,4 +1,5 @@
 //! Revocable, account-specific icon transport. Never sends OAuth credentials.
+mod cache;
 use super::{ClientManager, SessionToken};
 use crate::services::accounts::{
     profile::{ProfileStore, ServerProfile},
@@ -17,6 +18,7 @@ pub struct FaviconSource {
     icons: url::Url,
     epoch: Arc<AtomicU64>,
     transport: Arc<tokio::sync::OnceCell<Transport>>,
+    cache: Arc<tokio::sync::OnceCell<tokio::sync::Mutex<cache::Catalog>>>,
 }
 impl FaviconSource {
     pub fn current(&self) -> bool {
@@ -103,6 +105,7 @@ impl ClientManager {
             store,
             profile,
             transport: Arc::new(tokio::sync::OnceCell::new()),
+            cache: Arc::new(tokio::sync::OnceCell::new()),
         };
         source.current().then_some(source)
     }

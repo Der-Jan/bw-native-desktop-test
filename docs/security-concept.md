@@ -71,8 +71,8 @@ all allocator or widget copies. This remains a prototype under review.
 
 ## Verification
 
-Current verification (archive, creation, attachments and incoming-sync implementation): `cargo test --workspace`
-passes 252 desktop tests plus one generator test (three desktop tests ignored).
+Current verification (URI-rule duplicates and encrypted icon caching): `cargo test --workspace`
+passes 268 desktop tests plus one generator test (three desktop tests ignored).
 `cargo clippy --workspace --all-targets` passes with existing warnings; the release
 workspace builds. The native Wayland settings-fit test also passes explicitly.
 Creation/attachment regressions cover server-assigned IDs, personal and organization
@@ -97,6 +97,15 @@ SDK Identity transport injection, TOTP/email login, credential rotation under
 concurrent probes, locked account reload/unlock, token-key removal, redirects,
 exact port scope, independent identities at the same host, explicit server CA
 trust and typed TLS expiry diagnostics for both app and SDK requests. All accounts and certificates in these checks are disposable test fixtures.
+Icon-cache integration tests cover encrypted SQLite/WAL contents, unchanged pixels
+across sync/restart, expiry, corrupt ciphertext/PNG recovery, concurrent sources,
+account/profile binding, lock and cancelled downloads. URI comparison tests cover
+public/private suffixes, IDNA, ports, local hosts/IPs, exact/prefix/regex modes,
+Never, defaults, all saved URLs and bounded backtracking. Core tests cover facet
+changes, search after grouping, cancelled workers and preserved reprompt gates;
+an mTLS write/read fixture verifies match-mode round-trip with encrypted URIs.
+An isolated native GUI check confirms a per-website Match label, a two-entry
+organization Duplicates view and search narrowing to one matching entry.
 The GUI review uses an isolated profile; no user server or credentials were used.
 The synthetic conflict GUI check exercises retained draft review and reapplication.
 The attachment/creation GUI check uses a disposable remote-account cache on a

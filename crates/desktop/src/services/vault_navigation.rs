@@ -17,6 +17,7 @@ pub enum VaultSection {
     #[default]
     Active,
     Favorites,
+    Duplicates,
     Archive,
     Trash,
 }

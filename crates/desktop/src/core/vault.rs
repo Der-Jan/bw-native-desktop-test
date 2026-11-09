@@ -25,6 +25,7 @@ impl Core {
         self.refilter();
     }
     pub fn refilter(&mut self) {
+        self.ensure_duplicate_scan();
         let Some(uid) = self.active else {
             return;
         };
@@ -476,7 +477,7 @@ impl Core {
         }
     }
 }
-fn filter(
+pub(super) fn filter(
     cache: &VaultCache,
     filter: VaultFilter,
     query: &str,
@@ -510,7 +511,7 @@ fn filter(
         .map(|c| c.id)
         .collect();
     let terms: Vec<_> = query.split_whitespace().collect();
-    cache
+    let candidates: Vec<_> = cache
         .all
         .iter()
         .filter(|item| {
@@ -520,7 +521,7 @@ fn filter(
                 VaultScope::Organization(id) => item.organization_id == Some(id),
             }) && filter.category.is_none_or(|c| kind(&item.r#type) == c)
                 && (match filter.section {
-                    VaultSection::Active => {
+                    VaultSection::Active | VaultSection::Duplicates => {
                         item.deleted_date.is_none() && item.archived_date.is_none()
                     }
                     VaultSection::Favorites => {
@@ -546,6 +547,18 @@ fn filter(
                         .iter()
                         .any(|c| *c == id || collections.contains(c)),
                 })
+        })
+        .collect();
+    candidates
+        .into_iter()
+        .filter(|item| {
+            (filter.section != VaultSection::Duplicates
+                || item.id.is_some_and(|id| {
+                    cache
+                        .duplicate_report
+                        .as_ref()
+                        .is_some_and(|report| report.ids.contains(&id))
+                }))
                 && terms.iter().all(|term| {
                     item.id
                         .and_then(|id| cache.search_keys.get(&id))
@@ -555,6 +568,7 @@ fn filter(
         .cloned()
         .collect()
 }
+
 fn subtree(name: &str, parent: &str) -> bool {
     name == parent
         || name

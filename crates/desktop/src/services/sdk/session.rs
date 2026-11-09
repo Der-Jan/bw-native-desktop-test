@@ -36,6 +36,7 @@ pub(super) struct SessionState {
     pub(super) snapshot: super::snapshot::State,
     pub(super) collection_names: Mutex<Vec<super::Collection>>,
     pub(super) sync_gate: tokio::sync::Mutex<()>,
+    pub(super) icon_gate: tokio::sync::Mutex<()>,
     pub(super) sync_sequence: std::sync::atomic::AtomicU64,
 }
 
@@ -71,6 +72,7 @@ impl SessionState {
             snapshot: Default::default(),
             collection_names: Mutex::new(Vec::new()),
             sync_gate: tokio::sync::Mutex::new(()),
+            icon_gate: tokio::sync::Mutex::new(()),
             sync_sequence: std::sync::atomic::AtomicU64::new(0),
         })
     }

@@ -166,8 +166,10 @@ no direct SAML flow or Bitwarden-only SSO organization-policy requirement.
 
 The native client uses the account server's `/icons/<hostname>/icon.png`, including
 base subpaths, through its revocable TLS/mTLS transport. The global icon-service
-resolver and US-cloud fallback were removed. Lazy in-memory caching, request and
-decoder limits, profile/session revocation and texture invalidation are implemented.
+resolver and US-cloud fallback were removed. Lazy memory caching and an encrypted,
+account/profile-bound SDK-SQLite cache reuse icons after sync/restart (seven-day
+expiry, 512 entries, 2 MiB image-payload limit). Request/decoder limits,
+profile/session revocation and texture invalidation are implemented.
 See [login/sync requirements](login-sync-requirements.md). Automatically adopting a
 separate cloud or server-advertised icon origin remains deferred; it must have an
 explicit transport permission instead of silently receiving website domains.

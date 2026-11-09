@@ -27,3 +27,5 @@ pub mod vault_sort;
 pub mod vault_navigation;
 
 pub mod ssh_agent;
+
+pub mod uri_matching;

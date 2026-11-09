@@ -116,6 +116,7 @@ impl Application {
                             for (value, label) in [
                                 (VaultSection::Active, "All items"),
                                 (VaultSection::Favorites, "Favorites"),
+                                (VaultSection::Duplicates, "Duplicates"),
                                 (VaultSection::Archive, "Archive"),
                                 (VaultSection::Trash, "Trash"),
                             ] {
@@ -346,6 +347,31 @@ impl Application {
                 self.core.set_query(query);
             }
         });
+        if self.core.filter.section == VaultSection::Duplicates {
+            ui.weak("Saved URL matching rules are compared within the selected vault and folder filters. Usernames and passwords may differ.");
+            if let Some(cache) = self.core.current_cache() {
+                if cache.duplicate_report.is_none() && cache.duplicate_error.is_none() {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.weak("Comparing website rules…");
+                    });
+                }
+                if let Some(error) = &cache.duplicate_error {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                }
+                if let Some(report) = &cache.duplicate_report {
+                    if report.invalid_rules > 0 {
+                        ui.weak(format!(
+                            "{} invalid or unsupported URL rules were skipped.",
+                            report.invalid_rules
+                        ));
+                    }
+                    if report.limited {
+                        ui.weak("Some URL rules exceeded the comparison limit.");
+                    }
+                }
+            }
+        }
         let count = self.core.current_cache().map_or(0, |c| c.visible.len());
         ui.horizontal(|ui| {
             ui.weak(format!("{count} items"));

@@ -70,7 +70,9 @@ revision after receiving bytes and before publishing authenticated plaintext. SD
 the small vendored builder patch. An expired identity fails before a request, even
 on a reusable connection. Replacing a profile invalidates its old transports by
 revision. The explicit probe builds the replacement transport immediately; existing
-SDK clients remain denied until restart. Offline key unlock remains possible when
+SDK clients remain denied until restart. The encrypted icon cache is bound to the
+account profile UUID/revision and never bypasses source revocation or initiates
+a fallback request to a different icon server. Offline key unlock remains possible when
 keyring/certificate recovery is needed; no anonymous network fallback is allowed.
 
 Known remaining acceptance work: notifications/WSS and online CRUD coverage, chain policy beyond expiry/signature/key-usage and TLS backend validation, multi-identity selection (currently

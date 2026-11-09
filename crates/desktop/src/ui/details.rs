@@ -172,6 +172,7 @@ impl Application {
                     },
                 );
                 let data = serde_json::to_value(detail).unwrap_or(Value::Null);
+                let uri_default=self.core.active.and_then(|uid|self.core.manager.policy_rules_for(&uid).uri_default);
                 let mut copy = None;
                 let mut edit = false;
                 let mut delete = false;
@@ -248,6 +249,7 @@ impl Application {
                                     if read_field(ui, "Website", text, false) {
                                         copy = Some(CopyField::Url(i));
                                     }
+                                    ui.weak(format!("Match: {}",crate::services::uri_matching::description(crate::services::uri_matching::from_number(uri["match"].as_u64()),uri_default)));
                                     if safe_url(text) && ui.small_button("Open website").clicked() {
                                         let _ = open::that_detached(text);
                                     }
@@ -513,22 +515,11 @@ impl Application {
                                 for (i, uri) in uris.iter_mut().enumerate() {
                                     ui.push_id(i, |ui| {
                                         edit_field(ui, uri, "uri", "URL", false);
-                                        let labels = [
-                                            "Base domain",
-                                            "Host",
-                                            "Starts with",
-                                            "Exact",
-                                            "Regular expression",
-                                            "Never",
-                                        ];
-                                        let default = uri_policy_default
-                                            .map(|v| {
-                                                format!(
-                                                    "Default: {} (organization)",
-                                                    labels[v as usize]
-                                                )
-                                            })
-                                            .unwrap_or_else(|| "Default".into());
+                                        let labels = crate::services::uri_matching::LABELS;
+                                        let default = crate::services::uri_matching::description(
+                                            None,
+                                            uri_policy_default,
+                                        );
                                         let mut matching =
                                             uri["match"].as_u64().filter(|v| *v <= 5);
                                         egui::ComboBox::from_id_salt("uri-matching")

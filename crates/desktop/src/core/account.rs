@@ -275,6 +275,7 @@ impl Core {
         );
     }
     pub fn load_vault(&mut self) {
+        self.cancel_duplicate_scan();
         let Some(scope) = self.scope() else {
             return;
         };

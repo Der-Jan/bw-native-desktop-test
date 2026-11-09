@@ -43,6 +43,8 @@ keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sy
 openssl = "0.10"
 p12-keystore = "0.4.1"
 base64 = "0.22"
+psl = "2"
+fancy-regex = "0.18"
 rfd = "0.17"
 rust-embed = "8"
 serde = { workspace = true }

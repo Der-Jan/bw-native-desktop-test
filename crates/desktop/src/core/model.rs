@@ -34,6 +34,9 @@ pub struct VaultCache {
     pub visible: Vec<Arc<CipherListView>>,
     pub folders: Vec<Folder>,
     pub collections: Vec<Collection>,
+    pub duplicate_filter: Option<crate::services::vault_navigation::VaultFilter>,
+    pub duplicate_report: Option<crate::services::uri_matching::Report>,
+    pub duplicate_error: Option<String>,
     pub sort_keys: HashMap<CipherId, crate::services::vault_sort::SortKey>,
     pub search_keys: HashMap<CipherId, String>,
 }

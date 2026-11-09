@@ -662,9 +662,13 @@ impl Fixture {
                             server_delay.load(Ordering::SeqCst),
                         ));
                         let mut png = std::io::Cursor::new(Vec::new());
-                        image::DynamicImage::new_rgba8(4, 4)
-                            .write_to(&mut png, image::ImageFormat::Png)
-                            .unwrap();
+                        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+                            4,
+                            4,
+                            image::Rgba([40, 90, 200, 255]),
+                        ))
+                        .write_to(&mut png, image::ImageFormat::Png)
+                        .unwrap();
                         let data = if first.contains("invalid.test/") {
                             b"not an image".to_vec()
                         } else {
@@ -2169,6 +2173,15 @@ async fn favicon_late_response_cannot_repopulate_a_recreated_cache() {
         tokio::time::timeout(std::time::Duration::from_millis(350), updates.recv())
             .await
             .is_err()
+    );
+    assert!(
+        manager
+            .favicon_source_for(&uid)
+            .unwrap()
+            .cached_icon("example.test")
+            .await
+            .is_none(),
+        "Disabled in-flight results must not populate persistent storage"
     );
     fixture.sync_delay.store(0, Ordering::SeqCst);
     assert!(matches!(
@@ -5353,4 +5366,270 @@ async fn archive_actions_in_the_app_refresh_active_and_archive_filters() {
     core.set_filter(core.filter.with_section(VaultSection::Active));
     assert_eq!(core.current_cache().unwrap().visible[0].id, Some(id));
     assert_eq!(archive_requests(&f), 2);
+}
+
+fn icon_requests(f: &Fixture) -> usize {
+    f.requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(r, _)| r.starts_with("GET /vault/icons/"))
+        .count()
+}
+async fn resolved_icon(
+    source: crate::services::sdk::FaviconSource,
+    uid: crate::domain::UserId,
+    hostname: &str,
+) -> crate::services::favicon::IconState {
+    let service = crate::services::favicon::FaviconService::new();
+    service.set_source(uid, Some(source));
+    let mut events = service.event_sender().subscribe();
+    service.get(&uid, hostname);
+    tokio::time::timeout(std::time::Duration::from_secs(3), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    service.get(&uid, hostname)
+}
+#[tokio::test]
+async fn favicon_persistent_cache_survives_sync_restart_and_is_encrypted() {
+    use crate::services::{
+        favicon::IconState,
+        sdk::{test_support::encrypted_sync_response, vault_sync},
+    };
+    let f = Fixture::new();
+    let (mut manager, uid) = f.account().await;
+    let host = "cache-restart-only.example";
+    let original = resolved_icon(manager.favicon_source_for(&uid).unwrap(), uid, host).await;
+    let IconState::Found(original) = original else {
+        panic!("Expected downloaded icon");
+    };
+    *f.sync_response.lock().unwrap() = (
+        200,
+        encrypted_sync_response(&manager, uid, "Synthetic icon cache sync").await,
+    );
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    let cached = resolved_icon(manager.favicon_source_for(&uid).unwrap(), uid, host).await;
+    let IconState::Found(cached) = cached else {
+        panic!("Expected cached icon after sync");
+    };
+    assert_eq!(
+        original.pixels, cached.pixels,
+        "The corner mask must not be applied twice"
+    );
+    assert_eq!(icon_requests(&f), 1);
+    manager.lock(&uid).unwrap().finish().await;
+    drop(manager);
+    let restored = crate::services::sdk::production::test_load(&f.root, &f.store).await;
+    restored
+        .unlock_data_for(&uid)
+        .unwrap()
+        .unlock("synthetic-password".into())
+        .await
+        .unwrap();
+    let cached = resolved_icon(restored.favicon_source_for(&uid).unwrap(), uid, host).await;
+    let IconState::Found(cached) = cached else {
+        panic!("Expected cached icon after restart");
+    };
+    assert_eq!(original.pixels, cached.pixels);
+    assert_eq!(icon_requests(&f), 1);
+    for suffix in [".sqlite", ".sqlite-wal"] {
+        if let Ok(bytes) = std::fs::read(f.root.join(format!("{uid}{suffix}"))) {
+            assert!(!bytes.windows(host.len()).any(|v| v == host.as_bytes()));
+            assert!(!bytes.windows(8).any(|v| v == b"\x89PNG\r\n\x1a\n"));
+        }
+    }
+}
+#[tokio::test]
+async fn favicon_cache_expiry_corruption_and_invalid_images_fetch_safely() {
+    use crate::services::favicon::IconState;
+    let f = Fixture::new();
+    let (manager, uid) = f.account().await;
+    let host = "cache-expiry.example";
+    assert!(matches!(
+        resolved_icon(manager.favicon_source_for(&uid).unwrap(), uid, host).await,
+        IconState::Found(_)
+    ));
+    manager
+        .favicon_source_for(&uid)
+        .unwrap()
+        .alter_icons_for_test(true, false)
+        .await;
+    assert!(matches!(
+        resolved_icon(manager.favicon_source_for(&uid).unwrap(), uid, host).await,
+        IconState::Found(_)
+    ));
+    assert_eq!(icon_requests(&f), 2);
+    manager
+        .favicon_source_for(&uid)
+        .unwrap()
+        .replace_icons_for_test("corrupted encrypted cache".into())
+        .await;
+    assert!(matches!(
+        resolved_icon(manager.favicon_source_for(&uid).unwrap(), uid, host).await,
+        IconState::Found(_)
+    ));
+    assert_eq!(icon_requests(&f), 3);
+    manager
+        .favicon_source_for(&uid)
+        .unwrap()
+        .alter_icons_for_test(false, true)
+        .await;
+    assert!(matches!(
+        resolved_icon(manager.favicon_source_for(&uid).unwrap(), uid, host).await,
+        IconState::Found(_)
+    ));
+    assert_eq!(icon_requests(&f), 4);
+    for _ in 0..2 {
+        assert!(matches!(
+            resolved_icon(
+                manager.favicon_source_for(&uid).unwrap(),
+                uid,
+                "invalid.test"
+            )
+            .await,
+            IconState::Missing
+        ));
+    }
+    assert_eq!(
+        icon_requests(&f),
+        6,
+        "Failed downloads must not be persisted as valid icons"
+    );
+}
+#[tokio::test]
+async fn favicon_cache_concurrent_sources_preserve_both_entries() {
+    use crate::services::favicon::IconState;
+    let f = Fixture::new();
+    let (manager, uid) = f.account().await;
+    let (a, b) = tokio::join!(
+        resolved_icon(
+            manager.favicon_source_for(&uid).unwrap(),
+            uid,
+            "a.cached.test"
+        ),
+        resolved_icon(
+            manager.favicon_source_for(&uid).unwrap(),
+            uid,
+            "b.cached.test"
+        )
+    );
+    assert!(matches!(a, IconState::Found(_)));
+    assert!(matches!(b, IconState::Found(_)));
+    assert_eq!(icon_requests(&f), 2);
+    for hostname in ["a.cached.test", "b.cached.test"] {
+        assert!(matches!(
+            resolved_icon(manager.favicon_source_for(&uid).unwrap(), uid, hostname).await,
+            IconState::Found(_)
+        ));
+    }
+    assert_eq!(
+        icon_requests(&f),
+        2,
+        "Serialized cache writes must not overwrite another source's entries"
+    );
+}
+#[tokio::test]
+async fn favicon_cache_is_bound_to_account_and_profile_revision_and_revoked_on_lock() {
+    use crate::services::favicon::IconState;
+    let f = Fixture::new();
+    let (mut first, uid) = f.account().await;
+    let host = "account-bound-cache.example";
+    assert!(matches!(
+        resolved_icon(first.favicon_source_for(&uid).unwrap(), uid, host).await,
+        IconState::Found(_)
+    ));
+    let source = first.favicon_source_for(&uid).unwrap();
+    let encrypted = source.encrypted_icons_for_test().await;
+    let (second, other) = f.account().await;
+    second
+        .favicon_source_for(&other)
+        .unwrap()
+        .replace_icons_for_test(encrypted)
+        .await;
+    assert!(matches!(
+        resolved_icon(second.favicon_source_for(&other).unwrap(), other, host).await,
+        IconState::Found(_)
+    ));
+    assert_eq!(
+        icon_requests(&f),
+        2,
+        "A copied cache cannot cross account/profile bindings even with the same user key"
+    );
+    let profile = f.store.get(first.profile_for(&uid).unwrap()).unwrap();
+    let revision = profile.revision;
+    f.store.save(profile, Some(revision)).unwrap();
+    assert!(!source.current());
+    assert!(source.cached_icon(host).await.is_none());
+    assert!(matches!(
+        resolved_icon(first.favicon_source_for(&uid).unwrap(), uid, host).await,
+        IconState::Found(_)
+    ));
+    assert_eq!(icon_requests(&f), 3);
+    let source = first.favicon_source_for(&uid).unwrap();
+    first.lock(&uid).unwrap().finish().await;
+    assert!(source.cached_icon(host).await.is_none());
+    assert_eq!(icon_requests(&f), 3);
+}
+
+#[tokio::test]
+async fn uri_match_mode_is_saved_and_roundtrips_through_server_sync() {
+    use crate::services::sdk::{ClientExt, vault_sync};
+    use bitwarden_vault::{LoginUriView, UriMatchType};
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    let mut view = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    view.login.as_mut().unwrap().uris = Some(vec![LoginUriView {
+        uri: Some("https://uri-mode.example/account".into()),
+        r#match: Some(UriMatchType::Exact),
+        uri_checksum: None,
+    }]);
+    manager
+        .client_for(&uid)
+        .unwrap()
+        .save_cipher(view)
+        .await
+        .unwrap();
+    f.write_mode.store(1, Ordering::SeqCst);
+    let report = vault_sync::synchronize(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.uploaded, 1, "{:?}", report.problems);
+    let current = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    assert_eq!(
+        current.login.unwrap().uris.unwrap()[0].r#match,
+        Some(UriMatchType::Exact)
+    );
+    let requests = f.requests.lock().unwrap();
+    let request = &requests
+        .iter()
+        .find(|(r, _)| r.starts_with("PUT /vault/api/ciphers/"))
+        .unwrap()
+        .0;
+    let body: serde_json::Value =
+        serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(body["login"]["uris"][0]["match"], 3);
+    assert!(
+        !request.contains("https://uri-mode.example/account"),
+        "The mode is metadata; the URI itself must stay encrypted"
+    );
 }

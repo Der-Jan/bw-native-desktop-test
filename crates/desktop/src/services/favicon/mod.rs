@@ -4,7 +4,7 @@
 //! `(uid, hostname)` pair returns [`IconState::Pending`] and spawns a fetch;
 //! subsequent calls are pure read-lock lookups. Fetch completions broadcast
 //! a [`FaviconMessage::IconResolved`] that the App subscription turns into
-//! a redraw. Icons stay in memory only; requests use the account’s scoped
+//! a redraw. Validated icons are also cached encrypted in account SQLite; requests use the account’s scoped
 //! TLS/mTLS transport, with no external icon-service fallback.
 //!
 //! `view()` only calls `get()` for virtualized rows on screen, so "first
@@ -14,7 +14,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, OnceLock, RwLock,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -62,6 +62,7 @@ struct FaviconInner {
 
 struct UserCache {
     id: uuid::Uuid,
+    active: Arc<AtomicBool>,
     source: FaviconSource,
     entries: HashMap<Hostname, IconState>,
 }
@@ -149,14 +150,14 @@ impl FaviconService {
     /// stay alive until they finish but their results no-op when the cache
     /// entry is gone.
     pub fn evict_user(&self, uid: &UserId) {
-        if self
+        if let Some(cache) = self
             .inner
             .caches
             .write()
             .expect("favicon cache lock poisoned")
             .remove(uid)
-            .is_some()
         {
+            cache.active.store(false, Ordering::SeqCst);
             self.inner.version.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -170,25 +171,29 @@ impl FaviconService {
                     .is_some_and(|cache| cache.source.same_authority(&source))
                 {
                     self.inner.version.fetch_add(1, Ordering::Relaxed);
-                    caches.insert(
+                    if let Some(old) = caches.insert(
                         uid,
                         UserCache {
                             id: uuid::Uuid::new_v4(),
+                            active: Arc::new(AtomicBool::new(true)),
                             source,
                             entries: HashMap::new(),
                         },
-                    );
+                    ) {
+                        old.active.store(false, Ordering::SeqCst);
+                    }
                 }
             }
             None => {
-                if caches.remove(&uid).is_some() {
+                if let Some(cache) = caches.remove(&uid) {
+                    cache.active.store(false, Ordering::SeqCst);
                     self.inner.version.fetch_add(1, Ordering::Relaxed);
                 }
             }
         }
     }
     fn claim_and_spawn(&self, uid: UserId, hostname: Hostname) {
-        let (source, cache_id) = {
+        let (source, cache_id, active) = {
             let mut caches = self.inner.caches.write().expect("favicon cache poisoned");
             let Some(cache) = caches.get_mut(&uid).filter(|cache| cache.source.current()) else {
                 return;
@@ -197,11 +202,11 @@ impl FaviconService {
                 return;
             }
             cache.entries.insert(hostname.clone(), IconState::Pending);
-            (cache.source.clone(), cache.id)
+            (cache.source.clone(), cache.id, cache.active.clone())
         };
         let inner = self.inner.clone();
         self.inner.runtime.spawn(async move {
-            fetch_and_commit(inner, uid, hostname, source, cache_id).await;
+            fetch_and_commit(inner, uid, hostname, source, cache_id, active).await;
         });
     }
 }
@@ -242,8 +247,9 @@ async fn fetch_and_commit(
     hostname: Hostname,
     source: FaviconSource,
     cache_id: uuid::Uuid,
+    active: Arc<AtomicBool>,
 ) {
-    let state = fetch_one(&inner, &source, &hostname).await;
+    let state = fetch_one(&inner, &source, &hostname, active).await;
 
     let committed = {
         let mut caches = inner.caches.write().expect("favicon cache lock poisoned");
@@ -264,28 +270,79 @@ async fn fetch_and_commit(
     }
 }
 
-async fn fetch_one(inner: &FaviconInner, source: &FaviconSource, hostname: &Hostname) -> IconState {
+async fn fetch_one(
+    inner: &FaviconInner,
+    source: &FaviconSource,
+    hostname: &Hostname,
+    active: Arc<AtomicBool>,
+) -> IconState {
     let Ok(_permit) = inner.fetch_budget.clone().acquire_owned().await else {
         return IconState::Missing;
     };
+    if !active.load(Ordering::SeqCst) {
+        return IconState::Missing;
+    }
+    if let Some(bytes) = source.cached_icon(hostname).await
+        && let Ok(state) = decode_cached(bytes).await
+    {
+        return state;
+    }
+    if !active.load(Ordering::SeqCst) {
+        return IconState::Missing;
+    }
     match tokio::time::timeout(FETCH_TIMEOUT, source.fetch(hostname)).await {
-        Ok(Ok(bytes)) => decode_to_handle(bytes).await.unwrap_or(IconState::Missing),
+        Ok(Ok(bytes)) => match decode_to_handle(bytes).await {
+            Ok((state, png)) => {
+                if active.load(Ordering::SeqCst) {
+                    let _ = source.cache_icon(hostname, png, active).await;
+                }
+                state
+            }
+            Err(_) => IconState::Missing,
+        },
         _ => IconState::Missing,
     }
 }
 
 // ── Decode + alpha-mask pipeline ──────────────────────────────────────────
-
-/// Decode raw bytes on a blocking worker and apply the rounded-rect mask. `image` decode is pure CPU; with up to 5 landing
-/// at once we keep tokio's worker threads free.
-async fn decode_to_handle(raw: Vec<u8>) -> Result<IconState, DecodeError> {
-    let rgba = tokio::task::spawn_blocking(move || decode_and_mask(&raw))
-        .await
-        .map_err(|e| DecodeError(e.to_string()))?
-        .map_err(|e| DecodeError(e.to_string()))?;
-    let (w, h) = (rgba.width(), rgba.height());
-    Ok(IconState::Found(Arc::new(
-        ColorImage::from_rgba_unmultiplied([w as usize, h as usize], rgba.as_raw()),
+async fn decode_to_handle(raw: Vec<u8>) -> Result<(IconState, Vec<u8>), DecodeError> {
+    tokio::task::spawn_blocking(move || {
+        let rgba = decode_and_mask(&raw).map_err(|e| DecodeError(e.to_string()))?;
+        let state = handle(&rgba);
+        let mut png = std::io::Cursor::new(Vec::new());
+        rgba.write_to(&mut png, image::ImageFormat::Png)
+            .map_err(|e| DecodeError(e.to_string()))?;
+        Ok((state, png.into_inner()))
+    })
+    .await
+    .map_err(|e| DecodeError(e.to_string()))?
+}
+async fn decode_cached(bytes: Vec<u8>) -> Result<IconState, DecodeError> {
+    tokio::task::spawn_blocking(move || {
+        let mut reader =
+            image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Png);
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(ICON_SIZE_PX);
+        limits.max_image_height = Some(ICON_SIZE_PX);
+        limits.max_alloc = Some(1024 * 1024);
+        reader.limits(limits);
+        let image = reader
+            .decode()
+            .map_err(|e| DecodeError(e.to_string()))?
+            .into_rgba8();
+        if image.dimensions() != (ICON_SIZE_PX, ICON_SIZE_PX) {
+            return Err(DecodeError("Invalid cached icon dimensions".into()));
+        }
+        // Persistent pixels already have their corner mask. Do not apply it twice.
+        Ok(handle(&image))
+    })
+    .await
+    .map_err(|e| DecodeError(e.to_string()))?
+}
+fn handle(rgba: &image::RgbaImage) -> IconState {
+    IconState::Found(Arc::new(ColorImage::from_rgba_unmultiplied(
+        [ICON_SIZE_PX as usize, ICON_SIZE_PX as usize],
+        rgba.as_raw(),
     )))
 }
 

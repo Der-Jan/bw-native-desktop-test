@@ -155,8 +155,24 @@ shows retry/status instead of reporting an empty vault. Website icons now use
 `<account server base>/icons/<hostname>/icon.png`, preserving a configured subpath
 and the account's mTLS identity/private CA. Requests send no OAuth credentials,
 follow no redirects and have no public-service fallback. The existing appearance
-setting controls lookup; icons stay in memory only. Lock, logout, sync/session
-replacement, profile changes and disabling icons invalidate the source/cache.
+setting controls lookup. Lock, logout, sync/session replacement, profile changes
+and disabling icons invalidate the in-memory source/cache. Validated 32×32 icons
+also persist as normalized PNGs inside a separate SDK SQLite setting encrypted
+with the account user key. The encrypted catalog includes account/profile UUIDs,
+profile revision, hostnames and fetch times: copying a cache across those bindings
+cannot reuse it. Neither hostnames nor PNG bytes are stored in plaintext. Sync,
+unlock and restart reuse valid cached icons before requesting the server.
+
+Persistent cache entries expire after seven days; at most 512 icons and 2 MiB of
+encoded image payload are retained, with oldest entries evicted first. Decoding
+cache PNGs is limited to 32×32 and 8 KiB; the corner mask is applied only once.
+Corruption, expiry or failed cache storage falls back to the usual scoped fetch.
+Failed network/image results are not persisted as successful icons. Cache
+read/modify/write uses a short revocable account lease, outside HTTP/image decode,
+so concurrent sources cannot lose updates. Disabling icons cancels pending cache
+writes; an already-authorized SQLite commit may finish while cleanup drains its
+lease, but cannot republish UI results. Logout removes the catalog with the
+existing account database cleanup. Profile changes require a fresh catalog.
 Late requests cannot populate a recreated cache. Responses are capped at 2 MiB;
 decoding is capped at 4096×4096 and 32 MiB before resizing to 32px. Missing or
 rejected icons retain the existing item marker. Separate cloud/custom icon-service
@@ -166,6 +182,40 @@ Key/password/KDF/security-stamp changes require a new login; automatic key migra
 is deferred. Domains/Send payloads are retained in the typed encrypted snapshot
 but have no full feature UI yet. Organization-policy coverage is described below.
 Incoming polling and attachment transfers are implemented below; WSS is deferred. New and existing entry drafts synchronize after each successful save.
+
+## Implemented URI rule display and duplicate view
+
+Every website in read-only item details displays its saved matching mode. A null
+mode shows the resolved Default (Base domain unless an organization policy supplies
+another default). Editing and sync preserve explicit modes in the URI metadata;
+the URI itself stays SDK-encrypted. These are autofill matching settings, not
+server-maintained duplicate flags.
+
+View → Duplicates in the sidebar lists active login entries whose saved website
+rules overlap another entry's website. It evaluates every saved URI, rather than
+only the first URL column, using Base domain (PSL registrable domains, including
+private suffixes), Host (including non-default ports), Exact, Starts with and
+case-insensitive regex modes. Never is excluded, and repeated URLs within the same
+entry do not make that entry a duplicate. A match in either direction includes
+both entries; different usernames, passwords, names and notes can still be listed.
+Base-domain matching retains the regular client's script.google.com exception.
+
+Vault, folder, collection and type facets constrain the comparison set. Search
+filters the completed results so finding one entry by name does not invalidate
+its matching partner. Comparison runs on a cancellable worker, is refreshed after
+cache reload/sync, and publishes only to the current account/presentation. It uses
+already-available list URI metadata; protected-item read/copy gates remain intact.
+Nothing is deleted or changed, and URL/regex processing never fetches a website.
+
+Regex evaluation has bounded pattern/input size, backtracking, compiled size and
+a five-second comparison budget. Invalid/unsupported rules and limit exhaustion
+are reported in the view. This is a local website-overlap view, not proof of
+identical credentials, nor a replacement for the browser extension's autofill
+implementation. Non-web application URIs and server equivalent-domain sets are
+not incorporated. Regex rules are tested against concrete saved website URLs;
+arbitrary regex-versus-regex intersection is not inferred. The matcher follows the adjacent regular-client URI strategy
+implementation; registrable-domain extraction uses the static
+[PSL library](https://docs.rs/psl/latest/psl/), with no runtime domain lookup.
 
 ## Implemented automatic incoming sync
 

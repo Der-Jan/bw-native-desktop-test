@@ -191,3 +191,174 @@ async fn incoming_sync_timer_wakes_the_tray_loop_without_a_renderer() {
         .expect("Incoming sync timer must wake the event loop while hidden");
     completion(&mut core);
 }
+
+fn duplicate_items(core: &mut Core, specs: Vec<CipherSpec>) -> Vec<CipherId> {
+    let all: Vec<_> = specs
+        .into_iter()
+        .map(|spec| {
+            let mut item = make_cipher(spec);
+            Arc::get_mut(&mut item).unwrap().id = Some(CipherId::new_v4());
+            item
+        })
+        .collect();
+    let ids = all.iter().map(|i| i.id.unwrap()).collect();
+    let cache = VaultCache {
+        sort_keys: services::vault_sort::prepare_keys(&all),
+        search_keys: all
+            .iter()
+            .map(|i| (i.id.unwrap(), i.name.to_lowercase()))
+            .collect(),
+        all,
+        ..Default::default()
+    };
+    core.caches.insert(core.active.unwrap(), cache);
+    ids
+}
+async fn finish_duplicates(core: &mut Core) {
+    for _ in 0..400 {
+        core.poll();
+        if core
+            .current_cache()
+            .is_some_and(|c| c.duplicate_report.is_some() || c.duplicate_error.is_some())
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("Duplicate comparison did not finish");
+}
+#[tokio::test]
+async fn duplicate_view_honors_facets_and_search_does_not_remove_the_matching_partner() {
+    use services::vault_navigation::*;
+    let mut core = core();
+    let org = bitwarden_core::OrganizationId::new_v4();
+    let folder = bitwarden_vault::FolderId::new_v4();
+    let collection = bitwarden_collections::collection::CollectionId::new_v4();
+    duplicate_items(
+        &mut core,
+        vec![
+            CipherSpec {
+                name: "Personal A",
+                kind: login_kind(Some("https://a.personal.test/a")),
+                folder: Some(folder),
+                ..Default::default()
+            },
+            CipherSpec {
+                name: "Personal B",
+                kind: login_kind(Some("https://b.personal.test/b")),
+                ..Default::default()
+            },
+            CipherSpec {
+                name: "Engineering A",
+                kind: login_kind(Some("https://a.company.test/a")),
+                organization: Some(org),
+                collections: vec![collection],
+                ..Default::default()
+            },
+            CipherSpec {
+                name: "Engineering B",
+                kind: login_kind(Some("https://b.company.test/b")),
+                organization: Some(org),
+                collections: vec![collection],
+                ..Default::default()
+            },
+            CipherSpec {
+                name: "Archived",
+                kind: login_kind(Some("https://a.personal.test/a")),
+                archived: true,
+                ..Default::default()
+            },
+            CipherSpec {
+                name: "Trash",
+                kind: login_kind(Some("https://a.personal.test/a")),
+                deleted: true,
+                ..Default::default()
+            },
+            CipherSpec {
+                name: "Empty",
+                kind: login_kind(None),
+                ..Default::default()
+            },
+        ],
+    );
+    core.filter = VaultFilter::default().with_section(VaultSection::Duplicates);
+    core.refilter();
+    finish_duplicates(&mut core).await;
+    assert_eq!(core.current_cache().unwrap().visible.len(), 4);
+    core.filter.scope = VaultScope::Personal;
+    core.refilter();
+    finish_duplicates(&mut core).await;
+    assert_eq!(core.current_cache().unwrap().visible.len(), 2);
+    core.filter.folder = FolderFilter::Folder(folder);
+    core.refilter();
+    finish_duplicates(&mut core).await;
+    assert!(core.current_cache().unwrap().visible.is_empty());
+    core.filter.scope = VaultScope::Organization(org);
+    core.filter.folder = FolderFilter::All;
+    core.filter.collection = CollectionFilter::Collection(collection);
+    core.refilter();
+    finish_duplicates(&mut core).await;
+    assert_eq!(core.current_cache().unwrap().visible.len(), 2);
+    core.query = "engineering a".into();
+    core.refilter();
+    assert_eq!(core.current_cache().unwrap().visible.len(), 1);
+    assert_eq!(
+        core.current_cache()
+            .unwrap()
+            .duplicate_report
+            .as_ref()
+            .unwrap()
+            .ids
+            .len(),
+        2
+    );
+    core.query.clear();
+    core.filter.category = Some(CipherType::SecureNote);
+    core.refilter();
+    finish_duplicates(&mut core).await;
+    assert!(core.current_cache().unwrap().visible.is_empty());
+}
+#[tokio::test]
+async fn duplicate_view_keeps_reprompt_gates_and_cancels_when_leaving_the_view() {
+    use services::vault_navigation::*;
+    let mut core = core();
+    let ids = duplicate_items(
+        &mut core,
+        vec![
+            CipherSpec {
+                name: "Protected",
+                kind: login_kind(Some("https://example.test/a")),
+                ..Default::default()
+            },
+            CipherSpec {
+                name: "Second",
+                kind: login_kind(Some("https://example.test/b")),
+                ..Default::default()
+            },
+        ],
+    );
+    Arc::get_mut(&mut core.caches.get_mut(&core.active.unwrap()).unwrap().all[0])
+        .unwrap()
+        .reprompt = CipherRepromptType::Password;
+    core.filter.section = VaultSection::Duplicates;
+    core.refilter();
+    finish_duplicates(&mut core).await;
+    assert_eq!(core.current_cache().unwrap().visible.len(), 2);
+    core.request(Request::Read(ids[0]));
+    assert!(core.prompt.is_some());
+    assert!(core.detail.is_none());
+    core.cancel_prompt();
+    core.caches
+        .get_mut(&core.active.unwrap())
+        .unwrap()
+        .duplicate_report = None;
+    core.refilter();
+    let cancelled = core.duplicate_request.as_ref().unwrap().1.clone();
+    core.filter.section = VaultSection::Active;
+    core.refilter();
+    assert!(cancelled.load(std::sync::atomic::Ordering::SeqCst));
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    core.poll();
+    assert!(core.current_cache().unwrap().duplicate_report.is_none());
+    assert_eq!(core.current_cache().unwrap().visible.len(), 2);
+}

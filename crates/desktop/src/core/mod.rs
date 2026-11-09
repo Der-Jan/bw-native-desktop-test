@@ -4,6 +4,7 @@ mod account;
 mod archive;
 mod attachments;
 mod desktop;
+mod duplicates;
 mod folders;
 pub mod generator;
 mod incoming;
@@ -134,6 +135,7 @@ pub struct Core {
     pub detail: Option<bitwarden_vault::CipherView>,
     pub detail_open: bool,
     pub detail_request: Option<uuid::Uuid>,
+    pub(super) duplicate_request: Option<(uuid::Uuid, Arc<std::sync::atomic::AtomicBool>)>,
     pub editor: Option<Editor>,
     pub query: String,
     pub filter: services::vault_navigation::VaultFilter,
@@ -221,6 +223,7 @@ impl Core {
             detail: None,
             detail_open: false,
             detail_request: None,
+            duplicate_request: None,
             editor: None,
             query: String::new(),
             filter: Default::default(),
@@ -353,6 +356,7 @@ impl Core {
         self.active.and_then(|uid| self.caches.get(&uid))
     }
     pub fn clear_presentation(&mut self) {
+        self.cancel_duplicate_scan();
         if let Some(approval) = self.browser_approval.take() {
             approval.respond(services::browser_integration::Decision::Deny);
         }

@@ -56,11 +56,12 @@ impl Application {
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     let unlocking = self.core.active.is_some();
-                    ui.heading(if unlocking {
+                    let title = egui::RichText::new(if unlocking {
                         "Unlock vault"
                     } else {
                         "Log in to Bitwarden"
                     });
+                    ui.heading(if unlocking { title.size(18.) } else { title });
                     ui.add_space(12.);
                     if let Some(account) = self
                         .core

@@ -393,11 +393,7 @@ impl Core {
             }
             About => self.about_open = true,
             FingerprintPhrase => self.fingerprint_open = true,
-            Import => {
-                if !self.remote() {
-                    self.import_open = true;
-                }
-            }
+            Import => {}
             Export => {
                 if !self.remote() {
                     self.export_open = true;

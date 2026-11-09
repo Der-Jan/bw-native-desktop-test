@@ -193,14 +193,11 @@ impl Application {
                             self.core.screen = Screen::Vault;
                             self.core.set_filter(filter);
                         }
-                        self.group(ui, NavigationGroup::Send, "Send", |app, ui| {
-                            if ui
-                                .selectable_label(app.core.screen == Screen::Send, "Sends")
-                                .clicked()
-                            {
-                                app.core.cancel_prompt();
-                                app.core.screen = Screen::Send;
-                            }
+                        ui.add_enabled_ui(false, |ui| {
+                            self.group(ui, NavigationGroup::Send, "Send", |_, ui| {
+                                ui.selectable_label(false, "Sends")
+                                    .on_disabled_hover_text("Not available yet");
+                            });
                         });
                     });
             });

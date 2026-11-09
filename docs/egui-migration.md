@@ -21,8 +21,8 @@ No real credentials or certificates are copied into demo/test fixtures.
 | Protected entries | Scoped password confirmation and retry, notes/custom fields | Implemented and tested |
 | Forms | Existing local item/folder create/edit/delete; encrypted local edits of server entries | Implemented and tested; no HTTP writes |
 | Generator | Password/passphrase/username, account-scoped history and clipboard rules | Implemented and tested |
-| Import/export | JSON/CSV/encrypted JSON, fresh scoped authorization and guarded staged exports; import remains the pre-existing backend stub | Implemented |
-| Sends | Existing local/demo Send workflows | Implemented and tested |
+| Import/export | JSON/CSV/encrypted JSON exports retain scoped authorization; Import is disabled in the menu and dispatcher pending implementation | Export implemented; Import grayed out |
+| Sends | Existing local/demo code retained; navigation disabled pending server support | Grayed out |
 | Preferences | Settings, per-account filters, theme/language/zoom/system fonts | Implemented; existing Fluent catalogues retained, new strings fall back to English |
 | Desktop | Menus, tray hide/restore, single-instance wake, global hotkey/Magnify | Implemented and tested |
 | SSH | Fixed socket, verified host binding, until-lock grants, focused approval viewport | Implemented and tested |

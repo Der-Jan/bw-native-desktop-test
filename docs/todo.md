@@ -24,8 +24,10 @@ the first runtime/session and demo-storage slice is implemented; remaining work 
 - **Production storage platform validation** `[M]` — validate Windows ACLs and
   macOS/Windows credential-store behavior. AEAD credential persistence with OS
   keys, private Unix paths, pending-login recovery and orphan cleanup are implemented.
-- **Server session revocation and platform durability** `[L]` — server-side token
-  revocation and Windows durability validation. Installation-local IDs, runtime
+- **Server session revocation and platform durability** `[L]` — assess supported
+  per-session/device revocation APIs and validate Windows durability. Vaultwarden's
+  security-stamp reset deauthorizes all devices and must not be invoked as ordinary
+  logout; a global session reset needs a separate explicit user action. Installation-local IDs, runtime
   revocation, token-key deletion, plaintext UI purge, retained removal markers and
   SQLite/metadata cleanup now cover production account records as well as demos.
 - **Protected action authorization parity** `[M]` — one-use account/revision/action

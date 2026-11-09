@@ -59,7 +59,7 @@ pub fn menu_tree() -> MenuTree {
             item(fl!("menu-file-new-folder")).when(Unlocked).action(NewFolder),
             sep(),
             item(fl!("menu-file-sync-now")).when(HasAccounts).action(SyncNow),
-            item(fl!("menu-file-import")).when(Unlocked).action(Import),
+            item(fl!("menu-file-import")).when(Never).action(Import),
             item(fl!("menu-file-export")).when(Unlocked).action(Export),
             sep(),
             item(fl!("menu-file-settings"))

@@ -258,7 +258,7 @@ impl Core {
                             Ok(view) => {
                                 if editing {
                                     core.editor = Some(Editor::from_cipher(&view));
-                                    if reviewing { core.notify("Review your local draft against the server version. Saving stages a new update; it does not upload automatically.", false); }
+                                    if reviewing { core.notify("Review your local draft against the server version. Saving reapplies the draft and synchronizes it automatically.", false); }
                                 }
                                 core.detail = Some(view);
                             }
@@ -312,39 +312,50 @@ impl Core {
                 if let Some(editor) = self.editor.as_mut() {
                     editor.busy = true;
                 }
-                self.spawn_scoped(
-                    scope,
-                    client.save_cipher(*view),
-                    move |core, result| match result {
-                        Ok(view) => {
-                            if core.editor.as_ref().map(|e| e.id) != editor_id {
+                self.events
+                    .spawn(client.save_cipher(*view), move |core, result| {
+                        // Upload a durable save even if the user closed its editor
+                        // or switched accounts before the completion arrived.
+                        if let Ok(view) = &result
+                            && view
+                                .id
+                                .is_some_and(|id| core.manager.has_local_edit(&scope.uid, id))
+                        {
+                            core.saved_uploads.insert(scope.uid);
+                        }
+                        if !scope.current(core) {
+                            return;
+                        }
+                        match result {
+                            Ok(view) => {
+                                if core.editor.as_ref().map(|e| e.id) != editor_id {
+                                    core.load_vault();
+                                    return;
+                                }
+                                core.selected = view.id;
+                                core.detail = Some(view);
+                                core.detail_open = true;
+                                core.editor = None;
                                 core.load_vault();
-                                return;
+                                core.notify(
+                                    if core.remote() {
+                                        "Saved locally — synchronizing…"
+                                    } else {
+                                        "Item saved"
+                                    },
+                                    false,
+                                );
                             }
-                            core.selected = view.id;
-                            core.detail = Some(view);
-                            core.detail_open = true;
-                            core.editor = None;
-                            core.load_vault();
-                            core.notify(
-                                if core.remote() {
-                                    "Draft saved — use File → Synchronize to upload"
-                                } else {
-                                    "Item saved"
-                                },
-                                false,
-                            );
-                        }
-                        Err(e) => {
-                            if let Some(editor) =
-                                core.editor.as_mut().filter(|e| Some(e.id) == editor_id)
-                            {
-                                editor.busy = false;
+                            Err(e) => {
+                                if let Some(editor) =
+                                    core.editor.as_mut().filter(|e| Some(e.id) == editor_id)
+                                {
+                                    editor.busy = false;
+                                }
+                                core.notify(e, true);
                             }
-                            core.notify(e, true);
                         }
-                    },
-                );
+                    });
             }
             Request::DiscardLocal(id) => {
                 self.spawn_scoped(

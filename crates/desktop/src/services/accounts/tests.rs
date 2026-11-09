@@ -2933,3 +2933,176 @@ async fn writable_sync_legacy_keyless_attachment_edit_cannot_orphan_file_encrypt
     assert_eq!(manager.local_edit_count(&uid), 0);
     assert_eq!(put_count(&f), 0);
 }
+
+async fn core_for_automatic_save(
+    manager: crate::services::sdk::ClientManager,
+) -> crate::core::Core {
+    let mut core = crate::core::Core::test(manager);
+    core.settings.ssh_agent = false;
+    core.settings.browser_integration = false;
+    core.settings.show_favicons = false;
+    core.load_vault();
+    for _ in 0..200 {
+        core.poll();
+        if core.current_cache().is_some() {
+            return core;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    panic!("Synthetic vault did not load");
+}
+async fn save_automatically(core: &mut crate::core::Core, id: bitwarden_vault::CipherId) {
+    use crate::services::sdk::ClientExt;
+    let mut view = core
+        .manager
+        .client_for(&core.active.unwrap())
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    view.name = "Automatically saved fixture".into();
+    core.editor = Some(crate::core::model::Editor::from_cipher(&view));
+    core.request(crate::core::model::Request::Save(Box::new(view)));
+}
+async fn finish_automatic_sync(core: &mut crate::core::Core, uid: crate::domain::UserId) {
+    for _ in 0..400 {
+        core.poll();
+        if core.sync.get(&uid).is_some_and(|state| !state.busy)
+            && (core.active != Some(uid)
+                || (core.current_cache().is_some() && (!core.detail_open || core.detail.is_some())))
+        {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    panic!("Automatic save synchronization did not finish");
+}
+#[tokio::test]
+async fn saving_in_the_app_automatically_uploads_and_preserves_search_and_selection() {
+    use crate::services::sdk::ClientExt;
+    let (f, manager, uid, id) = staged_write_fixture().await;
+    let mut core = core_for_automatic_save(manager).await;
+    core.query = "fixture".into();
+    save_automatically(&mut core, id).await;
+    finish_automatic_sync(&mut core, uid).await;
+    assert_eq!(
+        put_count(&f),
+        1,
+        "No manual sync action should be necessary"
+    );
+    assert_eq!(core.manager.local_edit_count(&uid), 0);
+    assert_eq!(core.query, "fixture");
+    assert_eq!(core.selected, Some(id));
+    assert_eq!(
+        core.detail.as_ref().unwrap().name,
+        "Automatically saved fixture"
+    );
+    assert_eq!(
+        core.manager
+            .client_for(&uid)
+            .unwrap()
+            .full_cipher(id)
+            .await
+            .unwrap()
+            .name,
+        "Automatically saved fixture"
+    );
+}
+#[tokio::test]
+async fn automatic_upload_failure_keeps_the_draft_without_a_retry_loop() {
+    let (f, manager, uid, id) = staged_write_fixture().await;
+    f.write_mode.store(3, Ordering::SeqCst);
+    let mut core = core_for_automatic_save(manager).await;
+    save_automatically(&mut core, id).await;
+    finish_automatic_sync(&mut core, uid).await;
+    assert_eq!(put_count(&f), 1);
+    assert_eq!(core.manager.local_edit_count(&uid), 1);
+    assert_eq!(core.manager.local_conflicts(&uid), vec![id]);
+    f.write_mode.store(1, Ordering::SeqCst);
+    for _ in 0..20 {
+        core.poll();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(
+        put_count(&f),
+        1,
+        "A failed automatic upload must not continuously retry"
+    );
+}
+#[tokio::test]
+async fn automatic_save_sync_retains_conflicts_without_overwriting_the_server() {
+    use crate::services::sdk::ClientExt;
+    let (f, manager, uid, id) = staged_write_fixture().await;
+    let mut core = core_for_automatic_save(manager).await;
+    f.sync_response.lock().unwrap().1["ciphers"][0]["revisionDate"] =
+        serde_json::json!((chrono::Utc::now() + chrono::Duration::seconds(10)).to_rfc3339());
+    save_automatically(&mut core, id).await;
+    finish_automatic_sync(&mut core, uid).await;
+    assert_eq!(put_count(&f), 0);
+    assert_eq!(core.manager.local_conflicts(&uid), vec![id]);
+    assert_eq!(
+        core.manager
+            .client_for(&uid)
+            .unwrap()
+            .full_cipher(id)
+            .await
+            .unwrap()
+            .name,
+        "Original write fixture"
+    );
+    assert_eq!(
+        core.manager
+            .client_for(&uid)
+            .unwrap()
+            .review_local(id)
+            .await
+            .unwrap()
+            .name,
+        "Automatically saved fixture"
+    );
+}
+#[tokio::test]
+async fn automatic_save_upload_stays_with_its_account_after_switching_away() {
+    let (f, manager, uid, id) = staged_write_fixture().await;
+    let mut core = core_for_automatic_save(manager).await;
+    save_automatically(&mut core, id).await;
+    core.clear_presentation();
+    core.active = None;
+    finish_automatic_sync(&mut core, uid).await;
+    assert_eq!(put_count(&f), 1);
+    assert_eq!(core.manager.local_edit_count(&uid), 0);
+    assert!(core.active.is_none());
+    assert!(core.detail.is_none());
+    assert!(core.editor.is_none());
+}
+
+#[tokio::test]
+async fn automatic_sync_does_not_reveal_a_protected_entry_after_its_revision_changes() {
+    use crate::services::sdk::ClientExt;
+    let (f, manager, uid, id) = staged_write_fixture().await;
+    let mut core = core_for_automatic_save(manager).await;
+    let mut view = core
+        .manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    view.reprompt = bitwarden_vault::CipherRepromptType::Password;
+    core.editor = Some(crate::core::model::Editor::from_cipher(&view));
+    core.request(crate::core::model::Request::Save(Box::new(view)));
+    finish_automatic_sync(&mut core, uid).await;
+    assert_eq!(put_count(&f), 1);
+    assert_eq!(core.manager.local_edit_count(&uid), 0);
+    assert!(core.detail.is_none());
+    assert!(!core.detail_open);
+    assert!(core.prompt.is_none());
+    assert!(
+        core.manager
+            .client_for(&uid)
+            .unwrap()
+            .full_cipher(id)
+            .await
+            .is_err()
+    );
+}

@@ -334,25 +334,67 @@ impl Core {
                         .collect();
                     core.caches.insert(uid, cache);
                     core.refilter();
+                    if core.detail_open && core.detail.is_none() && core.detail_request.is_none() {
+                        let readable = core.selected.filter(|id| {
+                            core.current_cache().is_some_and(|cache| {
+                                cache.all.iter().any(|item| {
+                                    item.id == Some(*id)
+                                        && item.view_password
+                                        && item.reprompt
+                                            == bitwarden_vault::CipherRepromptType::None
+                                })
+                            })
+                        });
+                        if let Some(id) = readable {
+                            core.request(Request::Read(id));
+                        } else {
+                            core.detail_open = false;
+                        }
+                    }
                 }
                 Err(e) => core.notify(e, true),
             },
         );
     }
     pub fn synchronize(&mut self) {
-        self.sync_account(true);
+        if let Some(uid) = self.active {
+            self.sync_account(uid, true);
+        }
     }
     fn download(&mut self) {
-        self.sync_account(false);
+        if let Some(uid) = self.active {
+            self.sync_account(uid, false);
+        }
     }
-    fn sync_account(&mut self, upload: bool) {
-        if self.editor.is_some() {
+    pub(super) fn flush_saved_uploads(&mut self) {
+        for uid in std::mem::take(&mut self.saved_uploads) {
+            if !self.manager.is_unlocked(&uid) || !self.manager.is_remote(&uid) {
+                continue;
+            }
+            if self.sync.get(&uid).is_some_and(|s| s.busy)
+                || (self.active == Some(uid) && self.editor.is_some())
+            {
+                self.saved_uploads.insert(uid);
+                continue;
+            }
+            self.sync_account(uid, true);
+        }
+    }
+    fn reload_after_sync(&mut self) {
+        let query = std::mem::take(&mut self.query);
+        let selected = self.selected;
+        let details = self.detail_open;
+        self.clear_presentation();
+        self.query = query;
+        self.selected = selected;
+        self.detail_open = details;
+        self.load_vault();
+    }
+    fn sync_account(&mut self, uid: UserId, upload: bool) {
+        if self.active == Some(uid) && self.editor.is_some() {
             self.notify("Save or cancel the open edit before synchronizing.", false);
             return;
         }
-        let Some(uid) = self.active else {
-            return;
-        };
         if !self.manager.is_unlocked(&uid) {
             return;
         }
@@ -368,6 +410,10 @@ impl Core {
         else {
             return;
         };
+        if upload {
+            self.saved_uploads.remove(&uid);
+        }
+        let root = store.root().to_path_buf();
         let id = uuid::Uuid::new_v4();
         self.sync.insert(
             uid,
@@ -379,8 +425,8 @@ impl Core {
         );
         self.events.spawn(
             async move {
-                if upload { vault_sync::synchronize(client,crate::paths::data_dir(),store).await }
-                else { vault_sync::download(client,crate::paths::data_dir(),store).await }
+                if upload { vault_sync::synchronize(client,root,store).await }
+                else { vault_sync::download(client,root,store).await }
             },
             move |core, result| {
                 let Some(state) = core.sync.get_mut(&uid) else {
@@ -398,9 +444,8 @@ impl Core {
                         state.error = report.problems.first().cloned();
                         core.caches.remove(&uid);
                         if core.active == Some(uid) {
-                            core.clear_presentation();
                             core.screen = Screen::Vault;
-                            core.load_vault();
+                            core.reload_after_sync();
                             core.notify(format!("{} entries synchronized; {} changes uploaded; {} drafts need review", report.ciphers, report.uploaded, report.conflicts), report.conflicts > 0 || !report.problems.is_empty());
                         }
                     }
@@ -408,8 +453,7 @@ impl Core {
                     Err(error) => {
                         state.error = Some(error.clone());
                         if core.active == Some(uid) {
-                            core.clear_presentation();
-                            core.load_vault();
+                            core.reload_after_sync();
                             core.notify(error, true);
                         }
                     }

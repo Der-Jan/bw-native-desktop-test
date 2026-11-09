@@ -43,7 +43,8 @@ the first runtime/session and demo-storage slice is implemented; remaining work 
   login, OS-protected tokens and full read-sync snapshots are wired; unsupported
   challenges fail explicitly. Remaining sync work includes polling/WSS, complete
   key migrations, server creation/deletion and folder writes, attachments and Send.
-  Existing-entry update sync is implemented: manual uploads, revision conflicts,
+  Existing-entry update sync is implemented: automatic uploads after Save, manual
+  retry, revision conflicts,
   encrypted draft retention, read-after-write reconciliation and per-item durable
   acknowledgments. Deleted/inaccessible draft recovery into new items remains open. Exclude Bitwarden-only passwordless passkey login and unsupported Enterprise
   policies. Follow

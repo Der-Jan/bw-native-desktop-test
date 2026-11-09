@@ -175,7 +175,7 @@ impl Application {
                                 ui.strong("Server version — a local draft needs review");
                                 review = ui.add_enabled(detail.edit && detail.view_password,egui::Button::new("Review local draft…")).clicked();
                             } else {
-                                ui.strong("Local draft — use File → Synchronize to upload");
+                                ui.strong("Local changes — awaiting synchronization");
                             }
                             ui.weak("Locking and restarting preserve these edits. Logging out removes local account data, including these changes.");
                             ui.collapsing("Discard local changes…", |ui| {
@@ -304,7 +304,7 @@ impl Application {
     fn editor(&mut self, ui: &mut egui::Ui) {
         let local_only = self.core.remote();
         if local_only {
-            ui.weak("Save keeps an encrypted local draft. Use File → Synchronize to upload it.");
+            ui.weak("Save synchronizes changes automatically. If synchronization fails, an encrypted local draft is retained.");
         }
         let folders = self
             .core

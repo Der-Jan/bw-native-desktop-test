@@ -343,14 +343,14 @@ impl Application {
             .filter(|count| *count > 0)
         {
             ui.weak(format!(
-                "{count} local drafts — use File → Synchronize to upload"
+                "{count} pending local changes — File → Synchronize retries the upload"
             ));
         }
         if let Some(uid) = self.core.active {
             let conflicts = self.core.manager.local_conflicts(&uid);
             if !conflicts.is_empty() {
                 ui.collapsing(format!("{} sync conflicts / unconfirmed updates",conflicts.len()), |ui| {
-                    ui.label("Server versions stay current. Drafts are retained and will not be uploaded automatically. Review and save a draft to stage a new update.");
+                    ui.label("Server versions stay current. Drafts are retained and will not be uploaded automatically. Review and save a draft to reapply and synchronize it.");
                     for id in conflicts {
                         let item = self.core.current_cache().and_then(|c|c.all.iter().find(|v|v.id==Some(id))).cloned();
                         ui.push_id(id, |ui| {

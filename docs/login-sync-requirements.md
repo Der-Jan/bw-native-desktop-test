@@ -66,8 +66,9 @@ configuration discovery with explicit origin authorization, bounded prelogin KDF
 parameters, SDK password hashing, password authentication, TOTP/email verification,
 profile identity verification and SDK account-key unlock. Local account UUIDs are
 independent of server user IDs and email addresses. Full downloads run after
-login/unlock and preserve local drafts. Explicit File → Synchronize also uploads
-edits to existing entries. Creation/deletion, folder mutations, import/export and
+login/unlock and preserve local drafts. Every successful edit save automatically
+synchronizes existing-entry changes. File → Synchronize remains available for
+manual refresh/retry. Creation/deletion, folder mutations, import/export and
 Send remain disabled for real accounts.
 
 Credentials are AES-256-GCM ciphertext in private files; random encryption keys
@@ -164,14 +165,18 @@ Key/password/KDF/security-stamp changes require a new login; automatic key migra
 is deferred. Domains/Send payloads are retained in the typed encrypted snapshot
 but have no full feature UI yet. Organization-policy coverage is described below.
 There is no background polling, WSS or attachment transfer. Existing-entry drafts
-can be uploaded through explicit synchronization as described below.
+are synchronized after each successful save as described below.
 
 ## Implemented existing-entry write sync
 
 Save stages an SDK-encrypted draft in the same durable SQLite setting as the
-server snapshot, retaining its original server revision. Startup/unlock downloads
-never dispatch these drafts; explicit File → Synchronize does. No plaintext edit
-queue is persisted. Logout still removes unsent drafts with the local account.
+server snapshot, retaining its original server revision. A successful Save queues
+an immediate account-scoped upload, including if the user closes the editor or
+switches accounts while saving. If another editor is open for that account, the
+upload waits until it closes. Failed uploads retain the draft without a retry
+loop. File → Synchronize offers explicit refresh/retry. Startup/unlock downloads
+remain download-only; old drafts are not uploaded just by reopening the app.
+No plaintext edit queue is persisted. Logout still removes unsent drafts with the local account.
 
 Before writing, fetch and validate a full current snapshot, account keys, security
 stamp, organization keys/membership, policies and item permissions. A changed
@@ -203,8 +208,8 @@ after a crash or lock. Lock/logout revokes authority before later batch requests
 The vault lists conflicts with Server version, Review local draft and confirmed
 Discard actions. Reviewing requires current read/edit permissions and any current
 or draft password reprompt. It opens the draft's editable content against fresh
-server metadata; only an explicit Save stages a new base revision for a later
-manual sync. Deleted/inaccessible entries retain encrypted drafts, but recovery to
+server metadata; an explicit Save stages a new base revision and automatically
+synchronizes the reapplied draft. Deleted/inaccessible entries retain encrypted drafts, but recovery to
 a new item is not yet available. Draft discard only deletes local data.
 
 Remote clients enable the SDK's strict field decryption so a corrupt field cannot
@@ -220,6 +225,9 @@ normal upload/offline restart, unchanged original revisions, fresh permissions a
 policies, preflight conflicts, a change between GET and PUT, explicit reapplication,
 lost replies with/without server application, partial batches, lock during dispatch,
 one-use draft reprompt, strict corrupt-field rejection and download-only refresh.
+Automatic-save integration tests also cover successful upload, failures without
+retry loops, retained conflicts, switching away during save, preserved search and
+selection/details, and protected entries remaining hidden after revision changes.
 No real account is used by this harness.
 
 ## Implemented Vaultwarden organization policies

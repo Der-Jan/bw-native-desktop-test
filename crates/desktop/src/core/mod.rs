@@ -143,6 +143,7 @@ pub struct Core {
     pub prompt: Option<Prompt>,
     pub generator: Generator,
     pub sync: HashMap<UserId, SyncState>,
+    saved_uploads: HashSet<UserId>,
     pub notice: Option<Notice>,
     pub loading: bool,
     pub locking: HashSet<UserId>,
@@ -226,6 +227,7 @@ impl Core {
             prompt: None,
             generator: Generator::default(),
             sync: HashMap::new(),
+            saved_uploads: HashSet::new(),
             notice: None,
             loading: true,
             locking: HashSet::new(),
@@ -295,6 +297,7 @@ impl Core {
         {
             self.notice = None;
         }
+        self.flush_saved_uploads();
         self.refresh_agent();
     }
     pub fn scope(&self) -> Option<Scope> {

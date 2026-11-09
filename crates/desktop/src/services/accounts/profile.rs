@@ -170,6 +170,9 @@ pub struct ProfileStore {
     pub secrets: SecretStore,
 }
 impl ProfileStore {
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
     pub fn system(root: &Path) -> Result<Self, String> {
         static STORES: std::sync::OnceLock<Mutex<HashMap<PathBuf, ProfileStore>>> =
             std::sync::OnceLock::new();

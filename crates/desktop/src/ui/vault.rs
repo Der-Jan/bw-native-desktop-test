@@ -232,8 +232,11 @@ impl Application {
         let collapsed = self.core.settings.collapsed_navigation_groups.contains(&id);
         if ui
             .add(
-                egui::Button::new(format!("{}  {label}", if collapsed { "▸" } else { "▾" }))
-                    .frame(false),
+                egui::Button::new(super::typography::bold_text(
+                    ui.ctx(),
+                    format!("{}  {label}", if collapsed { "▸" } else { "▾" }),
+                ))
+                .frame(false),
             )
             .clicked()
         {
@@ -310,7 +313,7 @@ impl Application {
         // Labels must not steal row clicks or offer an unscoped copy path.
         ui.style_mut().interaction.selectable_labels = false;
         ui.horizontal(|ui| {
-            ui.heading(self.filter_title());
+            ui.heading(egui::RichText::new(self.filter_title()).size(18.));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_enabled_ui(!self.core.remote(), |ui| {
                     ui.menu_button("+ New", |ui| {

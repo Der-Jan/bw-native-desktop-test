@@ -6,7 +6,14 @@ fn load() -> Result<LoadedFonts, String> {
     let (family, points) = kde_font().unwrap_or_else(|| ("sans-serif".into(), 11.0));
     let mut db = fontdb::Database::new();
     #[cfg(target_os = "linux")]
-    for requested in [&family, "monospace", "DejaVu Sans"] {
+    let bold_request = format!("{family}:weight=bold");
+    #[cfg(target_os = "linux")]
+    for requested in [
+        family.as_str(),
+        bold_request.as_str(),
+        "monospace",
+        "DejaVu Sans",
+    ] {
         if let Ok(output) = std::process::Command::new("fc-match")
             .args(["--format=%{file}", requested])
             .output()
@@ -50,6 +57,28 @@ fn load() -> Result<LoadedFonts, String> {
     fonts
         .families
         .insert(FontFamily::Monospace, vec!["desktop".into()]);
+    // egui's `strong` changes text color, not weight. Load the installed bold
+    // face explicitly so section headings use a real bold system font.
+    let resolved_family = db
+        .face(id)
+        .and_then(|face| face.families.first())
+        .map(|family| family.0.as_str())
+        .unwrap_or(&family);
+    if let Some(bold) = db.query(&fontdb::Query {
+        families: &[fontdb::Family::Name(resolved_family)],
+        weight: fontdb::Weight::BOLD,
+        ..Default::default()
+    }) && let Some(data) = db.with_face_data(bold, |bytes, index| {
+        let mut data = FontData::from_owned(bytes.to_vec());
+        data.index = index;
+        data
+    }) {
+        fonts.font_data.insert("desktop-bold".into(), data.into());
+        fonts.families.insert(
+            FontFamily::Name("desktop-bold".into()),
+            vec!["desktop-bold".into(), "desktop".into()],
+        );
+    }
     // Keep desktop text metrics, but let installed symbol fonts supply arrows
     // and other UI glyphs absent from some Noto Sans builds.
     if let Some(symbols) = db.query(&fontdb::Query {
@@ -93,6 +122,18 @@ fn load() -> Result<LoadedFonts, String> {
         body,
     ))
 }
+pub fn bold_text(ctx: &egui::Context, text: impl Into<String>) -> egui::RichText {
+    let family = FontFamily::Name("desktop-bold".into());
+    let installed = ctx.fonts(|fonts| fonts.definitions().families.contains_key(&family));
+    egui::RichText::new(text)
+        .family(if installed {
+            family
+        } else {
+            FontFamily::Proportional
+        })
+        .strong()
+}
+
 pub fn install(ctx: &egui::Context) -> Result<String, String> {
     let (fonts, description, body) = FONTS.get_or_init(load).as_ref().map_err(Clone::clone)?;
     let body = *body;

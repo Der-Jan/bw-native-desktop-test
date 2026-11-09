@@ -30,11 +30,19 @@ pub(super) struct Persisted {
     pub local_edits: HashMap<String, LocalEdit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder_intent: Option<super::folder_management::Intent>,
+    #[serde(default)]
+    pub server_revision: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment_intent: Option<super::attachments::Intent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub created_ids: Vec<(bitwarden_vault::CipherId, bitwarden_vault::CipherId)>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct LocalEdit {
     #[serde(default)]
     pub state: LocalEditState,
+    #[serde(default)]
+    pub created: bool,
     pub cipher: Cipher,
     pub base_revision: DateTime<Utc>,
 }
@@ -81,6 +89,9 @@ impl Snapshot {
                 response,
                 local_edits: HashMap::new(),
                 folder_intent: None,
+                server_revision: None,
+                attachment_intent: None,
+                created_ids: Vec::new(),
             },
             server_user_id,
             local_account_id,
@@ -188,6 +199,13 @@ impl Snapshot {
             if edit.cipher.id.map(|id| id.to_string()).as_ref() != Some(id) {
                 return Err("Invalid local draft identity".into());
             }
+            if edit.created {
+                if ciphers.contains_key(id) {
+                    return Err("Local creation ID collides with a server item".into());
+                }
+                ciphers.insert(id.clone(), edit.cipher.clone());
+                continue;
+            }
             if edit.state != LocalEditState::Pending {
                 continue; // Conflicting drafts are retained separately, never served as current items.
             }
@@ -234,9 +252,14 @@ impl Snapshot {
             .filter(|edit| edit.state == LocalEditState::Pending)
             .map_or(original.revision_date, |edit| edit.base_revision);
         persisted.local_edits.insert(
-            id,
+            id.clone(),
             LocalEdit {
                 state: LocalEditState::Pending,
+                created: self
+                    .persisted
+                    .local_edits
+                    .get(&id)
+                    .is_some_and(|e| e.created),
                 cipher,
                 base_revision,
             },
@@ -246,6 +269,24 @@ impl Snapshot {
             self.persisted.server_user_id,
             self.persisted.local_account_id,
         )
+    }
+    pub fn with_creation(&self, cipher: Cipher) -> Result<Arc<Self>, String> {
+        let id = cipher.id.ok_or("New item ID is missing")?.to_string();
+        if self.ciphers.contains_key(&id) {
+            return Err("New item ID already exists".into());
+        }
+        let mut persisted = self.persisted.clone();
+        persisted.version = 2;
+        persisted.local_edits.insert(
+            id,
+            LocalEdit {
+                base_revision: cipher.revision_date,
+                cipher,
+                created: true,
+                state: LocalEditState::Pending,
+            },
+        );
+        self.rebuild(persisted)
     }
     pub fn without_edit(&self, id: bitwarden_vault::CipherId) -> Result<Arc<Self>, String> {
         let mut persisted = self.persisted.clone();

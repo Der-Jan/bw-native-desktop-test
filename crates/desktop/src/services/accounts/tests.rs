@@ -114,6 +114,9 @@ struct Fixture {
     login_policy: Arc<Mutex<Option<serde_json::Value>>>,
     write_mode: Arc<std::sync::atomic::AtomicU8>,
     folder_mode: Arc<std::sync::atomic::AtomicU8>,
+    attachment_mode: Arc<std::sync::atomic::AtomicU8>,
+    attachment_files: Arc<Mutex<std::collections::HashMap<String, Vec<u8>>>>,
+    revision_override: Arc<Mutex<Option<i64>>>,
 }
 impl Fixture {
     fn new() -> Self {
@@ -167,6 +170,14 @@ impl Fixture {
         let server_write_mode = write_mode.clone();
         let folder_mode = Arc::new(std::sync::atomic::AtomicU8::new(1));
         let server_folder_mode = folder_mode.clone();
+        let attachment_mode = Arc::new(std::sync::atomic::AtomicU8::new(1));
+        let server_attachment_mode = attachment_mode.clone();
+        let attachment_files = Arc::new(Mutex::new(
+            std::collections::HashMap::<String, Vec<u8>>::new(),
+        ));
+        let server_files = attachment_files.clone();
+        let revision_override = Arc::new(Mutex::new(None::<i64>));
+        let server_revision_override = revision_override.clone();
         let thread = std::thread::spawn(move || {
             while !done.load(Ordering::SeqCst) {
                 let (stream, _) = match listener.accept() {
@@ -230,6 +241,195 @@ impl Fixture {
                 let mut parts = first.split_whitespace();
                 let verb = parts.next().unwrap_or("");
                 let path = parts.next().unwrap_or("");
+                if path.starts_with("/vault/attachments/") {
+                    let mode = server_attachment_mode.load(Ordering::SeqCst);
+                    let file_path = path.split('?').next().unwrap();
+                    let data = server_files.lock().unwrap().get(file_path).cloned();
+                    if let Some(mut data) = data {
+                        if mode == 7 && !data.is_empty() {
+                            let last = data.len() - 1;
+                            data[last] ^= 0x80;
+                        }
+                        if mode == 14 {
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                        }
+                        let header = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            if mode == 13 {
+                                500 * 1024 * 1024 + 2048
+                            } else {
+                                data.len()
+                            }
+                        );
+                        let _ = stream.write_all(header.as_bytes());
+                        if mode == 15 {
+                            let n = data.len().min(4);
+                            let _ = stream.write_all(&data[..n]);
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                            let _ = stream.write_all(&data[n..]);
+                        } else {
+                            let _ = stream.write_all(&data);
+                        }
+                    } else {
+                        let _=stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    }
+                    continue;
+                }
+                if let Some(rest) = path.strip_prefix("/vault/api/ciphers/")
+                    && rest.contains("/attachment/")
+                {
+                    let (cid, aid) = rest.split_once("/attachment/").unwrap();
+                    let mode = server_attachment_mode.load(Ordering::SeqCst);
+                    let mut payload = sync_payload.lock().unwrap();
+                    let cipher = payload.1["ciphers"]
+                        .as_array_mut()
+                        .unwrap()
+                        .iter_mut()
+                        .find(|c| c["id"].as_str() == Some(cid))
+                        .unwrap();
+                    let file_path = format!("/vault/attachments/{cid}/{aid}");
+                    if verb == "POST" && aid != "v2" {
+                        if mode == 4 {
+                            continue;
+                        }
+                        let head_end = bytes.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+                        let header = String::from_utf8_lossy(&bytes[..head_end]);
+                        let boundary = header
+                            .lines()
+                            .find_map(|line| {
+                                line.split_once("boundary=")
+                                    .map(|(_, v)| v.trim().trim_matches('"'))
+                            })
+                            .unwrap();
+                        let body = &bytes[head_end + 4..];
+                        let begin = body.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+                        let delimiter = format!("\r\n--{boundary}--");
+                        let end = body
+                            .windows(delimiter.len())
+                            .position(|w| w == delimiter.as_bytes())
+                            .unwrap();
+                        server_files
+                            .lock()
+                            .unwrap()
+                            .insert(file_path, body[begin..end].to_vec());
+                        if mode == 3 {
+                            continue;
+                        }
+                        if mode == 8 {
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                        }
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        );
+                        continue;
+                    }
+                    let mut status = "200 OK";
+                    let result = if verb == "POST" && aid == "v2" {
+                        if mode == 5 {
+                            status = "400 Bad Request";
+                            serde_json::json!({})
+                        } else {
+                            let body: serde_json::Value =
+                                serde_json::from_str(req.split_once("\r\n\r\n").unwrap().1)
+                                    .unwrap();
+                            let id = Uuid::new_v4().simple().to_string();
+                            let attachment = serde_json::json!({"id":id,"fileName":body["fileName"],"key":body["key"],"size":body["fileSize"].to_string(),"sizeName":"fixture bytes","url":format!("https://localhost:{port}/vault/attachments/{cid}/{id}?token=synthetic-file-token")});
+                            if !cipher["attachments"].is_array() {
+                                cipher["attachments"] = serde_json::json!([]);
+                            }
+                            cipher["attachments"]
+                                .as_array_mut()
+                                .unwrap()
+                                .push(attachment);
+                            if mode == 2 {
+                                continue;
+                            }
+                            serde_json::json!({"attachmentId":id,"fileUploadType":0,"url":if mode==11 {"https://untrusted.invalid/upload".to_owned()} else {format!("/ciphers/{cid}/attachment/{id}")},"cipherResponse":cipher})
+                        }
+                    } else if verb == "DELETE" {
+                        cipher["attachments"]
+                            .as_array_mut()
+                            .unwrap()
+                            .retain(|a| a["id"].as_str() != Some(aid));
+                        server_files.lock().unwrap().remove(&file_path);
+                        if mode == 9 {
+                            continue;
+                        }
+                        serde_json::json!({})
+                    } else if verb == "GET" {
+                        let mut metadata = cipher["attachments"]
+                            .as_array()
+                            .and_then(|v| v.iter().find(|a| a["id"].as_str() == Some(aid)))
+                            .cloned()
+                            .unwrap_or(serde_json::json!({}));
+                        if mode == 6 {
+                            metadata["url"] =
+                                serde_json::json!("https://untrusted.invalid/attachments/file");
+                        }
+                        if mode == 10 {
+                            metadata["id"] = serde_json::json!("other-id");
+                        }
+                        metadata
+                    } else {
+                        status = "400 Bad Request";
+                        serde_json::json!({})
+                    };
+                    let body = result.to_string();
+                    let header = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(header.as_bytes());
+                    let _ = stream.write_all(body.as_bytes());
+                    continue;
+                }
+                if verb == "POST"
+                    && (path == "/vault/api/ciphers" || path == "/vault/api/ciphers/create")
+                {
+                    let mode = server_write_mode.load(Ordering::SeqCst);
+                    if mode == 3 {
+                        continue;
+                    }
+                    let value: serde_json::Value =
+                        serde_json::from_str(req.split_once("\r\n\r\n").unwrap().1).unwrap();
+                    let mut body = if path.ends_with("/create") {
+                        value["cipher"].clone()
+                    } else {
+                        value.clone()
+                    };
+                    if mode == 0 || mode == 4 {
+                        let _=stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+                        continue;
+                    }
+                    body["id"] = serde_json::json!(Uuid::new_v4());
+                    body["creationDate"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
+                    body["revisionDate"] = body["creationDate"].clone();
+                    body["edit"] = serde_json::json!(true);
+                    body["viewPassword"] = serde_json::json!(true);
+                    body["organizationUseTotp"] = serde_json::json!(false);
+                    body["collectionIds"] = value
+                        .get("collectionIds")
+                        .cloned()
+                        .unwrap_or(serde_json::json!([]));
+                    sync_payload.lock().unwrap().1["ciphers"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(body.clone());
+                    if mode == 2 {
+                        continue;
+                    }
+                    if mode == 7 {
+                        std::thread::sleep(std::time::Duration::from_millis(400));
+                    }
+                    let body = body.to_string();
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(header.as_bytes());
+                    let _ = stream.write_all(body.as_bytes());
+                    continue;
+                }
                 if path.starts_with("/vault/api/folders")
                     && matches!(verb, "POST" | "PUT" | "DELETE")
                 {
@@ -502,6 +702,19 @@ impl Fixture {
                             "",
                         )
                     }
+                } else if first.contains("/accounts/revision-date ") {
+                    use std::hash::{Hash, Hasher};
+                    let mut hash = std::collections::hash_map::DefaultHasher::new();
+                    sync_payload.lock().unwrap().1.to_string().hash(&mut hash);
+                    (
+                        "200 OK",
+                        server_revision_override
+                            .lock()
+                            .unwrap()
+                            .unwrap_or((hash.finish() & i64::MAX as u64) as i64)
+                            .to_string(),
+                        "",
+                    )
                 } else if first.contains("/accounts/profile ") {
                     ("200 OK","{\"id\":\"00000000-0000-0000-0000-000000000042\",\"email\":\"test@example.invalid\",\"name\":\"Test\"}".into(),"")
                 } else {
@@ -530,6 +743,9 @@ impl Fixture {
             login_policy,
             write_mode,
             folder_mode,
+            attachment_mode,
+            attachment_files,
+            revision_override,
         }
     }
     fn bundle(&self, name: &str, key: &PKey<Private>, leaf: &X509) -> PathBuf {
@@ -3682,4 +3898,999 @@ async fn folder_management_app_keeps_rejected_form_but_closes_uncertain_creation
             assert!(core.manager.has_folder_intent(&uid));
         }
     }
+}
+
+async fn clean_remote_fixture() -> (
+    Fixture,
+    crate::services::sdk::ClientManager,
+    crate::domain::UserId,
+    bitwarden_vault::CipherId,
+) {
+    let (f, manager, uid, id) = staged_write_fixture().await;
+    manager
+        .client_for(&uid)
+        .unwrap()
+        .discard_local(id)
+        .await
+        .unwrap();
+    (f, manager, uid, id)
+}
+fn creation_count(f: &Fixture) -> usize {
+    f.requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(r, _)| {
+            r.starts_with("POST /vault/api/ciphers HTTP")
+                || r.starts_with("POST /vault/api/ciphers/create HTTP")
+        })
+        .count()
+}
+async fn new_login_view(
+    manager: &crate::services::sdk::ClientManager,
+    uid: crate::domain::UserId,
+    id: bitwarden_vault::CipherId,
+) -> bitwarden_vault::CipherView {
+    use crate::services::sdk::ClientExt;
+    let mut view = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    view.id = None;
+    view.name = "Created fixture login".into();
+    view.login.as_mut().unwrap().password = Some("created-only-password".into());
+    view
+}
+#[tokio::test]
+async fn new_entry_creation_is_encrypted_uses_server_ids_and_survives_restart() {
+    use crate::services::sdk::{ClientExt, vault_sync};
+    let (f, mut manager, uid, id) = clean_remote_fixture().await;
+    let view = new_login_view(&manager, uid, id).await;
+    let local = manager
+        .client_for(&uid)
+        .unwrap()
+        .save_cipher(view)
+        .await
+        .unwrap()
+        .id
+        .unwrap();
+    assert_eq!(creation_count(&f), 0);
+    assert_eq!(manager.local_edit_count(&uid), 1);
+    let report = vault_sync::synchronize(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.uploaded, 1, "{:?}", report.problems);
+    assert!(report.problems.is_empty());
+    assert_eq!(creation_count(&f), 1);
+    assert_eq!(manager.local_edit_count(&uid), 0);
+    let server = manager.resolve_cipher_id(&uid, local);
+    assert_ne!(server, local);
+    let view = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(server)
+        .await
+        .unwrap();
+    assert_eq!(view.name, "Created fixture login");
+    assert_eq!(
+        view.login.unwrap().password.as_deref(),
+        Some("created-only-password")
+    );
+    for (request, _) in f.requests.lock().unwrap().iter() {
+        assert!(!request.contains("created-only-password"));
+        assert!(!request.contains("Created fixture login"));
+    }
+    manager.lock(&uid).unwrap().finish().await;
+    drop(manager);
+    let restored = crate::services::sdk::production::test_load(&f.root, &f.store).await;
+    restored
+        .unlock_data_for(&uid)
+        .unwrap()
+        .unlock("synthetic-password".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        restored
+            .client_for(&uid)
+            .unwrap()
+            .full_cipher(server)
+            .await
+            .unwrap()
+            .name,
+        "Created fixture login"
+    );
+}
+#[tokio::test]
+async fn new_entry_creation_lost_reply_is_not_duplicated_and_unapplied_creation_is_retained() {
+    use crate::services::sdk::{ClientExt, vault_sync};
+    for mode in [2, 3] {
+        let (f, manager, uid, id) = clean_remote_fixture().await;
+        f.write_mode.store(mode, Ordering::SeqCst);
+        let view = new_login_view(&manager, uid, id).await;
+        let local = manager
+            .client_for(&uid)
+            .unwrap()
+            .save_cipher(view)
+            .await
+            .unwrap()
+            .id
+            .unwrap();
+        let report = vault_sync::synchronize(
+            manager.client_for(&uid).unwrap(),
+            f.root.clone(),
+            f.store.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(creation_count(&f), 1);
+        if mode == 2 {
+            assert_eq!(report.uploaded, 1);
+            assert_eq!(manager.local_edit_count(&uid), 0);
+            assert_ne!(manager.resolve_cipher_id(&uid, local), local);
+        } else {
+            assert_eq!(manager.local_edit_count(&uid), 1);
+            assert_eq!(manager.local_conflicts(&uid), vec![local]);
+            assert_eq!(
+                manager
+                    .client_for(&uid)
+                    .unwrap()
+                    .full_cipher(local)
+                    .await
+                    .unwrap()
+                    .name,
+                "Created fixture login"
+            );
+        }
+        f.write_mode.store(1, Ordering::SeqCst);
+        vault_sync::synchronize(
+            manager.client_for(&uid).unwrap(),
+            f.root.clone(),
+            f.store.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(creation_count(&f), 1);
+    }
+}
+#[tokio::test]
+async fn new_entry_creation_in_writable_organization_collection_and_policy_rejection() {
+    use crate::services::sdk::{ClientExt, test_support::encrypted_org_sync_response, vault_sync};
+    let f = Fixture::new();
+    let (manager, uid) = f.account().await;
+    let (mut payload, org, id) = encrypted_org_sync_response(&manager, uid).await;
+    payload["collections"][0]["readOnly"] = serde_json::json!(false);
+    *f.sync_response.lock().unwrap() = (200, payload);
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    f.write_mode.store(1, Ordering::SeqCst);
+    let mut view = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    view.id = None;
+    view.name = "Organization-created fixture".into();
+    let local = manager
+        .client_for(&uid)
+        .unwrap()
+        .save_cipher(view)
+        .await
+        .unwrap()
+        .id
+        .unwrap();
+    let report = vault_sync::synchronize(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.uploaded, 1, "{:?}", report.problems);
+    let view = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(manager.resolve_cipher_id(&uid, local))
+        .await
+        .unwrap();
+    assert_eq!(view.organization_id, Some(org));
+    assert_eq!(view.collection_ids.len(), 1);
+    f.sync_response.lock().unwrap().1["collections"][0]["readOnly"] = serde_json::json!(true);
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    let mut forbidden = view;
+    forbidden.id = None;
+    assert!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .save_cipher(forbidden)
+            .await
+            .is_err()
+    );
+    assert_eq!(creation_count(&f), 1);
+}
+#[tokio::test]
+async fn new_entry_creation_from_app_is_automatically_synchronized_and_selected() {
+    let (f, manager, uid, _) = clean_remote_fixture().await;
+    let mut core = core_for_automatic_save(manager).await;
+    core.new_item(bitwarden_vault::CipherType::Login);
+    assert!(core.editor.is_some());
+    core.editor.as_mut().unwrap().data["name"] =
+        serde_json::json!("Created from application fixture");
+    core.save_editor();
+    finish_automatic_sync(&mut core, uid).await;
+    assert_eq!(creation_count(&f), 1);
+    assert_eq!(core.manager.local_edit_count(&uid), 0);
+    assert_eq!(
+        core.detail.as_ref().unwrap().name,
+        "Created from application fixture"
+    );
+    assert_eq!(core.selected, core.detail.as_ref().unwrap().id);
+}
+fn attachment_posts(f: &Fixture) -> usize {
+    f.requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(r, _)| {
+            r.starts_with("POST ") && r.lines().next().unwrap_or("").contains("/attachment/")
+        })
+        .count()
+}
+async fn upload_fixture(
+    f: &Fixture,
+    manager: &crate::services::sdk::ClientManager,
+    uid: crate::domain::UserId,
+    id: bitwarden_vault::CipherId,
+) -> crate::services::sdk::attachments::Outcome {
+    let path = f.root.join("private-attachment-name.txt");
+    std::fs::write(&path, b"Synthetic private attachment contents\n").unwrap();
+    crate::services::sdk::attachments::perform(
+        manager.client_for(&uid).unwrap(),
+        id,
+        crate::services::sdk::attachments::Operation::Upload(path),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap()
+}
+async fn first_attachment(
+    manager: &crate::services::sdk::ClientManager,
+    uid: crate::domain::UserId,
+    id: bitwarden_vault::CipherId,
+) -> String {
+    use crate::services::sdk::ClientExt;
+    manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap()
+        .attachments
+        .unwrap()[0]
+        .id
+        .clone()
+        .unwrap()
+}
+#[tokio::test]
+async fn attachments_upload_download_delete_use_sdk_encryption_and_account_mtls() {
+    use crate::services::sdk::{
+        ClientExt,
+        attachments::{self, Operation},
+    };
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    let uploaded = upload_fixture(&f, &manager, uid, id).await;
+    assert!(uploaded.applied, "{:?}", uploaded.report.problems);
+    assert!(uploaded.report.problems.is_empty());
+    assert!(!manager.has_attachment_intent(&uid));
+    let aid = first_attachment(&manager, uid, id).await;
+    let view = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    assert_eq!(
+        view.attachments.as_ref().unwrap()[0].file_name.as_deref(),
+        Some("private-attachment-name.txt")
+    );
+    let stored = f
+        .attachment_files
+        .lock()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    assert!(!stored.windows(9).any(|w| w == b"Synthetic"));
+    let output = f.root.join("downloaded.txt");
+    let downloaded = attachments::perform(
+        manager.client_for(&uid).unwrap(),
+        id,
+        Operation::Download {
+            id: aid.clone(),
+            path: output.clone(),
+        },
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(downloaded.applied, "{:?}", downloaded.report.problems);
+    assert_eq!(
+        std::fs::read(&output).unwrap(),
+        b"Synthetic private attachment contents\n"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(output).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    for (request, peer) in f.requests.lock().unwrap().iter() {
+        assert!(!peer.is_empty());
+        assert!(!request.contains("private-attachment-name.txt"));
+        assert!(!request.contains("Synthetic private attachment contents"));
+        if request.starts_with("GET /vault/attachments/") {
+            assert!(!request.to_ascii_lowercase().contains("authorization:"));
+        }
+    }
+    crate::services::sdk::test_support::retain_sync_gui_fixture(&f.root);
+    let deleted = attachments::perform(
+        manager.client_for(&uid).unwrap(),
+        id,
+        Operation::Delete(aid),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(deleted.applied, "{:?}", deleted.report.problems);
+    assert!(f.attachment_files.lock().unwrap().is_empty());
+    assert!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .full_cipher(id)
+            .await
+            .unwrap()
+            .attachments
+            .unwrap_or_default()
+            .is_empty()
+    );
+}
+#[tokio::test]
+async fn attachments_lost_binary_reply_is_verified_without_duplicate_upload() {
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    f.attachment_mode.store(3, Ordering::SeqCst);
+    let uploaded = upload_fixture(&f, &manager, uid, id).await;
+    assert!(uploaded.applied, "{:?}", uploaded.report.problems);
+    assert!(uploaded.report.problems.is_empty());
+    assert!(!manager.has_attachment_intent(&uid));
+    assert_eq!(attachment_posts(&f), 2);
+    crate::services::sdk::vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(attachment_posts(&f), 2);
+}
+#[tokio::test]
+async fn attachments_lost_slot_reply_preserves_incomplete_upload_and_can_be_removed() {
+    use crate::services::sdk::attachments::{self, Operation};
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    f.attachment_mode.store(2, Ordering::SeqCst);
+    let uploaded = upload_fixture(&f, &manager, uid, id).await;
+    assert!(!uploaded.applied);
+    assert!(manager.has_attachment_intent(&uid));
+    assert_eq!(attachment_posts(&f), 1);
+    assert!(f.attachment_files.lock().unwrap().is_empty());
+    let aid = first_attachment(&manager, uid, id).await;
+    f.attachment_mode.store(1, Ordering::SeqCst);
+    let removed = attachments::perform(
+        manager.client_for(&uid).unwrap(),
+        id,
+        Operation::Delete(aid),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(removed.applied, "{:?}", removed.report.problems);
+    assert!(!manager.has_attachment_intent(&uid));
+    assert_eq!(attachment_posts(&f), 1);
+}
+#[tokio::test]
+async fn attachments_reject_external_urls_wrong_ids_tampering_and_oversized_downloads() {
+    use crate::services::sdk::attachments::{self, Operation};
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    assert!(upload_fixture(&f, &manager, uid, id).await.applied);
+    let aid = first_attachment(&manager, uid, id).await;
+    for mode in [6, 7, 10, 13] {
+        f.attachment_mode.store(mode, Ordering::SeqCst);
+        let output = f.root.join(format!("preserved-{mode}.txt"));
+        std::fs::write(&output, b"original output").unwrap();
+        let outcome = attachments::perform(
+            manager.client_for(&uid).unwrap(),
+            id,
+            Operation::Download {
+                id: aid.clone(),
+                path: output.clone(),
+            },
+            f.root.clone(),
+            f.store.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !outcome.applied,
+            "Mode {mode}: {:?}",
+            outcome.report.problems
+        );
+        assert!(!outcome.report.problems.is_empty());
+        assert_eq!(std::fs::read(output).unwrap(), b"original output");
+    }
+    assert!(std::fs::read_dir(&f.root).unwrap().all(|e| {
+        !e.unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".bitwarden-export-")
+    }));
+}
+#[tokio::test]
+async fn attachments_unknown_data_upload_survives_restart_and_is_not_resent() {
+    use crate::services::sdk::{attachments, vault_sync};
+    let (f, mut manager, uid, id) = clean_remote_fixture().await;
+    f.attachment_mode.store(4, Ordering::SeqCst);
+    let outcome = upload_fixture(&f, &manager, uid, id).await;
+    assert!(!outcome.applied);
+    assert!(manager.has_attachment_intent(&uid));
+    assert_eq!(attachment_posts(&f), 2);
+    manager.lock(&uid).unwrap().finish().await;
+    drop(manager);
+    let restored = crate::services::sdk::production::test_load(&f.root, &f.store).await;
+    restored
+        .unlock_data_for(&uid)
+        .unwrap()
+        .unlock("synthetic-password".into())
+        .await
+        .unwrap();
+    assert!(restored.has_attachment_intent(&uid));
+    f.attachment_mode.store(1, Ordering::SeqCst);
+    vault_sync::download(
+        restored.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(restored.has_attachment_intent(&uid));
+    assert_eq!(attachment_posts(&f), 2);
+    let aid = first_attachment(&restored, uid, id).await;
+    assert!(
+        attachments::perform(
+            restored.client_for(&uid).unwrap(),
+            id,
+            attachments::Operation::Delete(aid),
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .unwrap()
+        .applied
+    );
+}
+#[tokio::test]
+async fn attachments_lock_during_transfer_cancels_promptly_and_never_replays_the_upload() {
+    use crate::services::sdk::{
+        attachments::{self, Operation},
+        vault_sync,
+    };
+    let (f, mut manager, uid, id) = clean_remote_fixture().await;
+    f.attachment_mode.store(8, Ordering::SeqCst);
+    let path = f.root.join("lock-upload.txt");
+    std::fs::write(&path, b"Lock fixture attachment").unwrap();
+    let task = tokio::spawn(attachments::perform(
+        manager.client_for(&uid).unwrap(),
+        id,
+        Operation::Upload(path),
+        f.root.clone(),
+        f.store.clone(),
+    ));
+    for _ in 0..400 {
+        if attachment_posts(&f) == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(attachment_posts(&f), 2);
+    let began = std::time::Instant::now();
+    manager.lock(&uid).unwrap().finish().await;
+    assert!(began.elapsed() < std::time::Duration::from_millis(450));
+    assert!(task.await.unwrap().is_err());
+    drop(manager);
+    let restored = crate::services::sdk::production::test_load(&f.root, &f.store).await;
+    restored
+        .unlock_data_for(&uid)
+        .unwrap()
+        .unlock("synthetic-password".into())
+        .await
+        .unwrap();
+    f.attachment_mode.store(1, Ordering::SeqCst);
+    vault_sync::download(
+        restored.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!restored.has_attachment_intent(&uid));
+    assert_eq!(attachment_posts(&f), 2);
+}
+
+#[tokio::test]
+async fn attachments_reprompt_and_fresh_permissions_guard_file_access() {
+    use crate::services::sdk::{
+        Action, Authorization, ClientExt,
+        attachments::{self, Operation},
+        vault_sync,
+    };
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    assert!(upload_fixture(&f, &manager, uid, id).await.applied);
+    let aid = first_attachment(&manager, uid, id).await;
+    f.sync_response.lock().unwrap().1["ciphers"][0]["reprompt"] = serde_json::json!(1);
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    let revision = manager
+        .client_for(&uid)
+        .unwrap()
+        .list_ciphers()
+        .await
+        .unwrap()[0]
+        .revision_date;
+    let output = f.root.join("protected-output.txt");
+    assert!(
+        attachments::perform(
+            manager.client_for(&uid).unwrap(),
+            id,
+            Operation::Download {
+                id: aid.clone(),
+                path: output.clone()
+            },
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .is_err()
+    );
+    assert!(!output.exists());
+    let (client, envelope) = manager.validation_data_for(&uid).unwrap();
+    client
+        .authorize_password(
+            envelope,
+            "synthetic-password".into(),
+            Authorization {
+                cipher: Some(id),
+                revision: Some(revision),
+                action: Action::Copy,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        attachments::perform(
+            manager.client_for(&uid).unwrap(),
+            id,
+            Operation::Download {
+                id: aid.clone(),
+                path: output.clone()
+            },
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .unwrap()
+        .applied
+    );
+    assert!(output.exists());
+    assert!(
+        attachments::perform(
+            manager.client_for(&uid).unwrap(),
+            id,
+            Operation::Download {
+                id: aid.clone(),
+                path: output
+            },
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .is_err()
+    );
+    f.sync_response.lock().unwrap().1["ciphers"][0]["reprompt"] = serde_json::json!(0);
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    f.sync_response.lock().unwrap().1["ciphers"][0]["edit"] = serde_json::json!(false);
+    let denied = attachments::perform(
+        manager.client_for(&uid).unwrap(),
+        id,
+        Operation::Delete(aid),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!denied.applied);
+    assert_eq!(f.attachment_files.lock().unwrap().len(), 1);
+}
+#[tokio::test]
+async fn attachments_reject_upload_to_an_external_endpoint_and_rejected_metadata_clears_intent() {
+    for mode in [5, 11] {
+        let (f, manager, uid, id) = clean_remote_fixture().await;
+        f.attachment_mode.store(mode, Ordering::SeqCst);
+        let outcome = upload_fixture(&f, &manager, uid, id).await;
+        assert!(!outcome.applied);
+        assert!(!outcome.report.problems.is_empty());
+        assert_eq!(attachment_posts(&f), 1);
+        assert!(f.attachment_files.lock().unwrap().is_empty());
+        assert_eq!(manager.has_attachment_intent(&uid), mode == 11);
+    }
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn attachments_do_not_upload_a_symlink_source() {
+    use crate::services::sdk::attachments::{self, Operation};
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    let real = f.root.join("source.txt");
+    std::fs::write(&real, b"Do not follow the symlink").unwrap();
+    let link = f.root.join("link.txt");
+    std::os::unix::fs::symlink(real, &link).unwrap();
+    let result = attachments::perform(
+        manager.client_for(&uid).unwrap(),
+        id,
+        Operation::Upload(link),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!result.applied);
+    assert_eq!(attachment_posts(&f), 0);
+    assert!(!manager.has_attachment_intent(&uid));
+}
+async fn finish_incoming(core: &mut crate::core::Core) {
+    for _ in 0..400 {
+        core.poll();
+        if core.incoming_idle_for_test() {
+            core.poll();
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    panic!("Incoming sync did not finish");
+}
+#[tokio::test]
+async fn incoming_sync_only_downloads_changed_revisions_and_preserves_selection_and_search() {
+    use crate::services::sdk::{ClientExt, test_support::encrypted_sync_response};
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    let mut core = core_for_automatic_save(manager).await;
+    let baseline = f.sync_requests();
+    let generation = core.generation;
+    core.query = "incoming".into();
+    core.selected = Some(id);
+    core.incoming_for_test();
+    finish_incoming(&mut core).await;
+    assert_eq!(f.sync_requests(), baseline);
+    assert_eq!(core.generation, generation);
+    let payload = encrypted_sync_response(&core.manager, uid, "Incoming remote fixture").await;
+    *f.sync_response.lock().unwrap() = (200, payload);
+    core.incoming_for_test();
+    finish_incoming(&mut core).await;
+    for _ in 0..100 {
+        core.poll();
+        if core
+            .current_cache()
+            .is_some_and(|c| c.all.iter().any(|i| i.name == "Incoming remote fixture"))
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(f.sync_requests(), baseline + 1);
+    assert_eq!(core.query, "incoming");
+    assert!(
+        core.manager
+            .client_for(&uid)
+            .unwrap()
+            .list_ciphers()
+            .await
+            .unwrap()
+            .iter()
+            .any(|c| c.name == "Incoming remote fixture")
+    );
+    assert!(core.notice.is_none());
+}
+#[tokio::test]
+async fn incoming_sync_defers_open_editors_does_not_upload_drafts_and_stops_when_locked() {
+    use crate::services::sdk::test_support::encrypted_sync_response;
+    let (f, manager, uid, id) = staged_write_fixture().await;
+    let mut core = core_for_automatic_save(manager).await;
+    core.new_item(bitwarden_vault::CipherType::Login);
+    let editor = core.editor.as_ref().unwrap().id;
+    let requests = f.requests.lock().unwrap().len();
+    core.incoming_for_test();
+    finish_incoming(&mut core).await;
+    assert_eq!(core.editor.as_ref().unwrap().id, editor);
+    assert_eq!(f.requests.lock().unwrap().len(), requests);
+    core.editor = None;
+    *f.sync_response.lock().unwrap() = (
+        200,
+        encrypted_sync_response(&core.manager, uid, "Incoming conflict fixture").await,
+    );
+    core.incoming_for_test();
+    finish_incoming(&mut core).await;
+    assert_eq!(put_count(&f), 0);
+    assert_eq!(creation_count(&f), 0);
+    assert_eq!(core.manager.local_conflicts(&uid), vec![id]);
+    core.lock_user(uid);
+    let requests = f.requests.lock().unwrap().len();
+    core.incoming_for_test();
+    finish_incoming(&mut core).await;
+    assert_eq!(f.requests.lock().unwrap().len(), requests);
+}
+
+#[tokio::test]
+async fn attachments_legacy_v1_download_uses_the_sdk_user_key_path() {
+    use crate::services::sdk::{
+        attachments::{self, Operation},
+        test_support::{
+            encrypted_legacy_attachment_bytes, encrypted_legacy_attachment_sync_response,
+        },
+        vault_sync,
+    };
+    let f = Fixture::new();
+    let (manager, uid) = f.account().await;
+    let mut payload = encrypted_legacy_attachment_sync_response(&manager, uid).await;
+    let cid: bitwarden_vault::CipherId = payload["ciphers"][0]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let aid = "synthetic-v1-attachment";
+    let data = encrypted_legacy_attachment_bytes(&manager, uid, b"Legacy attachment bytes");
+    let path = format!("/vault/attachments/{cid}/{aid}");
+    f.attachment_files.lock().unwrap().insert(path, data);
+    payload["ciphers"][0]["attachments"][0]["url"] = serde_json::json!(format!(
+        "{}attachments/{cid}/{aid}?token=fixture",
+        f.profile.base
+    ));
+    *f.sync_response.lock().unwrap() = (200, payload);
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    let output = f.root.join("legacy-downloaded.txt");
+    let result = attachments::perform(
+        manager.client_for(&uid).unwrap(),
+        cid,
+        Operation::Download {
+            id: aid.into(),
+            path: output.clone(),
+        },
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(result.applied, "{:?}", result.report.problems);
+    assert_eq!(std::fs::read(output).unwrap(), b"Legacy attachment bytes");
+}
+#[tokio::test]
+async fn attachments_lost_delete_reply_is_reconciled_and_certificate_changes_block_publication() {
+    use crate::services::sdk::attachments::{self, Operation};
+    let (f, manager, uid, cid) = clean_remote_fixture().await;
+    assert!(upload_fixture(&f, &manager, uid, cid).await.applied);
+    let aid = first_attachment(&manager, uid, cid).await;
+    f.attachment_mode.store(15, Ordering::SeqCst);
+    let output = f.root.join("binding-preserved.txt");
+    std::fs::write(&output, b"Original output").unwrap();
+    let before = f
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(r, _)| r.starts_with("GET /vault/attachments/"))
+        .count();
+    let task = tokio::spawn(attachments::perform(
+        manager.client_for(&uid).unwrap(),
+        cid,
+        Operation::Download {
+            id: aid.clone(),
+            path: output.clone(),
+        },
+        f.root.clone(),
+        f.store.clone(),
+    ));
+    for _ in 0..200 {
+        if f.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(r, _)| r.starts_with("GET /vault/attachments/"))
+            .count()
+            > before
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let profile = f.store.get(manager.profile_for(&uid).unwrap()).unwrap();
+    let revision = profile.revision;
+    f.store.save(profile, Some(revision)).unwrap();
+    let result = task.await.unwrap().unwrap();
+    assert!(!result.applied);
+    assert_eq!(std::fs::read(output).unwrap(), b"Original output");
+    f.attachment_mode.store(9, Ordering::SeqCst);
+    let result = attachments::perform(
+        manager.client_for(&uid).unwrap(),
+        cid,
+        Operation::Delete(aid),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(result.applied, "{:?}", result.report.problems);
+    assert!(!manager.has_attachment_intent(&uid));
+}
+#[tokio::test]
+async fn incoming_sync_checkpoint_does_not_miss_a_change_during_the_full_download() {
+    use crate::services::sdk::{incoming, test_support::encrypted_sync_response, vault_sync};
+    let (f, manager, uid, _) = clean_remote_fixture().await;
+    let before = f.sync_requests();
+    f.sync_delay.store(300, Ordering::SeqCst);
+    let task = tokio::spawn(vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    ));
+    for _ in 0..200 {
+        if f.sync_requests() > before {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let payload = encrypted_sync_response(&manager, uid, "Revision changed during download").await;
+    *f.sync_response.lock().unwrap() = (200, payload);
+    task.await.unwrap().unwrap();
+    f.sync_delay.store(0, Ordering::SeqCst);
+    assert!(
+        incoming::changed(
+            manager.client_for(&uid).unwrap(),
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .unwrap()
+    );
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        !incoming::changed(
+            manager.client_for(&uid).unwrap(),
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn incoming_sync_preserves_generator_opened_while_download_was_in_flight() {
+    use crate::services::sdk::test_support::encrypted_sync_response;
+    let (f, manager, _, _) = clean_remote_fixture().await;
+    let mut core = core_for_automatic_save(manager).await;
+    let uid = core.active.unwrap();
+    *f.sync_response.lock().unwrap() = (
+        200,
+        encrypted_sync_response(&core.manager, uid, "Changed during generator use").await,
+    );
+    f.sync_delay.store(300, Ordering::SeqCst);
+    let before = f.sync_requests();
+    core.incoming_for_test();
+    for _ in 0..200 {
+        core.poll();
+        if f.sync_requests() > before {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(f.sync_requests() > before);
+    core.generator_open = true;
+    core.generator.output = Zeroizing::new("Synthetic generated value".into());
+    finish_incoming(&mut core).await;
+    assert!(core.generator_open);
+    assert_eq!(core.generator.output.as_str(), "Synthetic generated value");
+    assert!(core.notice.is_none());
+}
+
+#[tokio::test]
+async fn incoming_sync_periodically_refreshes_policy_changes_without_a_user_revision_bump() {
+    use crate::services::sdk::{incoming, test_support::age_sync_snapshot, vault_sync};
+    let (f, manager, uid, _) = clean_remote_fixture().await;
+    let revision = age_sync_snapshot(&manager, uid);
+    *f.revision_override.lock().unwrap() = Some(revision);
+    org_policy(
+        &mut f.sync_response.lock().unwrap().1,
+        Uuid::new_v4(),
+        2,
+        serde_json::json!({"minLength":28}),
+    );
+    assert!(
+        incoming::changed(
+            manager.client_for(&uid).unwrap(),
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .unwrap()
+    );
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(manager.policy_rules_for(&uid).generator.min_length, 28);
+    assert!(
+        !incoming::changed(
+            manager.client_for(&uid).unwrap(),
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .unwrap()
+    );
 }

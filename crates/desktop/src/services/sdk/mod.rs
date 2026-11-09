@@ -31,8 +31,10 @@ mod browser;
 pub use browser::BrowserSession;
 mod favicon;
 pub use favicon::FaviconSource;
+pub mod attachments;
 mod client_ext;
 pub mod folder_management;
+pub mod incoming;
 mod loader;
 mod local_edits;
 pub mod policies;
@@ -274,6 +276,17 @@ impl ClientManager {
             .and_then(|e| e.session.snapshot.current())
             .is_some_and(|s| s.persisted.local_edits.contains_key(&id.to_string()))
     }
+    pub fn is_local_creation(&self, uid: &UserId, id: bitwarden_vault::CipherId) -> bool {
+        self.users
+            .get(uid)
+            .and_then(|e| e.session.snapshot.current())
+            .is_some_and(|s| {
+                s.persisted
+                    .local_edits
+                    .get(&id.to_string())
+                    .is_some_and(|e| e.created)
+            })
+    }
     /// Conflict metadata only; plaintext draft access stays behind the SDK gate.
     pub fn local_conflicts(&self, uid: &UserId) -> Vec<bitwarden_vault::CipherId> {
         let Some(snapshot) = self
@@ -305,6 +318,30 @@ impl ClientManager {
                         e.cipher.reprompt == bitwarden_vault::CipherRepromptType::Password
                     })
             })
+    }
+    pub fn resolve_cipher_id(
+        &self,
+        uid: &UserId,
+        id: bitwarden_vault::CipherId,
+    ) -> bitwarden_vault::CipherId {
+        self.users
+            .get(uid)
+            .and_then(|e| e.session.snapshot.current())
+            .and_then(|s| {
+                s.persisted
+                    .created_ids
+                    .iter()
+                    .rev()
+                    .find(|(local, _)| *local == id)
+                    .map(|(_, server)| *server)
+            })
+            .unwrap_or(id)
+    }
+    pub fn has_attachment_intent(&self, uid: &UserId) -> bool {
+        self.users
+            .get(uid)
+            .and_then(|e| e.session.snapshot.current())
+            .is_some_and(|s| s.persisted.attachment_intent.is_some())
     }
     pub fn has_folder_intent(&self, uid: &UserId) -> bool {
         self.users

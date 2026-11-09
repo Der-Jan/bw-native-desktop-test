@@ -315,7 +315,7 @@ impl Application {
         ui.horizontal(|ui| {
             ui.heading(egui::RichText::new(self.filter_title()).size(18.));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_enabled_ui(!self.core.remote(), |ui| {
+                ui.add_enabled_ui(true, |ui| {
                     ui.menu_button("+ New", |ui| {
                         for (kind, label) in TYPES {
                             if ui.button(super::labels::text(label)).clicked() {
@@ -379,7 +379,7 @@ impl Application {
                         ui.push_id(id, |ui| {
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(item.as_ref().map_or_else(||format!("Unavailable server entry ({id})"),|i|i.name.clone()));
-                                if ui.add_enabled(item.is_some(),egui::Button::new("Server version")).clicked() {self.core.request(crate::core::model::Request::Read(id));}
+                                if ui.add_enabled(item.is_some() && !self.core.manager.is_local_creation(&uid,id),egui::Button::new("Server version")).clicked() {self.core.request(crate::core::model::Request::Read(id));}
                                 if ui.add_enabled(item.as_ref().is_some_and(|i|i.edit&&i.view_password),egui::Button::new("Review local draft…")).clicked() {self.core.request(crate::core::model::Request::ReviewLocal(id));}
                                 ui.menu_button("Discard draft…", |ui| {
                                     ui.label("Permanently discard these local changes?");
@@ -404,6 +404,20 @@ impl Application {
                         ui.label("This only clears the local request record. The server may already have applied the change. Check your folders before creating another copy.");
                         if ui.button("Confirm dismiss").clicked() {self.core.dismiss_folder_intent();ui.close();}
                     });
+                });
+            });
+        }
+        if self
+            .core
+            .active
+            .is_some_and(|uid| self.core.manager.has_attachment_intent(&uid))
+        {
+            ui.group(|ui| {
+                ui.label("An attachment operation is unconfirmed. Check the server, download to verify, or remove an incomplete attachment before uploading another copy.");
+                if ui.button("Check server").clicked(){self.core.check_folder_outcome();}
+                ui.menu_button("Dismiss local request record…",|ui| {
+                    ui.label("This does not remove a server attachment. Check for an existing or incomplete file before uploading again.");
+                    if ui.button("Confirm dismiss").clicked(){self.core.dismiss_attachment_intent();ui.close();}
                 });
             });
         }

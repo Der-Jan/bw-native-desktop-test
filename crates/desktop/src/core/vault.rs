@@ -357,6 +357,9 @@ impl Core {
                         }
                     });
             }
+            Request::Attachment { cipher, operation } => {
+                self.execute_attachment(scope, client, cipher, operation)
+            }
             Request::DiscardLocal(id) => {
                 self.spawn_scoped(
                     scope,
@@ -409,7 +412,18 @@ impl Core {
         }
     }
     pub fn new_item(&mut self, kind: CipherType) {
-        if !self.unlocked() || self.remote() {
+        if !self.unlocked() {
+            return;
+        }
+        if self
+            .active
+            .is_some_and(|uid| self.sync.get(&uid).is_some_and(|s| s.busy))
+            || self.folder_editor.is_some()
+        {
+            self.notify(
+                "Wait for synchronization or close the folder dialog before creating an entry.",
+                false,
+            );
             return;
         }
         self.cancel_prompt();

@@ -176,3 +176,18 @@ async fn synchronization_preserves_an_open_folder_dialog() {
     assert_eq!(core.folder_editor.as_ref().unwrap().id, id);
     assert!(core.sync.is_empty());
 }
+
+#[tokio::test(start_paused = true)]
+async fn incoming_sync_timer_wakes_the_tray_loop_without_a_renderer() {
+    let mut core = core();
+    core.hidden = true;
+    core.start_incoming_timer();
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(15)).await;
+    tokio::task::yield_now().await;
+    let completion = core
+        .receiver
+        .try_recv()
+        .expect("Incoming sync timer must wake the event loop while hidden");
+    completion(&mut core);
+}

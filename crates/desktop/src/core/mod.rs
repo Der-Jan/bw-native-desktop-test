@@ -1,9 +1,11 @@
 //! Single-threaded application model. Workers return bounded, scoped completions.
 //! No renderer or window toolkit participates in account authority decisions.
 mod account;
+mod attachments;
 mod desktop;
 mod folders;
 pub mod generator;
+mod incoming;
 pub mod model;
 mod profile;
 #[cfg(test)]
@@ -145,6 +147,8 @@ pub struct Core {
     pub generator: Generator,
     pub sync: HashMap<UserId, SyncState>,
     saved_uploads: HashSet<UserId>,
+    incoming: HashMap<UserId, incoming::PollState>,
+    incoming_enabled: bool,
     pub notice: Option<Notice>,
     pub loading: bool,
     pub locking: HashSet<UserId>,
@@ -162,6 +166,7 @@ pub struct Core {
     pub about_open: bool,
     pub fingerprint_open: bool,
     pub folder_editor: Option<model::FolderEditor>,
+    pub attachment_busy: Option<uuid::Uuid>,
     pub browser: services::browser_integration::BrowserRuntime,
     pub browser_approval: Option<Arc<services::browser_integration::Approval>>,
     pub browser_registration_busy: bool,
@@ -229,6 +234,8 @@ impl Core {
             generator: Generator::default(),
             sync: HashMap::new(),
             saved_uploads: HashSet::new(),
+            incoming: HashMap::new(),
+            incoming_enabled: boot,
             notice: None,
             loading: true,
             locking: HashSet::new(),
@@ -246,6 +253,7 @@ impl Core {
             about_open: false,
             fingerprint_open: false,
             folder_editor: None,
+            attachment_busy: None,
             browser: services::browser_integration::BrowserRuntime::new(),
             browser_approval: None,
             browser_registration_busy: false,
@@ -262,6 +270,7 @@ impl Core {
             tray_starting: false,
         };
         if boot {
+            core.start_incoming_timer();
             core.install_desktop_events();
             core.events
                 .spawn(ClientManager::load(), |core, mut manager| {
@@ -299,6 +308,7 @@ impl Core {
             self.notice = None;
         }
         self.flush_saved_uploads();
+        self.poll_incoming();
         self.refresh_agent();
     }
     pub fn scope(&self) -> Option<Scope> {
@@ -368,6 +378,7 @@ impl Core {
         self.export_request = None;
         self.import_open = false;
         self.folder_editor = None;
+        self.attachment_busy = None;
         self.fingerprint_open = false;
         self.clipboard.clear_owned();
         self.magnify_requested = false;

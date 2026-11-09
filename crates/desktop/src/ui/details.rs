@@ -156,6 +156,7 @@ impl Application {
                 let mut delete = false;
                 let mut discard = false;
                 let mut review = false;
+                let mut upload=false;let mut download=None;let mut remove_attachment=None;
                 let local_conflict = id.is_some_and(|id|self.core.active.is_some_and(|uid|self.core.manager.local_conflicts(&uid).contains(&id)));
                 let local_edit = id.is_some_and(|id| self.core.active.is_some_and(|uid| self.core.manager.has_local_edit(&uid, id)));
                 egui::ScrollArea::vertical()
@@ -172,7 +173,7 @@ impl Application {
                         });
                         if local_edit {
                             if local_conflict {
-                                ui.strong("Server version — a local draft needs review");
+                                ui.strong(if id.is_some_and(|id| self.core.active.is_some_and(|uid| self.core.manager.is_local_creation(&uid,id))) { "New entry — server outcome needs review" } else { "Server version — a local draft needs review" });
                                 review = ui.add_enabled(detail.edit && detail.view_password,egui::Button::new("Review local draft…")).clicked();
                             } else {
                                 ui.strong("Local changes — awaiting synchronization");
@@ -246,16 +247,25 @@ impl Application {
                                 }
                             }
                         }
-                        if let Some(attachments) =
-                            data["attachments"].as_array().filter(|a| !a.is_empty())
-                        {
-                            ui.separator();
-                            ui.strong("Attachments");
+                        ui.separator();ui.strong("Attachments");
+                        let ready=self.core.attachment_busy.is_none() && !self.core.active.is_some_and(|uid|self.core.sync.get(&uid).is_some_and(|s|s.busy));
+                        if let Some(attachments)=data["attachments"].as_array() {
                             for a in attachments {
-                                ui.label(a["fileName"].as_str().unwrap_or("Attachment"));
+                                let name=a["fileName"].as_str().unwrap_or("Attachment");
+                                if let Some(aid)=a["id"].as_str() {
+                                    ui.push_id(aid,|ui|ui.horizontal_wrapped(|ui| {
+                                        ui.label(name);if let Some(size)=a["sizeName"].as_str(){ui.weak(size);}
+                                        if ui.add_enabled(ready,egui::Button::new("Download…")).clicked() {download=Some((aid.to_owned(),name.to_owned()));}
+                                        if detail.edit && ready {ui.menu_button("Delete…",|ui| {
+                                            ui.label("Permanently delete this attachment from the server?");
+                                            if ui.button("Confirm delete attachment").clicked(){remove_attachment=Some(aid.to_owned());ui.close();}
+                                        });}
+                                    }));
+                                }
                             }
-                            ui.weak("Attachment download is not available yet.");
                         }
+                        if self.core.remote() {upload=ui.add_enabled(ready&&detail.edit&&!local_edit,egui::Button::new("Attach file…")).clicked();}
+                        if !ready {ui.weak("Attachment transfer or synchronization in progress…");}
                         if let Some(history) =
                             data["passwordHistory"].as_array().filter(|a| !a.is_empty())
                         {
@@ -298,6 +308,10 @@ impl Application {
                         self.core.request(Request::DiscardLocal(id));
                     }
                     if review { self.core.request(Request::ReviewLocal(id)); }
+                    if upload {self.core.pick_attachment(id,None);}
+                    if let Some(download)=download {self.core.pick_attachment(id,Some(download));}
+                    if let Some(attachment)=remove_attachment {self.core.request(Request::Attachment{cipher:id,operation:crate::services::sdk::attachments::Operation::Delete(attachment)});}
+
                 }
             });
     }
@@ -360,7 +374,7 @@ impl Application {
                         {
                             editor.data["reprompt"] = json!(if reprompt { 1 } else { 0 });
                         }
-                        ui.add_enabled_ui(!local_only, |ui| {
+                        ui.add_enabled_ui(!local_only || editor.source.is_none(), |ui| {
                             let mut org = editor.data["organizationId"].as_str().map(str::to_owned);
                             let previous_org = org.clone();
                             egui::ComboBox::from_id_salt("item-vault")

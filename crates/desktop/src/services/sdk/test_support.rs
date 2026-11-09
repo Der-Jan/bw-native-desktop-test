@@ -228,3 +228,29 @@ pub async fn encrypted_legacy_attachment_sync_response(
     cipher["attachments"] = serde_json::json!([{"id":"synthetic-v1-attachment","fileName":encrypted("legacy.txt"),"size":"7","sizeName":"7 B"}]);
     payload
 }
+
+pub fn encrypted_legacy_attachment_bytes(
+    manager: &ClientManager,
+    uid: UserId,
+    contents: &[u8],
+) -> Vec<u8> {
+    use bitwarden_crypto::{OctetStreamBytes, PrimitiveEncryptable};
+    let client = manager.users.get(&uid).unwrap().session.client().unwrap();
+    let keys = client.0.internal.get_key_store();
+    let mut ctx = keys.context_mut();
+    OctetStreamBytes::from(contents)
+        .encrypt(&mut ctx, SymmetricKeySlotId::User)
+        .unwrap()
+        .to_buffer()
+        .unwrap()
+}
+
+pub fn age_sync_snapshot(manager: &ClientManager, uid: UserId) -> i64 {
+    let state = &manager.users.get(&uid).unwrap().session.snapshot;
+    let snapshot = state.current().unwrap();
+    let mut persisted = snapshot.persisted.clone();
+    let revision = persisted.server_revision.unwrap();
+    persisted.downloaded_at -= chrono::Duration::minutes(6);
+    state.install(snapshot.rebuild(persisted).unwrap());
+    revision
+}

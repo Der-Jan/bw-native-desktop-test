@@ -49,8 +49,14 @@ read-only repository adapters. Successful saves automatically upload existing-en
 edits with revision checks, durable encrypted intent and per-item acknowledgments; startup
 refresh remains download-only. Conflicts retain separate drafts and require
 explicit review/reapplication. Folder create/rename/delete use the same account transport with durable encrypted
-intent and read-only reconciliation; folder deletion preserves entries. Item
-creation/deletion and notifications remain disabled.
+intent and read-only reconciliation; folder deletion preserves entries. New entries use durable
+encrypted creation intent, server UUID mapping and exact-ciphertext reconciliation
+without blindly repeating a POST. SDK-encrypted attachments use the same scoped
+mTLS transport, one-use authorization and fresh permissions. Signed file downloads
+carry no OAuth token; authenticated plaintext is published atomically only after
+SDK verification and current session/profile checks. Incoming revision polling
+runs every 15 seconds while unlocked, with periodic metadata refresh and failure
+backoff. Item trash/restore/deletion and push notifications remain disabled.
 Windows ACL/platform validation, remaining Vaultwarden login challenges and
 organization enrollment/recovery workflows remain open. Vaultwarden organization
 policy enforcement now covers generator requirements, restricted item types,
@@ -64,10 +70,16 @@ all allocator or widget copies. This remains a prototype under review.
 
 ## Verification
 
-Current verification (organization-policy implementation): `cargo test --workspace`
-passes 223 desktop tests plus one generator test (three desktop tests ignored).
+Current verification (creation, attachments and incoming-sync implementation): `cargo test --workspace`
+passes 244 desktop tests plus one generator test (three desktop tests ignored).
 `cargo clippy --workspace --all-targets` passes with existing warnings; the release
 workspace builds. The native Wayland settings-fit test also passes explicitly.
+Creation/attachment regressions cover server-assigned IDs, personal and organization
+creation, lost replies, incomplete uploads across restart, legacy v1 downloads,
+file authentication failure, malicious URLs, oversized responses, private output
+publication, revoked authority and connection-profile changes during transfers.
+Incoming tests cover revision races, unchanged revisions, periodic policy refresh,
+editor deferral, preserved generator output and tray dispatcher wakeups.
 Write-sync regressions cover revision conflicts, lost responses, partial batches,
 revocation during dispatch, encrypted offline recovery, fresh policies/permissions,
 strict field decryption and one-use conflict review. Policy regressions use real
@@ -82,6 +94,10 @@ exact port scope, independent identities at the same host, explicit server CA
 trust and typed TLS expiry diagnostics for both app and SDK requests. All accounts and certificates in these checks are disposable test fixtures.
 The GUI review uses an isolated profile; no user server or credentials were used.
 The synthetic conflict GUI check exercises retained draft review and reapplication.
+The attachment/creation GUI check uses a disposable remote-account cache on a
+private Xvfb display: attachment names/actions render, New opens the item editor,
+and Save retains an encrypted new-entry draft when the fixture credential store
+is intentionally unavailable. It does not contact a user server.
 Automatic-save integration tests prove that successful saves trigger uploads,
 failures do not retry indefinitely, switching accounts cannot misroute a save,
 search/selection survive refresh and protected details remain gated. Folder

@@ -282,6 +282,9 @@ impl Application {
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
         if self.core.focused != focused {
             self.core.focused = focused;
+            if focused {
+                self.core.check_incoming_now();
+            }
             self.core.update_deadlines();
         }
         if ctx.input(|i| i.viewport().close_requested())

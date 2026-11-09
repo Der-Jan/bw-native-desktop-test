@@ -1,4 +1,4 @@
-//! Existing-entry uploads only. Never replay an uncertain mutation automatically.
+//! New-entry creation and revision-checked existing-entry uploads. Never replay an uncertain mutation automatically.
 use super::{
     SessionToken, local_edits, refresh,
     snapshot::{LocalEditState, Snapshot},
@@ -18,7 +18,7 @@ fn request(cipher: &Cipher) -> Result<CipherRequestModel, String> {
         .try_into()
         .map_err(|_| "The encrypted item cannot be uploaded".into())
 }
-fn same_content(a: &Cipher, b: &Cipher) -> Result<bool, String> {
+pub(super) fn same_content(a: &Cipher, b: &Cipher) -> Result<bool, String> {
     let mut a = request(a)?;
     let mut b = request(b)?;
     a.last_known_revision_date = None;
@@ -95,7 +95,27 @@ pub(super) fn reconcile(
         .folder_intent
         .clone()
         .filter(|intent| !intent.confirmed(&fresh));
+    persisted.created_ids = old.persisted.created_ids.clone();
+    persisted.attachment_intent = old.persisted.attachment_intent.clone();
     for (id, draft) in &old.persisted.local_edits {
+        if draft.created {
+            let matched = fresh
+                .ciphers
+                .values()
+                .find(|remote| same_content(remote, &draft.cipher).unwrap_or(false));
+            if let Some(remote) = matched {
+                if let (Some(local), Some(server)) = (draft.cipher.id, remote.id) {
+                    persisted.created_ids.push((local, server));
+                }
+                continue;
+            }
+            let mut draft = draft.clone();
+            if draft.state != LocalEditState::Pending || !creation_allowed(&fresh, &draft.cipher) {
+                draft.state = LocalEditState::Conflict;
+            }
+            persisted.local_edits.insert(id.clone(), draft);
+            continue;
+        }
         let remote = fresh.ciphers.get(id);
         if let Some(remote) = remote
             && same_content(remote, &draft.cipher)?
@@ -113,7 +133,58 @@ pub(super) fn reconcile(
         }
         persisted.local_edits.insert(id.clone(), draft);
     }
+    if persisted.created_ids.len() > 256 {
+        persisted
+            .created_ids
+            .drain(..persisted.created_ids.len() - 256);
+    }
     fresh.rebuild(persisted)
+}
+
+pub(super) fn creation_allowed(snapshot: &Snapshot, cipher: &Cipher) -> bool {
+    if !snapshot
+        .policies
+        .allows_write(cipher.r#type, cipher.organization_id)
+        || cipher
+            .folder_id
+            .is_some_and(|id| !snapshot.folders.contains_key(&id.to_string()))
+    {
+        return false;
+    }
+    match cipher.organization_id {
+        None => cipher.collection_ids.is_empty(),
+        Some(org) => {
+            snapshot
+                .persisted
+                .response
+                .profile
+                .as_ref()
+                .and_then(|p| p.organizations_new.as_ref().or(p.organizations.as_ref()))
+                .is_some_and(|orgs| {
+                    orgs.iter().any(|o| {
+                        o.id == Some(org.into())
+                        && o.enabled != Some(false)
+                        && o.status
+                            == Some(
+                                bitwarden_api_api::models::OrganizationUserStatusType::Confirmed,
+                            )
+                    })
+                })
+                && !cipher.collection_ids.is_empty()
+                && snapshot
+                    .organizations
+                    .iter()
+                    .any(|o| o.id == org && o.wrapped_key.is_some())
+                && cipher.collection_ids.iter().all(|id| {
+                    snapshot.collections.iter().any(|c| {
+                        c.id == Some(*id)
+                            && c.organization_id == org
+                            && !c.read_only
+                            && !c.hide_passwords
+                    })
+                })
+        }
+    }
 }
 
 #[derive(Default)]
@@ -167,7 +238,11 @@ pub(super) async fn upload(
             continue;
         }
         let mut body = request(&draft.cipher)?;
-        body.last_known_revision_date = Some(draft.base_revision.to_rfc3339());
+        body.last_known_revision_date = if draft.created {
+            None
+        } else {
+            Some(draft.base_revision.to_rfc3339())
+        };
         body.encrypted_for = Some(authority.record.server_user_id.into());
         body.encrypted_by_key_id = if draft.cipher.organization_id.is_none() {
             snapshot
@@ -179,16 +254,37 @@ pub(super) async fn upload(
         } else {
             None
         };
+        let path = if draft.created {
+            if draft.cipher.organization_id.is_some() {
+                "ciphers/create".into()
+            } else {
+                "ciphers".into()
+            }
+        } else {
+            format!("ciphers/{id}")
+        };
         let url = url::Url::parse(&authority.record.api)
-            .and_then(|u| u.join(&format!("ciphers/{id}")))
+            .and_then(|u| u.join(&path))
             .map_err(|_| "Invalid cipher endpoint")?;
+        let body = if draft.created && draft.cipher.organization_id.is_some() {
+            serde_json::json!({"cipher":body,"collectionIds":draft.cipher.collection_ids})
+        } else {
+            serde_json::to_value(body).map_err(|_| "Could not encode encrypted item")?
+        };
         let request = authority
             .transport
-            .request(reqwest_account::Method::PUT, url)?
+            .request(
+                if draft.created {
+                    reqwest_account::Method::POST
+                } else {
+                    reqwest_account::Method::PUT
+                },
+                url,
+            )?
             .bearer_auth(&authority.credentials.access_token)
             .json(&body)
             .build()
-            .map_err(|_| "Cannot prepare encrypted update")?;
+            .map_err(|_| "Cannot prepare encrypted item")?;
         // Mark intent BEFORE HTTP. A crash between commit and dispatch is safe:
         // it may require user review, but can never lose or silently replay edits.
         let mut pending = snapshot.persisted.clone();
@@ -248,26 +344,52 @@ pub(super) async fn upload(
             .ciphers
             .as_mut()
             .ok_or("Missing server entries")?;
-        let Some(original) = models
-            .iter_mut()
-            .find(|m| m.id.map(|id| id.to_string()).as_ref() == Some(&id))
-        else {
+        let original = models
+            .iter()
+            .find(|m| m.id.map(|id| id.to_string()).as_ref() == Some(&id));
+        if !draft.created && original.is_none() {
             return Err("Missing original server entry".into());
-        };
+        }
         let mut model = model;
-        // Single-item replies may omit collection membership; do not drop it.
         if model.collection_ids.is_none() {
-            model.collection_ids = original.collection_ids.clone();
+            model.collection_ids = Some(
+                draft
+                    .cipher
+                    .collection_ids
+                    .iter()
+                    .map(|id| (*id).into())
+                    .collect(),
+            );
         }
         let confirmed = Cipher::try_from(model.clone())
             .map_err(|_| "The update response is incomplete; the encrypted draft is retained")?;
-        if confirmed.id != draft.cipher.id || !same_content(&confirmed, &draft.cipher)? {
+        if confirmed.id.is_none()
+            || (!draft.created && confirmed.id != draft.cipher.id)
+            || !same_content(&confirmed, &draft.cipher)?
+        {
             report.problems.push("The returned item does not match the update. Synchronize again; your draft is retained.".into());
             break;
         }
         // Successful HTTP alone is not enough: only verified ciphertext plus the
         // server revision is published, in the same SQLite commit that clears intent.
-        *original = model;
+        if draft.created {
+            let server = confirmed.id.ok_or("Server did not assign an item ID")?;
+            if models.iter().any(|m| m.id == Some(server.into())) {
+                return Err(
+                    "The server returned an existing item ID; synchronize to check the outcome"
+                        .into(),
+                );
+            }
+            persisted
+                .created_ids
+                .push((draft.cipher.id.ok_or("Missing local item ID")?, server));
+            models.push(model);
+        } else {
+            *models
+                .iter_mut()
+                .find(|m| m.id.map(|id| id.to_string()).as_ref() == Some(&id))
+                .ok_or("Missing original item")? = model;
+        }
         persisted.local_edits.remove(&id);
         let next = snapshot.rebuild(persisted)?;
         session.ensure_unlocked()?;

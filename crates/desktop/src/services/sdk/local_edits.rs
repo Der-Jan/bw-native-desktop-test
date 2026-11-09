@@ -6,6 +6,9 @@ use std::sync::Arc;
 
 impl SessionClient {
     pub(super) async fn save_local(self, mut view: CipherView) -> Result<CipherView, String> {
+        if view.id.is_none() {
+            return self.create_local(view).await;
+        }
         let session = self.session;
         let _coordinator = session.state.sync_gate.lock().await;
         let _lease = session.state.gate.write().await;
@@ -15,9 +18,7 @@ impl SessionClient {
         if !rules.allows_write(view.r#type, view.organization_id) {
             return Err(super::policies::DENIED.into());
         }
-        let id = view
-            .id
-            .ok_or("Creating server entries is not implemented yet")?;
+        let id = view.id.ok_or("Missing item ID")?;
         super::session_client::check_cipher(
             &client,
             &session,
@@ -103,6 +104,61 @@ impl SessionClient {
         session.ensure_unlocked()?;
         // A revocation after this point drains the lease before key cleanup or
         // durable logout. Only ciphertext is committed; stale plaintext is dropped.
+        commit(&client, &next).await?;
+        session.state.snapshot.install(next);
+        session.state.grants.clear();
+        session.ensure_unlocked()?;
+        Ok(result)
+    }
+
+    async fn create_local(self, mut view: CipherView) -> Result<CipherView, String> {
+        let session = self.session;
+        let _coordinator = session.state.sync_gate.lock().await;
+        let _lease = session.state.gate.write().await;
+        session.ensure_unlocked()?;
+        let client = session.state.client()?;
+        let snapshot = session
+            .state
+            .snapshot
+            .current()
+            .ok_or("Synchronize before creating entries")?;
+        if view.name.trim().is_empty() {
+            return Err("Enter an item name".into());
+        }
+        if view.attachments.as_ref().is_some_and(|v| !v.is_empty()) || view.partial {
+            return Err("Save the new entry before attaching files".into());
+        }
+        view.id = Some(CipherId::new_v4());
+        view.key = None;
+        view.edit = true;
+        view.view_password = true;
+        view.permissions = None;
+        view.deleted_date = None;
+        view.archived_date = None;
+        view.local_data = None;
+        view.password_history = None;
+        view.attachment_decryption_failures = None;
+        view.creation_date = chrono::Utc::now();
+        view.revision_date = view.creation_date;
+        let EncryptionContext { cipher, .. } = client
+            .vault()
+            .ciphers()
+            .encrypt(view)
+            .await
+            .map_err(|_| "Could not encrypt the new item")?;
+        if !super::vault_writes::creation_allowed(&snapshot, &cipher) {
+            return Err(
+                "The selected vault or collection does not permit creating this item".into(),
+            );
+        }
+        let result = client
+            .vault()
+            .ciphers()
+            .decrypt(cipher.clone())
+            .await
+            .map_err(|_| "Could not validate the new item")?;
+        let next = snapshot.with_creation(cipher)?;
+        session.ensure_unlocked()?;
         commit(&client, &next).await?;
         session.state.snapshot.install(next);
         session.state.grants.clear();

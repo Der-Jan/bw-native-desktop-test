@@ -1,6 +1,6 @@
 # Native desktop login and sync requirements
 
-Status: login, full read sync and revision-checked existing-entry updates implemented for review, 2026-11-09. Item creation/deletion and notifications remain deferred. Depends on the lifecycle and persistence contracts
+Status: login, incoming polling, full read sync, item creation, revision-checked updates, attachments and folder management implemented for review, 2026-11-09. Item trash/restore/deletion and push notifications remain deferred. Depends on the lifecycle and persistence contracts
 in [security concept](security-concept.md). Networking must obey the
 [mTLS transport policy](mtls-requirements.md), including when no identity is set.
 
@@ -69,8 +69,7 @@ independent of server user IDs and email addresses. Full downloads run after
 login/unlock and preserve local drafts. Every successful edit save automatically
 synchronizes existing-entry changes. File → Synchronize remains available for
 manual refresh/retry. Folder create/rename/delete are synchronized immediately.
-Item creation/deletion, import/export and
-Send remain disabled for real accounts.
+New items synchronize automatically after Save. Attachment upload/download/deletion is available in item details. Item trash/restore/deletion, import/export and Send remain disabled for real accounts.
 
 Credentials are AES-256-GCM ciphertext in private files; random encryption keys
 live in the OS credential store (Secret Service on Linux). Account metadata and SDK
@@ -108,7 +107,7 @@ Do not enable SDK `test-fixtures` in production or persist SDK auth tokens in SQ
 
 Not implemented in this slice: CAPTCHA/new-device challenge completion, SSO,
 WebAuthn/security-key/Duo/recovery-code login, password-change workflows,
-notifications, periodic background polling, item creation/deletion, import/export and Send. Errors are explicit; no downgrade is attempted.
+push notifications, item trash/restore/deletion, import/export and Send. Errors are explicit; no downgrade is attempted.
 The remaining sections describe the acceptance contract for the later sync work,
 not a claim that those features are already available.
 
@@ -136,7 +135,7 @@ without replacing the previous snapshot. Legacy organization collections without
 keys and validates the derived list. SDK field decryption retains its upstream
 lenient behavior for some legacy cipher fields; this is not a strict cryptographic
 audit of every field. Remote cipher editing enables strict field decryption;
-ownership/type changes and attachment mutations stay disabled.
+ownership/type changes stay disabled. Attachment mutations use their own fresh-permission checks and encrypted operation record, described below.
 
 Client-managed read-only repository adapters expose ciphers and folders from one
 shared immutable snapshot Arc. This is an index over the SDK-SQLite snapshot,
@@ -166,8 +165,78 @@ URLs are not configured automatically.
 Key/password/KDF/security-stamp changes require a new login; automatic key migration
 is deferred. Domains/Send payloads are retained in the typed encrypted snapshot
 but have no full feature UI yet. Organization-policy coverage is described below.
-There is no background polling, WSS or attachment transfer. Existing-entry drafts
-are synchronized after each successful save as described below.
+Incoming polling and attachment transfers are implemented below; WSS is deferred. New and existing entry drafts synchronize after each successful save.
+
+## Implemented automatic incoming sync
+
+Unlocked server accounts check `/accounts/revision-date` every 15 seconds through
+the account transport. An unchanged revision avoids a full download. A full read
+also runs at least every five minutes while eligible, because policy and other
+metadata changes need not advance the user revision. The checkpoint is read
+before `/sync`, so a change racing the download is seen on the next check. A
+revision endpoint returning 404 falls back to full reads. This is polling, not
+WebSocket push; visibility is normally within one interval plus network time.
+
+The dispatcher wakes even while the main window is hidden in the tray; restoring
+focus requests a check. Per-account probes coalesce, fail quietly and back off to
+30/60/120 seconds. Lock/logout stop authenticated polling. Open editors, password
+prompts, settings and file pickers defer background replacement; after they close,
+polling resumes. Search, selected entry and an open generator are retained; changed
+protected entries require authorization again. Incoming refresh never submits
+local drafts or replays uncertain outgoing requests. Manual Synchronize remains
+available to retry eligible pending edits.
+
+## Implemented new-entry creation
+
+New enables the existing native editor for server accounts after their first
+successful full sync. Save uses SDK encryption and stages a durable encrypted
+creation draft in SQLite, then automatically sends a personal `POST /ciphers` or
+an organization `POST /ciphers/create` with collection IDs. Personal-ownership and
+item-type policies apply. Organization creation requires confirmed membership,
+a wrapped organization key and writable collections in that organization.
+
+The server may assign a different UUID. The encrypted acknowledgment is verified,
+the local ID is mapped to the server ID, and selection stays on the new entry.
+Exact ciphertext matching during read-after-write also resolves a lost response
+without another POST. An uncertain create is retained for explicit review/save or
+discard, never blindly repeated on a timer or restart. Drafts remain encrypted
+and visible offline. Existing-item ownership/type transfers remain deferred.
+
+## Implemented attachment transfers
+
+Details offers Attach file, Download and confirmed Delete for server-backed items.
+Save/synchronize a new entry or pending item edits first. Every operation fetches
+fresh permissions and policies, checks the item's revision/key/ownership and uses
+the existing copy/write and master-password reprompt gates. Attachment deletion
+requires item edit permission. It does not require permission to delete the item.
+
+Uploads use Vaultwarden's v2 Direct metadata API and an encrypted multipart body.
+The SDK encrypts names, per-file keys and contents; plaintext source paths and
+contents are never persisted in the operation record. The source is a regular
+file (Unix symlinks are rejected), is left unchanged, and is limited to 500 MiB.
+Encryption/decryption currently buffers the file in memory; streaming very large
+files is future work. Binary transfers have a 15-minute timeout and observe lock
+cancellation at 100 ms intervals. The per-account mutation coordinator serializes
+writes while other vault reads stay responsive during long transfers.
+
+Only the account's exact same-origin `/attachments/<cipher>/<file>` endpoint is
+accepted for signed file downloads, including a configured base path. The normal
+TLS/mTLS identity and CA apply, redirects and external storage are rejected, and
+signed file requests carry no OAuth token. Metadata and multipart requests use
+the authenticated API. Response sizes are bounded. SDK authentication/decryption
+must succeed before plaintext is published to the user's selected path, using a
+private sibling temporary file, fsync and atomic rename (0600 on Unix). Failure,
+lock or a changed connection profile preserves an existing destination. Legacy
+v1 downloads use the SDK user-key path; editing keyless items with v1 files still
+requires a future attachment migration.
+
+Encrypted durable intent precedes upload-slot creation, data dispatch and delete.
+A lost data response is reconciled by downloading and hashing the exact encrypted
+file; a lost delete response by confirmed metadata absence. A lost slot response
+can discover its encrypted name/key but does not imply its contents were uploaded.
+An incomplete upload is shown for explicit deletion/retry; no source file, bytes
+or local path are retained for automatic resumption. Check server is read-only.
+Dismiss removes only the local operation record and cannot undo a server change.
 
 ## Implemented existing-entry write sync
 
@@ -397,9 +466,7 @@ the latest committed snapshot. Apply results only to the correct account and
 generation; invalidation prevents both stale UI updates and storage commits.
 Membership removal and key changes invalidate permissions and decrypted caches.
 
-Existing-entry edits and folder management are implemented above. Item creation
-and deletion remain disabled until their own server ID, concurrency and ambiguous
-outcome handling is proven. Preserve the current separation between validation
+Existing-entry edits, item creation, attachments and folder management are implemented above. Item trash/restore/permanent deletion remain disabled pending their own concurrency and ambiguous-outcome handling. Preserve the current separation between validation
 failure, revision conflict and unknown server outcome. Do not blindly replay
 creates/deletes or extend edit retry semantics to those operations.
 
@@ -429,7 +496,7 @@ server and checks expiry even when manual refresh would otherwise be throttled.
 | L3 | Restart locked, offline unlock, rotated refresh token, credential-store lock/failure and permanent session invalidation |
 | Y1 | Initial/update/deletion sync; org membership/key changes; failure during apply preserves the old snapshot |
 | Y2 | Overlapping refreshes coalesce; WSS reconnect/poll fallback; lock/logout during fetch/apply cannot revive state |
-| Y3 | Existing-entry edits and folder management pass conflict/ambiguous-result tests; item create/delete gates remain open |
+| Y3 | Existing-entry edits and folder management pass conflict/ambiguous-result tests; item creation and attachment reconciliation pass; item trash/restore/delete gates remain open |
 | Y4 | Two profiles with equal server UUID/email remain isolated; sort preference survives refresh and selection stays on the same cipher ID |
 
 Use synthetic fixtures and an instrumented server/proxy to observe every HTTP and

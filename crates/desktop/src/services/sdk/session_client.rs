@@ -338,7 +338,7 @@ impl Drop for StagedExport {
     }
 }
 
-async fn stage_export(
+pub(super) async fn stage_export(
     session: &SessionToken,
     path: &std::path::Path,
     content: &[u8],

@@ -1,4 +1,4 @@
-//! Full sync with revision-checked existing-entry writes and atomic encrypted snapshots.
+//! Full sync with new-entry creation, revision-checked writes and atomic encrypted snapshots.
 use super::{
     SessionClient, SessionToken, refresh,
     snapshot::{self, OrgRollback, Snapshot},
@@ -91,7 +91,7 @@ async fn synchronize_inner(
         .is_ok_and(|r| r.uploaded > 0 || !r.problems.is_empty())
         && session.ensure_unlocked().is_ok()
     {
-        match fetch(&session, upload_root, upload_store).await {
+        match fetch(&session, upload_root.clone(), upload_store.clone()).await {
             Ok((snapshot, record, transport)) => {
                 match apply(&session, &client, snapshot, &record, &transport).await {
                     Ok(updated) => names = updated,
@@ -101,6 +101,18 @@ async fn synchronize_inner(
             Err(error) => reconcile_error = Some(error),
         }
     }
+    let attachment_issue = if session
+        .state
+        .snapshot
+        .current()
+        .is_some_and(|s| s.persisted.attachment_intent.is_some())
+    {
+        super::attachments::reconcile(&session, &client, upload_root.clone(), upload_store.clone())
+            .await
+            .err()
+    } else {
+        None
+    };
     // Even a persistence/network error must invalidate old UI views and grants
     // after the fresh remote snapshot was committed.
     let new_session = session.advance_snapshot(names)?;
@@ -123,6 +135,9 @@ async fn synchronize_inner(
     if let Some(error) = reconcile_error {
         result.problems.push(error);
     }
+    if let Some(error) = attachment_issue {
+        result.problems.push(error);
+    }
     Ok(result)
 }
 pub(super) async fn fetch(
@@ -137,7 +152,8 @@ pub(super) async fn fetch(
     ),
     String,
 > {
-    let authority = refresh::authorized(session, root.clone(), store.clone(), false).await?;
+    let (authority, server_revision) =
+        super::incoming::authorized_revision(session, root.clone(), store.clone()).await?;
     let mut record = authority.record;
     let mut credentials = authority.credentials;
     let mut transport = authority.transport;
@@ -188,7 +204,10 @@ pub(super) async fn fetch(
         let response = serde_json::from_value(data).map_err(
             |_| "Die Sync-Antwort ist ungültig oder enthält nicht unterstützte Datentypen",
         )?;
-        Snapshot::prepare(response, expected, local_account, started)
+        let snapshot = Snapshot::prepare(response, expected, local_account, started)?;
+        let mut persisted = snapshot.persisted.clone();
+        persisted.server_revision = server_revision;
+        snapshot.rebuild(persisted)
     })
     .await
     .map_err(|_| "Sync-Antwort konnte nicht verarbeitet werden")??;

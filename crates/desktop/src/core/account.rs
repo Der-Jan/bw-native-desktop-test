@@ -391,13 +391,46 @@ impl Core {
         let details = self.detail_open;
         self.clear_presentation();
         self.query = query;
-        self.selected = selected;
+        self.selected = selected.map(|id| {
+            self.active
+                .map_or(id, |uid| self.manager.resolve_cipher_id(&uid, id))
+        });
         self.detail_open = details;
         self.load_vault();
     }
+    fn reload_incoming(&mut self) {
+        if self.generator_open {
+            let mut generator = std::mem::take(&mut self.generator);
+            self.reload_after_sync();
+            generator.busy = false;
+            generator.sequence = generator.sequence.wrapping_add(1);
+            self.generator = generator;
+            self.generator_open = true;
+        } else {
+            self.reload_after_sync();
+        }
+    }
+    pub(super) fn sync_account_background(&mut self, uid: UserId) {
+        self.sync_account_inner(uid, false, true);
+    }
     fn sync_account(&mut self, uid: UserId, upload: bool) {
+        self.sync_account_inner(uid, upload, false);
+    }
+    fn sync_account_inner(&mut self, uid: UserId, upload: bool, quiet: bool) {
+        if quiet
+            && self.active == Some(uid)
+            && (self.prompt.is_some()
+                || self.settings_open
+                || self.attachment_busy.is_some()
+                || self.profile_busy)
+        {
+            return;
+        }
+
         if self.active == Some(uid) && (self.editor.is_some() || self.folder_editor.is_some()) {
-            self.notify("Save or cancel the open edit before synchronizing.", false);
+            if !quiet {
+                self.notify("Save or cancel the open edit before synchronizing.", false);
+            }
             return;
         }
         if !self.manager.is_unlocked(&uid) {
@@ -450,16 +483,16 @@ impl Core {
                         core.caches.remove(&uid);
                         if core.active == Some(uid) {
                             core.screen = Screen::Vault;
-                            core.reload_after_sync();
-                            core.notify(format!("{} entries synchronized; {} changes uploaded; {} drafts need review", report.ciphers, report.uploaded, report.conflicts), report.conflicts > 0 || !report.problems.is_empty());
+                            if quiet {core.reload_incoming();} else {core.reload_after_sync();}
+                            if !quiet {core.notify(format!("{} entries synchronized; {} changes uploaded; {} drafts need review", report.ciphers, report.uploaded, report.conflicts), report.conflicts > 0 || !report.problems.is_empty());}
                         }
                     }
                     Ok(_) => {}
                     Err(error) => {
                         state.error = Some(error.clone());
                         if core.active == Some(uid) {
-                            core.reload_after_sync();
-                            core.notify(error, true);
+                            if quiet {core.reload_incoming();} else {core.reload_after_sync();}
+                            if !quiet {core.notify(error, true);}
                         }
                     }
                 }

@@ -58,6 +58,10 @@ pub enum Request {
     Save(Box<CipherView>),
     Delete(CipherId),
     DiscardLocal(CipherId),
+    Attachment {
+        cipher: CipherId,
+        operation: crate::services::sdk::attachments::Operation,
+    },
     Export {
         organization: Option<bitwarden_core::OrganizationId>,
         format: bitwarden_exporters::ExportFormat,
@@ -75,6 +79,7 @@ impl Request {
             | Self::DiscardLocal(id)
             | Self::Delete(id) => Some(*id),
             Self::Save(v) => v.id,
+            Self::Attachment { cipher, .. } => Some(*cipher),
             Self::Export { .. } => None,
         }
     }
@@ -87,6 +92,11 @@ impl Request {
             Self::Save(_) | Self::DiscardLocal(_) => Action::Write,
             Self::Delete(_) => Action::Delete,
             Self::Export { .. } => Action::Export,
+            Self::Attachment {
+                operation: crate::services::sdk::attachments::Operation::Download { .. },
+                ..
+            } => Action::Copy,
+            Self::Attachment { .. } => Action::Write,
         }
     }
 }

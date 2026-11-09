@@ -15,6 +15,7 @@ pub enum Action {
     Edit,
     Write,
     Delete,
+    Restore,
     Export,
     Archive,
 }

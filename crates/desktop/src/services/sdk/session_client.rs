@@ -172,8 +172,10 @@ impl SessionClient {
                 if Some(item.revision_date) != target.revision || !item.view_password {
                     return Err(PERMISSION_DENIED.into());
                 }
-                if matches!(target.action, Action::Edit | Action::Write | Action::Delete)
-                    && !item.edit
+                if matches!(
+                    target.action,
+                    Action::Edit | Action::Write | Action::Delete | Action::Restore
+                ) && !item.edit
                 {
                     return Err(PERMISSION_DENIED.into());
                 }
@@ -278,13 +280,18 @@ pub(super) async fn check_cipher(
         .ok_or(PERMISSION_DENIED)?;
     let rules = session.policy_rules();
     if !rules.allows_read(item.r#type, item.organization_id)
-        || (action == Action::Edit && !rules.allows_write(item.r#type, item.organization_id))
+        || (matches!(action, Action::Edit | Action::Restore)
+            && !rules.allows_write(item.r#type, item.organization_id))
     {
         return Err(super::policies::DENIED.into());
     }
     if !item.view_password
-        || (matches!(action, Action::Write | Action::Edit | Action::Delete) && !item.edit)
+        || (matches!(
+            action,
+            Action::Write | Action::Edit | Action::Delete | Action::Restore
+        ) && !item.edit)
         || (action == Action::Delete && item.permissions.as_ref().is_some_and(|p| !p.delete))
+        || (action == Action::Restore && item.permissions.as_ref().is_some_and(|p| !p.restore))
         || expected.is_some_and(|r| r != item.revision_date)
     {
         return Err(PERMISSION_DENIED.into());

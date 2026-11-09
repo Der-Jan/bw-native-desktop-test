@@ -27,6 +27,7 @@ pub struct Application {
     pub profile_allowed: String,
     pub profile_loaded: Option<(uuid::Uuid, u64)>,
     pub clear_epoch: u64,
+    list_epoch: u64,
     pub prompt_seen: Option<uuid::Uuid>,
     pub reveal: bool,
     pub focus_search: bool,
@@ -79,6 +80,7 @@ impl Application {
         Ok(Self::from_core(core, font_description))
     }
     pub(crate) fn from_core(core: Core, font_description: String) -> Self {
+        let list_epoch = core.list_epoch;
         Self {
             surface: window_loop::Surface::Main,
             core,
@@ -90,6 +92,7 @@ impl Application {
             profile_allowed: String::new(),
             profile_loaded: None,
             clear_epoch: 0,
+            list_epoch,
             prompt_seen: None,
             reveal: false,
             focus_search: false,
@@ -138,6 +141,7 @@ impl Application {
             self.favicon_version = favicon_version;
             self.icon_textures.clear();
         }
+        let reset_list = self.list_epoch != self.core.list_epoch;
         if self.clear_epoch != self.core.clear_epoch {
             self.clear_epoch = self.core.clear_epoch;
             self.password = Zeroizing::default();
@@ -155,8 +159,9 @@ impl Application {
             self.send_query.clear();
             self.icon_textures.clear();
             self.prompt_seen = None;
-            self.list_offset = 0.;
-            self.restore_offset = None;
+            let offset = self.restore_offset.unwrap_or(self.list_offset);
+            self.list_offset = if reset_list { 0. } else { offset };
+            self.restore_offset = (!reset_list).then_some(offset);
             ctx.memory_mut(|m| {
                 let options = m.options.clone();
                 *m = egui::Memory::default();
@@ -164,6 +169,11 @@ impl Application {
             });
             // Layout caches can contain plaintext glyph strings from the previous session.
             ctx.set_font_providers(vec![]);
+        }
+        if reset_list {
+            self.list_epoch = self.core.list_epoch;
+            self.list_offset = 0.;
+            self.restore_offset = Some(0.);
         }
     }
     fn action(&mut self, ctx: &egui::Context, action: services::menu::MenuAction) {

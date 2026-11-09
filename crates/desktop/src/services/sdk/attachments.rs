@@ -307,6 +307,14 @@ pub async fn perform(
         .ok_or("Synchronize first")?;
     if before
         .persisted
+        .archive_intent
+        .as_ref()
+        .is_some_and(|intent| intent.cipher == cipher_id)
+    {
+        return Err("Check this item's unconfirmed change before managing attachments.".into());
+    }
+    if before
+        .persisted
         .local_edits
         .contains_key(&cipher_id.to_string())
     {

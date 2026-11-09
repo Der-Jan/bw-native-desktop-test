@@ -130,6 +130,7 @@ pub struct Core {
     pub generation: u64,
     /// UI must discard input/undo/layout state whenever this epoch changes.
     pub clear_epoch: u64,
+    pub list_epoch: u64,
     pub caches: HashMap<UserId, VaultCache>,
     pub selected: Option<bitwarden_vault::CipherId>,
     pub detail: Option<bitwarden_vault::CipherView>,
@@ -218,6 +219,7 @@ impl Core {
             screen: Screen::Loading,
             generation: 0,
             clear_epoch: 0,
+            list_epoch: 0,
             caches: HashMap::new(),
             selected: None,
             detail: None,
@@ -356,6 +358,17 @@ impl Core {
         self.active.and_then(|uid| self.caches.get(&uid))
     }
     pub fn clear_presentation(&mut self) {
+        self.clear_presentation_inner(false);
+    }
+    pub(crate) fn clear_presentation_for_refresh(&mut self) {
+        self.clear_presentation_inner(true);
+    }
+    fn clear_presentation_inner(&mut self, preserve_list: bool) {
+        if preserve_list {
+            self.scroll_to = None;
+        } else {
+            self.reset_list_scroll();
+        }
         self.cancel_duplicate_scan();
         if let Some(approval) = self.browser_approval.take() {
             approval.respond(services::browser_integration::Decision::Deny);

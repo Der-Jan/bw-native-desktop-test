@@ -60,6 +60,7 @@ pub enum Request {
     ReviewLocal(CipherId),
     Save(Box<CipherView>),
     Delete(CipherId),
+    Restore(CipherId),
     Archive {
         cipher: CipherId,
         archived: bool,
@@ -84,7 +85,8 @@ impl Request {
             | Self::Edit(id)
             | Self::ReviewLocal(id)
             | Self::DiscardLocal(id)
-            | Self::Delete(id) => Some(*id),
+            | Self::Delete(id)
+            | Self::Restore(id) => Some(*id),
             Self::Save(v) => v.id,
             Self::Attachment { cipher, .. } | Self::Archive { cipher, .. } => Some(*cipher),
             Self::Export { .. } => None,
@@ -98,6 +100,7 @@ impl Request {
             Self::Edit(_) | Self::ReviewLocal(_) => Action::Edit,
             Self::Save(_) | Self::DiscardLocal(_) => Action::Write,
             Self::Delete(_) => Action::Delete,
+            Self::Restore(_) => Action::Restore,
             Self::Archive { .. } => Action::Archive,
             Self::Export { .. } => Action::Export,
             Self::Attachment {

@@ -396,3 +396,101 @@ async fn hovering_details_does_not_change_the_width_available_to_the_list() {
         }
     }
 }
+
+#[tokio::test]
+async fn removing_a_row_preserves_scroll_and_only_clamps_at_the_bottom() {
+    let (ctx, mut app) = setup();
+    frame(&ctx, &mut app, vec![]);
+    app.restore_offset = Some(600.);
+    frame(&ctx, &mut app, vec![]);
+    let before = app.list_offset;
+    assert!(before > 500.);
+    app.core
+        .caches
+        .get_mut(&app.core.active.unwrap())
+        .unwrap()
+        .all
+        .remove(20);
+    app.core.refilter();
+    frame(&ctx, &mut app, vec![]);
+    assert!(
+        (app.list_offset - before).abs() < 1.,
+        "Row removal jumped from {before} to {}",
+        app.list_offset
+    );
+    app.restore_offset = Some(100_000.);
+    frame(&ctx, &mut app, vec![]);
+    let bottom = app.list_offset;
+    app.core
+        .caches
+        .get_mut(&app.core.active.unwrap())
+        .unwrap()
+        .all
+        .truncate(40);
+    app.core.refilter();
+    frame(&ctx, &mut app, vec![]);
+    assert!(
+        app.list_offset > 0. && app.list_offset < bottom,
+        "Bottom offset should clamp to the new end, not reset: {bottom} -> {}",
+        app.list_offset
+    );
+}
+#[tokio::test]
+async fn same_account_refresh_preserves_scroll_offset_through_empty_frames_and_duplicate_scan() {
+    use crate::services::{uri_matching, vault_navigation::VaultSection};
+    let (ctx, mut app) = setup();
+    frame(&ctx, &mut app, vec![]);
+    app.restore_offset = Some(600.);
+    frame(&ctx, &mut app, vec![]);
+    let before = app.list_offset;
+    let uid = app.core.active.unwrap();
+    let mut cache = app.core.caches.remove(&uid).unwrap();
+    app.core.clear_presentation_for_refresh();
+    frame(&ctx, &mut app, vec![]);
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.restore_offset, Some(before));
+    assert_eq!(app.list_offset, before);
+    // A second refresh before rows return must retain the original offset too.
+    app.core.clear_presentation_for_refresh();
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.restore_offset, Some(before));
+    app.core.filter.section = VaultSection::Duplicates;
+    cache.visible.clear();
+    app.core.caches.insert(uid, cache);
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.restore_offset, Some(before));
+    let cache = app.core.caches.get_mut(&uid).unwrap();
+    cache.visible = cache.all.clone();
+    cache.duplicate_report = Some(uri_matching::Report {
+        ids: cache.all.iter().filter_map(|i| i.id).collect(),
+        ..Default::default()
+    });
+    frame(&ctx, &mut app, vec![]);
+    assert!((app.list_offset - before).abs() < 1.);
+    assert!(app.restore_offset.is_none());
+}
+#[tokio::test]
+async fn navigation_and_security_cleanup_reset_scroll_instead_of_reusing_another_view() {
+    let (ctx, mut app) = setup();
+    frame(&ctx, &mut app, vec![]);
+    app.restore_offset = Some(600.);
+    frame(&ctx, &mut app, vec![]);
+    assert!(app.list_offset > 500.);
+    let cache = app.core.caches.get_mut(&app.core.active.unwrap()).unwrap();
+    cache.search_keys = cache
+        .all
+        .iter()
+        .map(|i| (i.id.unwrap(), i.name.to_lowercase()))
+        .collect();
+    app.core.set_query("next".into());
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.list_offset, 0.);
+    assert!(!app.core.current_cache().unwrap().visible.is_empty());
+    app.restore_offset = Some(600.);
+    frame(&ctx, &mut app, vec![]);
+    assert!(app.list_offset > 500.);
+    app.core.clear_presentation();
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.list_offset, 0.);
+    assert!(app.restore_offset.is_none());
+}

@@ -9,6 +9,13 @@ use model::CopyField;
 use std::sync::atomic::AtomicBool;
 
 impl Core {
+    pub(super) fn reset_list_scroll(&mut self) {
+        self.list_epoch = self
+            .list_epoch
+            .checked_add(1)
+            .expect("list navigation epoch");
+        self.scroll_to = Some(0);
+    }
     pub fn set_filter(&mut self, filter: VaultFilter) {
         self.cancel_prompt();
         self.filter = filter;
@@ -17,11 +24,13 @@ impl Core {
             self.settings.save();
         }
         self.close_details();
+        self.reset_list_scroll();
         self.refilter();
     }
     pub fn set_query(&mut self, query: String) {
         self.cancel_prompt();
         self.query = query;
+        self.reset_list_scroll();
         self.refilter();
     }
     pub fn refilter(&mut self) {
@@ -47,11 +56,11 @@ impl Core {
             self.detail_open = false;
             self.detail_request = None;
         }
-        self.scroll_to = Some(0);
     }
     pub fn sort_by(&mut self, column: services::vault_sort::SortColumn) {
         self.cancel_prompt();
         self.settings.vault_sort = self.settings.vault_sort.clicked(column);
+        self.reset_list_scroll();
         self.settings.save();
         self.refilter();
     }
@@ -121,8 +130,12 @@ impl Core {
             .iter()
             .find(|v| v.id == Some(id))?;
         let denied = !item.view_password
-            || (matches!(action, Action::Write | Action::Edit | Action::Delete) && !item.edit)
-            || (action == Action::Delete && item.permissions.as_ref().is_some_and(|p| !p.delete));
+            || (matches!(
+                action,
+                Action::Write | Action::Edit | Action::Delete | Action::Restore
+            ) && !item.edit)
+            || (action == Action::Delete && item.permissions.as_ref().is_some_and(|p| !p.delete))
+            || (action == Action::Restore && item.permissions.as_ref().is_some_and(|p| !p.restore));
         Some((
             Authorization {
                 cipher: Some(id),
@@ -144,14 +157,14 @@ impl Core {
         if self.sync.get(&scope.uid).is_some_and(|s| s.busy)
             && matches!(
                 request.action(),
-                Action::Edit | Action::Write | Action::Delete | Action::Archive
+                Action::Edit | Action::Write | Action::Delete | Action::Restore | Action::Archive
             )
         {
             self.notify("Wait for synchronization to finish before editing.", false);
             return;
         }
-        if self.remote() && matches!(request.action(), Action::Delete | Action::Export) {
-            self.notify("Server deletion and export are not implemented yet.", true);
+        if self.remote() && request.action() == Action::Export {
+            self.notify("Export is not implemented for server accounts.", true);
             return;
         }
         self.cancel_prompt();
@@ -376,6 +389,22 @@ impl Core {
                             }
                             core.load_vault();
                             core.notify("Local changes discarded; server snapshot restored", false);
+                        }
+                        Err(error) => core.notify(error, true),
+                    },
+                );
+            }
+            Request::Delete(id) if self.remote() => self.execute_trash(scope, client, id, true),
+            Request::Restore(id) if self.remote() => self.execute_trash(scope, client, id, false),
+            Request::Restore(id) => {
+                self.spawn_scoped(
+                    scope,
+                    client.restore_local(id),
+                    |core, result| match result {
+                        Ok(()) => {
+                            core.close_details();
+                            core.load_vault();
+                            core.notify("Item restored", false);
                         }
                         Err(error) => core.notify(error, true),
                     },

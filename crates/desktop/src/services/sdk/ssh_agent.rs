@@ -49,6 +49,11 @@ impl AgentSession {
                     .state()
                     .get::<Cipher>()
                     .map_err(|_| DENIED)?;
+                let pending = session
+                    .state
+                    .snapshot
+                    .current()
+                    .and_then(|s| s.persisted.archive_intent.as_ref().map(|i| i.cipher));
                 let mut result = Vec::new();
                 for encrypted in repo.list().await.map_err(|_| DENIED)? {
                     if !rules.allows_read(encrypted.r#type, encrypted.organization_id)
@@ -61,6 +66,9 @@ impl AgentSession {
                         continue;
                     }
                     let Some(id) = encrypted.id else { continue };
+                    if pending == Some(id) {
+                        continue;
+                    }
                     let Ok(mut view) = client.clone().full_cipher(id).await else {
                         continue;
                     };
@@ -117,6 +125,14 @@ impl AgentSession {
         let session = self.token.clone();
         self.client()
             .run(move |client| async move {
+                if session.state.snapshot.current().is_some_and(|s| {
+                    s.persisted
+                        .archive_intent
+                        .as_ref()
+                        .is_some_and(|i| i.cipher == identity.id)
+                }) {
+                    return Err(DENIED.into());
+                }
                 super::session_client::check_cipher(
                     &client,
                     &session,

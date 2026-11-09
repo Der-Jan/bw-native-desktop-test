@@ -176,6 +176,7 @@ impl Application {
                 let mut copy = None;
                 let mut edit = false;
                 let mut delete = false;
+                let mut restore = false;
                 let mut archive = false;
                 let mut discard = false;
                 let mut review = false;
@@ -201,10 +202,13 @@ impl Application {
                             ui.label(&folder_name);
                         });
                         ui.horizontal_wrapped(|ui| {
-                            edit = ui.add_enabled(detail.edit && detail.view_password && self.core.active.is_some_and(|uid|self.core.manager.policy_rules_for(&uid).allows_write(detail.r#type,detail.organization_id)), egui::Button::new(super::labels::text("Edit"))).clicked();
-                            ui.add_enabled_ui(!self.core.remote(), |ui| {
-                                delete = ui.button("Move to trash").clicked();
-                            });
+                            edit = ui.add_enabled(detail.deleted_date.is_none() && detail.edit && detail.view_password && self.core.active.is_some_and(|uid|self.core.manager.policy_rules_for(&uid).allows_write(detail.r#type,detail.organization_id)), egui::Button::new(super::labels::text("Edit"))).clicked();
+                            let change_ready = !local_edit && !self.core.active.is_some_and(|uid|self.core.sync.get(&uid).is_some_and(|s|s.busy) || self.core.manager.has_archive_intent(&uid));
+                            if detail.deleted_date.is_some() {
+                                restore = ui.add_enabled(change_ready && detail.edit && detail.permissions.as_ref().is_none_or(|p|p.restore) && self.core.active.is_some_and(|uid|self.core.manager.policy_rules_for(&uid).allows_write(detail.r#type,detail.organization_id)),egui::Button::new("Restore")).clicked();
+                            } else {
+                                delete = ui.add_enabled(change_ready && detail.edit && detail.permissions.as_ref().is_none_or(|p|p.delete),egui::Button::new("Move to trash")).on_hover_text("Move this entry to Trash. It can be restored until the server purges it.").clicked();
+                            }
                             archive = ui.add_enabled(self.core.remote() && detail.deleted_date.is_none() && !local_edit && !self.core.active.is_some_and(|uid| self.core.sync.get(&uid).is_some_and(|s|s.busy) || self.core.manager.has_archive_intent(&uid)), egui::Button::new(if detail.archived_date.is_some() {"Unarchive"} else {"Archive"})).on_hover_text("Change this entry's archive state on the server").clicked();
                             ui.checkbox(&mut self.reveal, super::labels::text("Reveal secrets"));
                         });
@@ -286,7 +290,7 @@ impl Application {
                             }
                         }
                         ui.separator();ui.strong("Attachments");
-                        let ready=self.core.attachment_busy.is_none() && !self.core.active.is_some_and(|uid|self.core.sync.get(&uid).is_some_and(|s|s.busy));
+                        let ready=detail.deleted_date.is_none() && self.core.attachment_busy.is_none() && !self.core.active.is_some_and(|uid|self.core.sync.get(&uid).is_some_and(|s|s.busy));
                         if let Some(attachments)=data["attachments"].as_array() {
                             for a in attachments {
                                 let name=a["fileName"].as_str().unwrap_or("Attachment");
@@ -303,7 +307,7 @@ impl Application {
                             }
                         }
                         if self.core.remote() {upload=ui.add_enabled(ready&&detail.edit&&!local_edit,egui::Button::new("Attach file…")).clicked();}
-                        if !ready {ui.weak("Attachment transfer or synchronization in progress…");}
+                        if !ready && detail.deleted_date.is_none() {ui.weak("Attachment transfer or synchronization in progress…");}
                         if let Some(history) =
                             data["passwordHistory"].as_array().filter(|a| !a.is_empty())
                         {
@@ -346,6 +350,7 @@ impl Application {
                     if delete {
                         self.core.request(Request::Delete(id));
                     }
+                    if restore {self.core.request(Request::Restore(id));}
                     if discard {
                         self.core.request(Request::DiscardLocal(id));
                     }

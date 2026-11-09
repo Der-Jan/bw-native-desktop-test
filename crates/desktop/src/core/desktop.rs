@@ -379,8 +379,7 @@ impl Core {
             SyncNow => self.synchronize(),
             SearchVault => {
                 self.screen = Screen::Vault;
-                self.query.clear();
-                self.refilter();
+                self.set_query(String::new());
             }
             HideToTray => self.toggle_tray(),
             Settings => {

@@ -390,7 +390,7 @@ impl Core {
         let query = std::mem::take(&mut self.query);
         let selected = self.selected;
         let details = self.detail_open;
-        self.clear_presentation();
+        self.clear_presentation_for_refresh();
         self.query = query;
         self.selected = selected.map(|id| {
             self.active

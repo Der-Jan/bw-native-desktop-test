@@ -26,8 +26,7 @@ impl SessionClient {
                 .is_some_and(|intent| intent.cipher == id)
         }) {
             return Err(
-                "Check or dismiss this item's unconfirmed archive request before editing it."
-                    .into(),
+                "Check or dismiss this item's unconfirmed change before editing it.".into(),
             );
         }
         super::session_client::check_cipher(

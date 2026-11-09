@@ -1,6 +1,6 @@
 # Native desktop login and sync requirements
 
-Status: login, incoming polling, full read sync, item creation, revision-checked updates, archive/unarchive, attachments and folder management implemented for review, 2026-11-09. Item trash/restore/deletion and push notifications remain deferred. Depends on the lifecycle and persistence contracts
+Status: login, incoming polling, full read sync, item creation, revision-checked updates, archive/unarchive, trash/restore, attachments and folder management implemented for review, 2026-11-09. Permanent item deletion and push notifications remain deferred. Depends on the lifecycle and persistence contracts
 in [security concept](security-concept.md). Networking must obey the
 [mTLS transport policy](mtls-requirements.md), including when no identity is set.
 
@@ -69,7 +69,7 @@ independent of server user IDs and email addresses. Full downloads run after
 login/unlock and preserve local drafts. Every successful edit save automatically
 synchronizes existing-entry changes. File → Synchronize remains available for
 manual refresh/retry. Folder create/rename/delete are synchronized immediately.
-New items synchronize automatically after Save. Attachment upload/download/deletion is available in item details. Item trash/restore/deletion, import/export and Send remain disabled for real accounts.
+New items synchronize automatically after Save. Attachment upload/download/deletion is available in item details. Trash and Restore synchronize immediately. Permanent deletion, import/export and Send remain disabled for real accounts.
 
 Credentials are AES-256-GCM ciphertext in private files; random encryption keys
 live in the OS credential store (Secret Service on Linux). Account metadata and SDK
@@ -107,7 +107,7 @@ Do not enable SDK `test-fixtures` in production or persist SDK auth tokens in SQ
 
 Not implemented in this slice: CAPTCHA/new-device challenge completion, SSO,
 WebAuthn/security-key/Duo/recovery-code login, password-change workflows,
-push notifications, item trash/restore/deletion, import/export and Send. Errors are explicit; no downgrade is attempted.
+push notifications, permanent item deletion, import/export and Send. Errors are explicit; no downgrade is attempted.
 The remaining sections describe the acceptance contract for the later sync work,
 not a claim that those features are already available.
 
@@ -275,8 +275,48 @@ requested archive state clears it. Lost replies, restart and incoming sync never
 repeat the PUT automatically. Pending outcomes expose Check server and confirmed
 Dismiss local record; editing that item is blocked until its outcome is resolved
 or explicitly dismissed. Lock/logout revoke in-flight publication. The usual
-account TLS/mTLS transport and redirect restrictions apply. Item deletion remains
+account TLS/mTLS transport and redirect restrictions apply. Permanent deletion remains
 separate and disabled.
+
+## Implemented Trash and Restore
+
+Item details offers Move to trash for an editable server entry with delete
+permission, and Restore for a trashed entry with restore permission. Both honor
+the existing per-action master-password reprompt gate and fresh server access,
+policy, revision/key/ownership and lifecycle-state checks. Pending local edits
+must be synchronized first. Archive is per-user visibility metadata; Trash
+changes the shared cipher's deleted state, affecting all users of an organization
+entry. An archived entry stays archived if it is trashed and then restored.
+
+Only `PUT /ciphers/<id>/delete` is used for soft deletion, and
+`PUT /ciphers/<id>/restore` for restoration. In Vaultwarden, `POST .../delete` and
+`DELETE /ciphers/<id>` permanently delete data; they are never substituted. A
+successful empty deletion reply is supported, but only an authenticated full read
+confirming the desired deleted state acknowledges the operation. Attachments and
+cipher contents are preserved until a server-side purge. The configured server
+retention policy determines when Trash is purged; the client does not schedule a
+purge or offer permanent deletion in this slice.
+
+Trash/restore use the existing durable lifecycle metadata intent alongside the
+encrypted vault snapshot, extended with
+an optional deleted-state target while retaining compatibility with old archive
+records. Lost replies and restart reconcile with reads and never automatically
+repeat a write. An unresolved operation blocks other lifecycle mutations and
+editing/attachment management for that entry. SSH keys with an unresolved
+lifecycle request are neither advertised nor used for signing. Check server and
+confirmed local-record dismissal remain available; dismissal does not undo the
+server operation. Lock/logout revoke publication and preserve only recovery
+metadata alongside the encrypted cache. The server endpoints have no revision
+CAS; fresh preflight
+checks narrow but cannot eliminate a race with another device after validation.
+
+Same-account refresh keeps the list's numeric vertical offset after archive,
+trash, restore and ordinary updates. It holds that offset while the replacement
+cache is empty or duplicate analysis is pending, then clamps it only to the new
+scrollable range. The plaintext UI/font caches and grants are still cleared.
+Search, filter and sorting changes intentionally reset the list, as do lock,
+logout and account changes; a separate navigation epoch prevents cross-account
+scroll restoration. Demo entries support local Trash/Restore without network.
 
 ## Implemented attachment transfers
 
@@ -542,7 +582,7 @@ the latest committed snapshot. Apply results only to the correct account and
 generation; invalidation prevents both stale UI updates and storage commits.
 Membership removal and key changes invalidate permissions and decrypted caches.
 
-Existing-entry edits, item creation, attachments and folder management are implemented above. Item trash/restore/permanent deletion remain disabled pending their own concurrency and ambiguous-outcome handling. Preserve the current separation between validation
+Existing-entry edits, item creation, attachments and folder management are implemented above. Trash/restore also have durable intent and read-only confirmation. Permanent deletion remains disabled pending its own concurrency and ambiguous-outcome handling. Preserve the current separation between validation
 failure, revision conflict and unknown server outcome. Do not blindly replay
 creates/deletes or extend edit retry semantics to those operations.
 
@@ -572,7 +612,7 @@ server and checks expiry even when manual refresh would otherwise be throttled.
 | L3 | Restart locked, offline unlock, rotated refresh token, credential-store lock/failure and permanent session invalidation |
 | Y1 | Initial/update/deletion sync; org membership/key changes; failure during apply preserves the old snapshot |
 | Y2 | Overlapping refreshes coalesce; WSS reconnect/poll fallback; lock/logout during fetch/apply cannot revive state |
-| Y3 | Existing-entry edits and folder management pass conflict/ambiguous-result tests; item creation and attachment reconciliation pass; item trash/restore/delete gates remain open |
+| Y3 | Existing-entry edits and folder management pass conflict/ambiguous-result tests; item creation and attachment reconciliation pass; trash/restore and scroll retention pass; permanent deletion gates remain open |
 | Y4 | Two profiles with equal server UUID/email remain isolated; sort preference survives refresh and selection stays on the same cipher ID |
 
 Use synthetic fixtures and an instrumented server/proxy to observe every HTTP and

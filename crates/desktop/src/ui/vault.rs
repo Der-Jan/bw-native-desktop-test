@@ -423,7 +423,7 @@ impl Application {
             .is_some_and(|uid| self.core.manager.has_archive_intent(&uid))
         {
             ui.group(|ui| {
-                ui.label("An archive request is awaiting confirmation. Check the server before repeating it.");
+                ui.label("An item change is awaiting confirmation. Check the server before repeating it.");
                 ui.horizontal_wrapped(|ui| {
                     if ui.button("Check server").clicked() {self.core.check_folder_outcome();}
                     ui.menu_button("Dismiss local record…",|ui| {
@@ -523,8 +523,23 @@ impl Application {
         let mut sort = None;
         let selected = self.core.selected;
         let sorting = self.core.settings.vault_sort;
-        let scroll = self.core.scroll_to.take();
-        let restore_offset = self.restore_offset.take();
+        // A refresh briefly has no rows (and duplicate analysis may still be
+        // pending). Keep the offset until the replacement projection is ready.
+        let list_ready = self.core.current_cache().is_some_and(|cache| {
+            self.core.filter.section != VaultSection::Duplicates
+                || cache.duplicate_report.is_some()
+                || cache.duplicate_error.is_some()
+        });
+        let scroll = if list_ready {
+            self.core.scroll_to.take()
+        } else {
+            None
+        };
+        let restore_offset = if list_ready {
+            self.restore_offset.take()
+        } else {
+            None
+        };
         let mut measured_offset = self.list_offset;
         let show_icons = self.core.settings.show_favicons;
         let uid = self.core.active;
@@ -674,7 +689,9 @@ impl Application {
                     });
                 measured_offset = output.state.clamped_offset().y;
             });
-        self.list_offset = measured_offset;
+        if list_ready {
+            self.list_offset = measured_offset;
+        }
         if let Some(column) = sort {
             self.core.sort_by(column);
         }

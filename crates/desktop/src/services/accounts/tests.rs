@@ -386,7 +386,12 @@ impl Fixture {
                     let _ = stream.write_all(body.as_bytes());
                     continue;
                 }
-                if verb == "PUT" && (path.ends_with("/archive") || path.ends_with("/unarchive")) {
+                if verb == "PUT"
+                    && (path.ends_with("/archive")
+                        || path.ends_with("/unarchive")
+                        || path.ends_with("/delete")
+                        || path.ends_with("/restore"))
+                {
                     let mode = server_archive_mode.load(Ordering::SeqCst);
                     if mode == 3 {
                         continue;
@@ -416,18 +421,32 @@ impl Fixture {
                             .find(|c| c["id"].as_str() == Some(cid))
                             .unwrap();
                         if mode != 8 {
-                            cipher["archivedDate"] = if action == "archive" {
-                                serde_json::json!(chrono::Utc::now().to_rfc3339())
+                            if matches!(action, "delete" | "restore") {
+                                cipher["deletedDate"] = if action == "delete" {
+                                    serde_json::json!(chrono::Utc::now().to_rfc3339())
+                                } else {
+                                    serde_json::Value::Null
+                                };
+                                cipher["revisionDate"] =
+                                    serde_json::json!(chrono::Utc::now().to_rfc3339());
                             } else {
-                                serde_json::Value::Null
-                            };
+                                cipher["archivedDate"] = if action == "archive" {
+                                    serde_json::json!(chrono::Utc::now().to_rfc3339())
+                                } else {
+                                    serde_json::Value::Null
+                                };
+                            }
                         }
                         ("200 OK", cipher.clone())
                     };
                     if mode == 2 {
                         continue;
                     }
-                    let body = body.to_string();
+                    let body = if path.ends_with("/delete") && status == "200 OK" {
+                        String::new()
+                    } else {
+                        body.to_string()
+                    };
                     let header = format!(
                         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         body.len()
@@ -5632,4 +5651,451 @@ async fn uri_match_mode_is_saved_and_roundtrips_through_server_sync() {
         !request.contains("https://uri-mode.example/account"),
         "The mode is metadata; the URI itself must stay encrypted"
     );
+}
+
+fn trash_requests(f: &Fixture) -> usize {
+    f.requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(r, _)| {
+            r.starts_with("PUT /vault/api/ciphers/")
+                && (r.lines().next().unwrap().contains("/delete ")
+                    || r.lines().next().unwrap().contains("/restore "))
+        })
+        .count()
+}
+#[tokio::test]
+async fn trash_and_restore_use_only_soft_delete_put_and_preserve_attachments_and_archive_state() {
+    use crate::services::sdk::{
+        ClientExt,
+        archive::{self, Change},
+    };
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    assert!(upload_fixture(&f, &manager, uid, id).await.applied);
+    assert!(
+        archive::change(
+            manager.client_for(&uid).unwrap(),
+            id,
+            true,
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .unwrap()
+        .applied
+    );
+    let original = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    for trashed in [true, false] {
+        let result = archive::change_state(
+            manager.client_for(&uid).unwrap(),
+            id,
+            Change::Trash(trashed),
+            f.root.clone(),
+            f.store.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(result.applied, "{:?}", result.report.problems);
+        assert!(result.report.problems.is_empty());
+        assert!(!manager.has_archive_intent(&uid));
+        let current = manager
+            .client_for(&uid)
+            .unwrap()
+            .full_cipher(id)
+            .await
+            .unwrap();
+        assert_eq!(current.deleted_date.is_some(), trashed);
+        assert_eq!(current.archived_date, original.archived_date);
+        assert_eq!(current.name, original.name);
+        assert_eq!(current.login, original.login);
+        assert_eq!(current.folder_id, original.folder_id);
+        assert_eq!(current.attachments, original.attachments);
+        assert_eq!(f.attachment_files.lock().unwrap().len(), 1);
+    }
+    assert_eq!(trash_requests(&f), 2);
+    for (request, peer) in f.requests.lock().unwrap().iter() {
+        assert!(!request.starts_with("DELETE /vault/api/ciphers/"));
+        assert!(
+            !(request.starts_with("POST /vault/api/ciphers/")
+                && request.lines().next().unwrap().contains("/delete "))
+        );
+        if request.starts_with("PUT /vault/api/ciphers/") {
+            assert!(!peer.is_empty());
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer ")
+            );
+        }
+    }
+}
+#[tokio::test]
+async fn trash_lost_replies_and_restart_do_not_repeat_writes() {
+    use crate::services::sdk::{
+        archive::{self, Change},
+        vault_sync,
+    };
+    let (f, mut manager, uid, id) = clean_remote_fixture().await;
+    f.archive_mode.store(2, Ordering::SeqCst);
+    let outcome = archive::change_state(
+        manager.client_for(&uid).unwrap(),
+        id,
+        Change::Trash(true),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(outcome.applied);
+    assert!(outcome.report.problems.is_empty());
+    assert_eq!(trash_requests(&f), 1);
+    f.archive_mode.store(3, Ordering::SeqCst);
+    let outcome = archive::change_state(
+        manager.client_for(&uid).unwrap(),
+        id,
+        Change::Trash(false),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!outcome.applied);
+    assert!(manager.has_archive_intent(&uid));
+    manager.lock(&uid).unwrap().finish().await;
+    drop(manager);
+    let restored = crate::services::sdk::production::test_load(&f.root, &f.store).await;
+    restored
+        .unlock_data_for(&uid)
+        .unwrap()
+        .unlock("synthetic-password".into())
+        .await
+        .unwrap();
+    f.archive_mode.store(1, Ordering::SeqCst);
+    vault_sync::download(
+        restored.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(restored.has_archive_intent(&uid));
+    assert_eq!(trash_requests(&f), 2);
+    assert!(
+        archive::change_state(
+            restored.client_for(&uid).unwrap(),
+            id,
+            Change::Trash(false),
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .is_err()
+    );
+    restored
+        .client_for(&uid)
+        .unwrap()
+        .dismiss_archive_intent()
+        .await
+        .unwrap();
+    assert!(
+        archive::change_state(
+            restored.client_for(&uid).unwrap(),
+            id,
+            Change::Trash(false),
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .unwrap()
+        .applied
+    );
+    assert_eq!(trash_requests(&f), 3);
+}
+#[tokio::test]
+async fn trash_and_restore_check_fresh_content_and_distinct_permissions() {
+    use crate::services::sdk::{
+        archive::{self, Change},
+        vault_sync,
+    };
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    f.sync_response.lock().unwrap().1["ciphers"][0]["revisionDate"] =
+        serde_json::json!((chrono::Utc::now() + chrono::Duration::seconds(5)).to_rfc3339());
+    let outcome = archive::change_state(
+        manager.client_for(&uid).unwrap(),
+        id,
+        Change::Trash(true),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!outcome.applied);
+    assert_eq!(trash_requests(&f), 0);
+    f.sync_response.lock().unwrap().1["ciphers"][0]["permissions"] =
+        serde_json::json!({"delete":false,"restore":true});
+    let outcome = archive::change_state(
+        manager.client_for(&uid).unwrap(),
+        id,
+        Change::Trash(true),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!outcome.applied);
+    assert_eq!(trash_requests(&f), 0);
+    f.sync_response.lock().unwrap().1["ciphers"][0]["deletedDate"] =
+        serde_json::json!(chrono::Utc::now().to_rfc3339());
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        archive::change_state(
+            manager.client_for(&uid).unwrap(),
+            id,
+            Change::Trash(false),
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .unwrap()
+        .applied,
+        "Restore must use restore permission, not delete permission"
+    );
+    f.sync_response.lock().unwrap().1["ciphers"][0]["deletedDate"] =
+        serde_json::json!(chrono::Utc::now().to_rfc3339());
+    f.sync_response.lock().unwrap().1["ciphers"][0]["permissions"] =
+        serde_json::json!({"delete":true,"restore":false});
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        archive::change_state(
+            manager.client_for(&uid).unwrap(),
+            id,
+            Change::Trash(false),
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(trash_requests(&f), 1);
+}
+#[tokio::test]
+async fn trash_reprompt_and_lock_during_dispatch_preserve_recovery_without_replay() {
+    use crate::services::sdk::{
+        Action, Authorization, ClientExt,
+        archive::{self, Change},
+        vault_sync,
+    };
+    let (f, mut manager, uid, id) = clean_remote_fixture().await;
+    f.sync_response.lock().unwrap().1["ciphers"][0]["reprompt"] = serde_json::json!(1);
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        archive::change_state(
+            manager.client_for(&uid).unwrap(),
+            id,
+            Change::Trash(true),
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(trash_requests(&f), 0);
+    let revision = manager
+        .client_for(&uid)
+        .unwrap()
+        .list_ciphers()
+        .await
+        .unwrap()[0]
+        .revision_date;
+    let (client, envelope) = manager.validation_data_for(&uid).unwrap();
+    client
+        .authorize_password(
+            envelope,
+            "synthetic-password".into(),
+            Authorization {
+                cipher: Some(id),
+                revision: Some(revision),
+                action: Action::Delete,
+            },
+        )
+        .await
+        .unwrap();
+    f.archive_mode.store(7, Ordering::SeqCst);
+    let task = tokio::spawn(archive::change_state(
+        manager.client_for(&uid).unwrap(),
+        id,
+        Change::Trash(true),
+        f.root.clone(),
+        f.store.clone(),
+    ));
+    for _ in 0..200 {
+        if trash_requests(&f) > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    manager.lock(&uid).unwrap().finish().await;
+    assert!(task.await.unwrap().is_err());
+    assert!(manager.has_archive_intent(&uid));
+    assert!(!manager.is_unlocked(&uid));
+    manager
+        .unlock_data_for(&uid)
+        .unwrap()
+        .unlock("synthetic-password".into())
+        .await
+        .unwrap();
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!manager.has_archive_intent(&uid));
+    assert_eq!(trash_requests(&f), 1);
+    assert!(
+        archive::change_state(
+            manager.client_for(&uid).unwrap(),
+            id,
+            Change::Trash(false),
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .is_err(),
+        "A Delete grant cannot restore a protected entry"
+    );
+    let revision = manager
+        .client_for(&uid)
+        .unwrap()
+        .list_ciphers()
+        .await
+        .unwrap()[0]
+        .revision_date;
+    let (client, envelope) = manager.validation_data_for(&uid).unwrap();
+    client
+        .authorize_password(
+            envelope,
+            "synthetic-password".into(),
+            Authorization {
+                cipher: Some(id),
+                revision: Some(revision),
+                action: Action::Restore,
+            },
+        )
+        .await
+        .unwrap();
+    f.archive_mode.store(1, Ordering::SeqCst);
+    assert!(
+        archive::change_state(
+            manager.client_for(&uid).unwrap(),
+            id,
+            Change::Trash(false),
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .unwrap()
+        .applied
+    );
+}
+#[tokio::test]
+async fn unconfirmed_trash_disables_ssh_use_until_the_outcome_is_resolved() {
+    use crate::services::sdk::{
+        archive::{self, Change},
+        test_support::encrypted_ssh_sync_response,
+        vault_sync,
+    };
+    let f = Fixture::new();
+    let (manager, uid) = f.account().await;
+    let (payload, _) = encrypted_ssh_sync_response(&manager, uid).await;
+    *f.sync_response.lock().unwrap() = (200, payload);
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    let identity = manager
+        .agent_session_for(&uid)
+        .unwrap()
+        .identities()
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    f.archive_mode.store(3, Ordering::SeqCst);
+    let outcome = archive::change_state(
+        manager.client_for(&uid).unwrap(),
+        identity.id,
+        Change::Trash(true),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!outcome.applied);
+    let agent = manager.agent_session_for(&uid).unwrap();
+    assert!(agent.identities().await.unwrap().is_empty());
+    assert!(agent.sign(identity, b"test".to_vec(), 0).await.is_err());
+    manager
+        .client_for(&uid)
+        .unwrap()
+        .dismiss_archive_intent()
+        .await
+        .unwrap();
+    assert_eq!(agent.identities().await.unwrap().len(), 1);
+}
+#[tokio::test]
+async fn trash_and_restore_in_the_app_preserve_list_position_generation() {
+    use crate::{core::model::Request, services::vault_navigation::VaultSection};
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    let mut core = core_for_automatic_save(manager).await;
+    core.scroll_to = None;
+    let epoch = core.list_epoch;
+    core.selected = Some(id);
+    core.detail_open = true;
+    core.request(Request::Delete(id));
+    finish_automatic_sync(&mut core, uid).await;
+    assert!(core.current_cache().unwrap().visible.is_empty());
+    assert_eq!(core.list_epoch, epoch);
+    assert_ne!(core.scroll_to, Some(0));
+    core.set_filter(core.filter.with_section(VaultSection::Trash));
+    assert_eq!(core.current_cache().unwrap().visible.len(), 1);
+    core.scroll_to = None;
+    let epoch = core.list_epoch;
+    crate::services::sdk::test_support::retain_sync_gui_fixture(&f.root);
+    core.request(Request::Restore(id));
+    finish_automatic_sync(&mut core, uid).await;
+    assert!(core.current_cache().unwrap().visible.is_empty());
+    assert_eq!(core.list_epoch, epoch);
+    assert_ne!(core.scroll_to, Some(0));
+    core.set_filter(core.filter.with_section(VaultSection::Active));
+    assert_eq!(core.current_cache().unwrap().visible[0].id, Some(id));
+    assert_eq!(trash_requests(&f), 2);
 }

@@ -57,7 +57,7 @@ carry no OAuth token; authenticated plaintext is published atomically only after
 SDK verification and current session/profile checks. Incoming revision polling
 runs every 15 seconds while unlocked, with periodic metadata refresh and failure
 backoff. Archive/unarchive changes per-user metadata through durable intent and
-read-only confirmation, including safe recovery after a lost reply. Item trash/restore/deletion and push notifications remain disabled.
+read-only confirmation, including safe recovery after a lost reply. Trash/restore now use the same durable lifecycle mechanism with fresh delete/restore permissions. Permanent deletion and push notifications remain disabled.
 Windows ACL/platform validation, remaining Vaultwarden login challenges and
 organization enrollment/recovery workflows remain open. Vaultwarden organization
 policy enforcement now covers generator requirements, restricted item types,
@@ -71,8 +71,8 @@ all allocator or widget copies. This remains a prototype under review.
 
 ## Verification
 
-Current verification (URI-rule duplicates and encrypted icon caching): `cargo test --workspace`
-passes 268 desktop tests plus one generator test (three desktop tests ignored).
+Current verification (Trash/Restore and list position retention): `cargo test --workspace`
+passes 277 desktop tests plus one generator test (three desktop tests ignored).
 `cargo clippy --workspace --all-targets` passes with existing warnings; the release
 workspace builds. The native Wayland settings-fit test also passes explicitly.
 Creation/attachment regressions cover server-assigned IDs, personal and organization
@@ -106,6 +106,16 @@ changes, search after grouping, cancelled workers and preserved reprompt gates;
 an mTLS write/read fixture verifies match-mode round-trip with encrypted URIs.
 An isolated native GUI check confirms a per-website Match label, a two-entry
 organization Duplicates view and search narrowing to one matching entry.
+Trash regressions cover only-PUT soft deletion, empty replies, preserved files and
+archive state, distinct delete/restore permissions, fresh content, lost replies,
+restart, master-password grants, lock during dispatch and disabled SSH use while
+an operation is unresolved. Rendering tests preserve the vertical offset through
+row removal, empty refresh frames and pending duplicate analysis, clamp at the
+new bottom, and reset on intentional navigation/security cleanup. Numeric scroll
+state is retained separately from cleared plaintext UI state. A private native
+GUI test trashes a synthetic entry halfway down a 50-entry list: the first visible
+row remains pixel-identical, the active count becomes 49, and Restore returns it
+from Trash to the active list with the count back at 50.
 The GUI review uses an isolated profile; no user server or credentials were used.
 The synthetic conflict GUI check exercises retained draft review and reapplication.
 The attachment/creation GUI check uses a disposable remote-account cache on a

@@ -9,8 +9,26 @@ impl Core {
         cipher: CipherId,
         archived: bool,
     ) {
+        self.execute_item_change(scope, client, cipher, archive::Change::Archive(archived));
+    }
+    pub(super) fn execute_trash(
+        &mut self,
+        scope: Scope,
+        client: SessionClient,
+        cipher: CipherId,
+        trashed: bool,
+    ) {
+        self.execute_item_change(scope, client, cipher, archive::Change::Trash(trashed));
+    }
+    fn execute_item_change(
+        &mut self,
+        scope: Scope,
+        client: SessionClient,
+        cipher: CipherId,
+        change: archive::Change,
+    ) {
         let Some(store) = self.manager.profiles() else {
-            self.notify("Archiving requires a server account", true);
+            self.notify("This action requires a server account", true);
             return;
         };
         let uid = scope.uid;
@@ -24,7 +42,7 @@ impl Core {
                 busy: true,
             },
         );
-        self.events.spawn(archive::change(client,cipher,archived,root,store),move |core,result| {
+        self.events.spawn(archive::change_state(client,cipher,change,root,store),move |core,result| {
             let Some(state)=core.sync.get_mut(&uid) else {return;};
             if state.request!=id {return;}
             state.busy=false;
@@ -36,8 +54,8 @@ impl Core {
                     if core.active==Some(uid) {
                         core.reload_after_sync();
                         if let Some(error)=error {core.notify(error,true);}
-                        else if outcome.applied {core.notify(if archived {"Entry archived"} else {"Entry unarchived"},false);}
-                        else {core.notify("Archive request is awaiting confirmation. Check the server before retrying.",true);}
+                        else if outcome.applied {core.notify(change.success(),false);}
+                        else {core.notify("Item change is awaiting confirmation. Check the server before retrying.",true);}
                     }
                 }
                 Ok(_)=>{},
@@ -59,9 +77,16 @@ impl Core {
         let Some(client) = self.manager.client_for(&scope.uid) else {
             return;
         };
-        self.spawn_scoped(scope,client.dismiss_archive_intent(),|core,result|match result {
-            Ok(())=>core.notify("Local archive request record dismissed. Check the server before another change.",false),
-            Err(error)=>core.notify(error,true),
-        });
+        self.spawn_scoped(
+            scope,
+            client.dismiss_archive_intent(),
+            |core, result| match result {
+                Ok(()) => core.notify(
+                    "Local request record dismissed. Check the server before another change.",
+                    false,
+                ),
+                Err(error) => core.notify(error, true),
+            },
+        );
     }
 }

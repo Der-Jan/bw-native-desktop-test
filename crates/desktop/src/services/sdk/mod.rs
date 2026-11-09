@@ -38,6 +38,7 @@ pub mod folder_management;
 pub mod incoming;
 mod loader;
 mod local_edits;
+pub mod notifications;
 pub mod policies;
 pub mod production;
 pub mod refresh;

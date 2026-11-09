@@ -1,6 +1,6 @@
 # Native desktop login and sync requirements
 
-Status: login, incoming polling, full read sync, item creation, revision-checked updates, archive/unarchive, trash/restore, attachments and folder management implemented for review, 2026-11-09. Permanent item deletion and push notifications remain deferred. Depends on the lifecycle and persistence contracts
+Status: login, incoming WebSocket push with polling fallback, full read sync, item creation, revision-checked updates, archive/unarchive, trash/restore, attachments and folder management implemented for review, 2026-11-09. Permanent item deletion remains deferred. Depends on the lifecycle and persistence contracts
 in [security concept](security-concept.md). Networking must obey the
 [mTLS transport policy](mtls-requirements.md), including when no identity is set.
 
@@ -181,7 +181,7 @@ URLs are not configured automatically.
 Key/password/KDF/security-stamp changes require a new login; automatic key migration
 is deferred. Domains/Send payloads are retained in the typed encrypted snapshot
 but have no full feature UI yet. Organization-policy coverage is described below.
-Incoming polling and attachment transfers are implemented below; WSS is deferred. New and existing entry drafts synchronize after each successful save.
+Incoming WebSocket notifications, polling fallback and attachment transfers are implemented below. New and existing entry drafts synchronize after each successful save.
 
 ## Implemented URI rule display and duplicate view
 
@@ -219,19 +219,44 @@ implementation; registrable-domain extraction uses the static
 
 ## Implemented automatic incoming sync
 
-Unlocked server accounts check `/accounts/revision-date` every 15 seconds through
+Unlocked Vaultwarden accounts connect directly to `notifications/hub` beneath the
+configured server base path using HTTP/1.1 WebSocket upgrade and SignalR
+MessagePack v1. The authenticated GET uses a bearer header (never a token in the
+URL), the same account TLS/mTLS identity, private CA and exact allowed origins.
+No redirect, anonymous fallback or separately discovered host is trusted. Incoming
+invocations are hints for full read-only synchronization; no event payload is
+applied directly. Bursts coalesce with a two-second minimum between push-triggered
+refreshes. Authenticated `LogOut` notifications lock the affected account, including
+while an editor is open. Other updates remain pending until editing/dialogs finish.
+
+The connection survives snapshot generation changes but is cancelled on lock,
+logout or subscription disposal. Transport revision/certificate validity and
+network authorization are rechecked every 100 ms and before processing frames.
+Connection and SignalR handshakes have ten-second deadlines; frames, messages and
+buffered SignalR data are bounded to 64 KiB, with a bounded MessagePack nesting
+depth. Ping/pong and 15-second client heartbeats detect dead connections. Reconnect
+backs off from two seconds up to 120 seconds with jitter; each successful SignalR
+handshake requests a revision check to reconcile disconnected intervals. The normal
+serialized credential refresh is reused before expiry and once after a 401.
+The HTTP/1.1 client is built by the same transport constructor as SDK HTTP, so
+servers offering HTTP/2 cannot accidentally suppress the RFC 6455 upgrade.
+
+Accounts also check `/accounts/revision-date` every 15 seconds through
 the account transport. An unchanged revision avoids a full download. A full read
 also runs at least every five minutes while eligible, because policy and other
 metadata changes need not advance the user revision. The checkpoint is read
 before `/sync`, so a change racing the download is seen on the next check. A
-revision endpoint returning 404 falls back to full reads. This is polling, not
-WebSocket push; visibility is normally within one interval plus network time.
+revision endpoint returning 404 falls back to full reads. Polling remains enabled
+when WebSockets are connected, disabled on the server, or blocked by the reverse
+proxy. Without push, visibility is normally within one interval plus network time.
+Vaultwarden must enable WebSockets and its proxy must forward upgrades; see the
+[Vaultwarden configuration](https://github.com/dani-garcia/vaultwarden/wiki/Enabling-WebSocket-notifications).
 
 The dispatcher wakes even while the main window is hidden in the tray; restoring
 focus requests a check. Per-account probes coalesce, fail quietly and back off to
 30/60/120 seconds. Lock/logout stop authenticated polling. Open editors, password
 prompts, settings and file pickers defer background replacement; after they close,
-polling resumes. Search, selected entry and an open generator are retained; changed
+pending notifications and polling resume. Search, list position, selected entry and an open generator are retained; changed
 protected entries require authorization again. Incoming refresh never submits
 local drafts or replays uncertain outgoing requests. Manual Synchronize remains
 available to retry eligible pending edits.

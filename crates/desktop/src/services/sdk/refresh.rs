@@ -35,6 +35,23 @@ pub(super) async fn authorized(
     store: ProfileStore,
     force: bool,
 ) -> Result<Authorized, String> {
+    authorized_inner(session, root, store, force, false).await
+}
+pub(super) async fn authorized_notifications(
+    session: &super::SessionToken,
+    root: PathBuf,
+    store: ProfileStore,
+    force: bool,
+) -> Result<Authorized, String> {
+    authorized_inner(session, root, store, force, true).await
+}
+async fn authorized_inner(
+    session: &super::SessionToken,
+    root: PathBuf,
+    store: ProfileStore,
+    force: bool,
+    notifications: bool,
+) -> Result<Authorized, String> {
     let id = session.user_id();
     let gate = gate(id);
     let _guard = gate.lock().await;
@@ -63,7 +80,11 @@ pub(super) async fn authorized(
         let profile = load_store
             .get(record.profile)
             .ok_or("Server profile unavailable")?;
-        let transport = Transport::new(&load_store, profile)?;
+        let transport = if notifications {
+            Transport::notifications(&load_store, profile)?
+        } else {
+            Transport::new(&load_store, profile)?
+        };
         Ok::<_, String>((record, credentials, transport))
     })
     .await

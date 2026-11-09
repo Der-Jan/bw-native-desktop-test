@@ -45,6 +45,8 @@ p12-keystore = "0.4.1"
 base64 = "0.22"
 psl = "2"
 fancy-regex = "0.18"
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+rmpv = "1"
 rfd = "0.17"
 rust-embed = "8"
 serde = { workspace = true }

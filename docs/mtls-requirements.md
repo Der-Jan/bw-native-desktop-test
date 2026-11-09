@@ -1,8 +1,8 @@
 # Native desktop mTLS requirements
 
-Status: HTTP login/probe, read sync, incoming polling, item creation/updates, archive/unarchive, trash/restore, attachments and folder management implemented for review, 2026-11-09.
+Status: HTTP login/probe, read sync, incoming WSS/polling, item creation/updates, archive/unarchive, trash/restore, attachments and folder management implemented for review, 2026-11-09.
 The egui frontend preserves these contracts (2026-11-08); see
-[migration validation](egui-migration.md). WSS and permanent item deletion are deferred.
+[migration validation](egui-migration.md). Permanent item deletion remains deferred.
 Implement this with the [security lifecycle](security-concept.md) and
 [login and sync flow](login-sync-requirements.md).
 
@@ -61,7 +61,7 @@ Each login inherits a separate account profile snapshot and client pool, even fo
 accounts sharing a host. Allowed HTTPS origins include the port; base paths survive
 endpoint resolution. Discovery cannot expand permission. All redirects are blocked.
 The same client identity covers config, prelogin, token/2FA, profile and explicit
-probe/refresh, revision polling, full read-sync, item POST/PUT (including archive/unarchive and soft delete/restore), attachment metadata/
+probe/refresh, authenticated notification upgrades, revision polling, full read-sync, item POST/PUT (including archive/unarchive and soft delete/restore), attachment metadata/
 multipart transfers and folder POST/PUT/DELETE requests. Signed attachment file
 GETs use the same TLS/mTLS identity without an OAuth bearer token. Only the
 account base origin and exact attachment path are accepted, including subpaths;
@@ -75,7 +75,18 @@ account profile UUID/revision and never bypasses source revocation or initiates
 a fallback request to a different icon server. Offline key unlock remains possible when
 keyring/certificate recovery is needed; no anonymous network fallback is allowed.
 
-Known remaining acceptance work: notifications/WSS and online CRUD coverage, chain policy beyond expiry/signature/key-usage and TLS backend validation, multi-identity selection (currently
+Notification connections use HTTP/1.1 upgrades through the same transport builder,
+including client identity, private CA, no redirects and allowed-origin checks.
+The access token is only in the authorization header. The upgrade response is
+validated before handing the existing TLS stream to the WebSocket codec; no
+second TLS stack or default WebSocket trust store is used. Live sockets recheck
+certificate expiry and profile epoch every 100 ms and before accepting data, and
+cancel on lock/logout. Replacement reconnects load the new protected identity.
+Synthetic mandatory-mTLS tests verify the actual peer fingerprint, replacement by
+a different identity, base-path retention, header auth, reconnect, rejected upgrades
+and redirects, and polling fallback. Windows/macOS still require platform testing.
+
+Known remaining acceptance work: broader online CRUD coverage, chain policy beyond expiry/signature/key-usage and TLS backend validation, multi-identity selection (currently
 rejected), reference storage deduplication by fingerprint, comprehensive Windows ACL
 and macOS/Windows platform validation. Old unreferenced identity ciphertext/keys are
 removed by startup orphan collection. This scope does not claim full Electron parity.

@@ -22,6 +22,20 @@ pub struct Transport {
 impl Transport {
     /// Call on a blocking worker: loading a private key may require OS credential-store unlock.
     pub fn new(store: &ProfileStore, profile: ServerProfile) -> Result<Self, String> {
+        Self::build(store, profile, false)
+    }
+    /// RFC 6455 upgrades use HTTP/1.1 even when the HTTPS server also offers h2.
+    pub(crate) fn notifications(
+        store: &ProfileStore,
+        profile: ServerProfile,
+    ) -> Result<Self, String> {
+        Self::build(store, profile, true)
+    }
+    fn build(
+        store: &ProfileStore,
+        profile: ServerProfile,
+        notifications: bool,
+    ) -> Result<Self, String> {
         let epoch = store.epoch(profile.id)?;
         let mut headers = reqwest_account::header::HeaderMap::new();
         headers.insert(
@@ -34,6 +48,9 @@ impl Transport {
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
             .user_agent("Bitwarden_Native_Desktop/0.1.0");
+        if notifications {
+            builder = builder.http1_only();
+        }
         if let Some(info) = &profile.certificate {
             info.check_time()?;
             let pem = store.secrets.get(info.secret)?;

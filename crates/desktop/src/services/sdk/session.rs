@@ -23,6 +23,7 @@ enum Phase {
 struct Status {
     generation: u64,
     phase: Phase,
+    notifications: tokio_util::sync::CancellationToken,
 }
 
 pub(super) struct SessionState {
@@ -63,6 +64,7 @@ impl SessionState {
             status: Mutex::new(Status {
                 generation: 0,
                 phase: Phase::Locked,
+                notifications: tokio_util::sync::CancellationToken::new(),
             }),
             gate: RwLock::new(()),
             client: Mutex::new(Some(client)),
@@ -116,6 +118,7 @@ impl SessionState {
             .checked_add(1)
             .expect("session generation exhausted");
         status.phase = Phase::Unlocking;
+        status.notifications = tokio_util::sync::CancellationToken::new();
         Some(SessionToken {
             state: Arc::clone(self),
             generation: status.generation,
@@ -125,6 +128,7 @@ impl SessionState {
     pub(super) fn revoke(self: &Arc<Self>, removed: bool) -> SessionToken {
         self.grants.clear();
         let mut status = self.status.lock().expect("session status poisoned");
+        status.notifications.cancel();
         status.generation = status
             .generation
             .checked_add(1)
@@ -143,6 +147,16 @@ impl SessionState {
 }
 
 impl SessionToken {
+    /// Independent of snapshot generations, but revoked synchronously on lock/logout.
+    pub(super) fn notifications_lifetime(
+        &self,
+    ) -> Result<tokio_util::sync::CancellationToken, String> {
+        let status = self.state.status.lock().unwrap();
+        if status.generation != self.generation || status.phase != Phase::Unlocked {
+            return Err(STALE_SESSION.into());
+        }
+        Ok(status.notifications.clone())
+    }
     pub fn user_id(&self) -> UserId {
         self.state.uid
     }

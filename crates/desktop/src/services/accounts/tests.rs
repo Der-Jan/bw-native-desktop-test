@@ -98,6 +98,8 @@ fn cert(cn: &str, issuer: Option<(&X509, &PKey<Private>)>, days: u32) -> (PKey<P
     .unwrap();
     (key, b.build())
 }
+type NotificationSenders = Arc<Mutex<Vec<std::sync::mpsc::Sender<Option<Vec<u8>>>>>>;
+
 struct Fixture {
     root: PathBuf,
     store: ProfileStore,
@@ -118,6 +120,9 @@ struct Fixture {
     archive_mode: Arc<std::sync::atomic::AtomicU8>,
     attachment_files: Arc<Mutex<std::collections::HashMap<String, Vec<u8>>>>,
     revision_override: Arc<Mutex<Option<i64>>>,
+    notification_mode: Arc<std::sync::atomic::AtomicU8>,
+    notification_senders: NotificationSenders,
+    notification_live: Arc<std::sync::atomic::AtomicUsize>,
 }
 impl Fixture {
     fn new() -> Self {
@@ -181,7 +186,14 @@ impl Fixture {
         let server_files = attachment_files.clone();
         let revision_override = Arc::new(Mutex::new(None::<i64>));
         let server_revision_override = revision_override.clone();
+        let notification_mode = Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let ws_mode = notification_mode.clone();
+        let notification_senders: NotificationSenders = Default::default();
+        let ws_senders = notification_senders.clone();
+        let notification_live = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let ws_live = notification_live.clone();
         let thread = std::thread::spawn(move || {
+            let mut workers = Vec::new();
             while !done.load(Ordering::SeqCst) {
                 let (stream, _) = match listener.accept() {
                     Ok(v) => v,
@@ -244,6 +256,71 @@ impl Fixture {
                 let mut parts = first.split_whitespace();
                 let verb = parts.next().unwrap_or("");
                 let path = parts.next().unwrap_or("");
+                if path == "/vault/notifications/hub" {
+                    let mode = ws_mode.load(Ordering::SeqCst);
+                    if mode == 6 {
+                        ws_mode.store(1, Ordering::SeqCst);
+                    }
+                    if mode == 0 || mode == 2 || mode == 6 {
+                        let status = if mode == 0 {
+                            "404 Not Found"
+                        } else {
+                            "401 Unauthorized"
+                        };
+                        let _ = stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes());
+                        continue;
+                    }
+                    if mode == 4 {
+                        let _ = stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: https://elsewhere.invalid/notifications/hub\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        continue;
+                    }
+                    let key = req
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("sec-websocket-key")
+                                .then(|| value.trim())
+                        })
+                        .unwrap();
+                    let accept = if mode == 3 {
+                        "invalid-accept".into()
+                    } else {
+                        tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes())
+                    };
+                    let _ = stream.write_all(format!("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").as_bytes());
+                    if mode == 3 {
+                        continue;
+                    }
+                    let (tx, rx) = std::sync::mpsc::channel::<Option<Vec<u8>>>();
+                    ws_senders.lock().unwrap().push(tx);
+                    let worker_done = done.clone();
+                    let live = ws_live.clone();
+                    live.fetch_add(1, Ordering::SeqCst);
+                    workers.push(std::thread::spawn(move || {
+                        use tokio_tungstenite::tungstenite::{Message, WebSocket, protocol::Role};
+                        let mut ws = WebSocket::from_raw_socket(stream, Role::Server, None);
+                        let handshake = ws.read();
+                        if matches!(handshake, Ok(Message::Text(ref text)) if text.as_str() == "{\"protocol\":\"messagepack\",\"version\":1}\u{1e}") {
+                            let _ = ws.send(Message::Binary(b"{}\x1e".to_vec().into()));
+                            ws.get_ref().get_ref().set_read_timeout(Some(std::time::Duration::from_millis(30))).unwrap();
+                            while !worker_done.load(Ordering::SeqCst) {
+                                match rx.try_recv() {
+                                    Ok(Some(data)) => { if ws.send(Message::Binary(data.into())).is_err() { break; } },
+                                    Ok(None) => break,
+                                    Err(_) => {},
+                                }
+                                match ws.read() {
+                                    Ok(Message::Close(_)) => break,
+                                    Err(tokio_tungstenite::tungstenite::Error::Io(e)) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {},
+                                    Err(_) => break,
+                                    _ => { let _ = ws.flush(); },
+                                }
+                            }
+                        }
+                        live.fetch_sub(1, Ordering::SeqCst);
+                    }));
+                    continue;
+                }
                 if path.starts_with("/vault/attachments/") {
                     let mode = server_attachment_mode.load(Ordering::SeqCst);
                     let file_path = path.split('?').next().unwrap();
@@ -802,8 +879,14 @@ impl Fixture {
                 );
                 let _ = stream.write_all(out.as_bytes());
             }
+            for worker in workers {
+                worker.join().unwrap();
+            }
         });
         Self {
+            notification_mode,
+            notification_senders,
+            notification_live,
             root,
             store,
             profile,
@@ -6098,4 +6181,329 @@ async fn trash_and_restore_in_the_app_preserve_list_position_generation() {
     core.set_filter(core.filter.with_section(VaultSection::Active));
     assert_eq!(core.current_cache().unwrap().visible[0].id, Some(id));
     assert_eq!(trash_requests(&f), 2);
+}
+
+fn notification_frame() -> Vec<u8> {
+    notification_frame_kind(0)
+}
+fn notification_frame_kind(kind: u64) -> Vec<u8> {
+    use rmpv::Value as V;
+    let value = V::Array(vec![
+        1.into(),
+        V::Map(vec![]),
+        V::Nil,
+        "ReceiveMessage".into(),
+        V::Array(vec![V::Map(vec![
+            ("Type".into(), kind.into()),
+            ("Payload".into(), V::Map(vec![])),
+        ])]),
+    ]);
+    let mut body = Vec::new();
+    rmpv::encode::write_value(&mut body, &value).unwrap();
+    assert!(body.len() < 128);
+    let mut frame = vec![body.len() as u8];
+    frame.extend(body);
+    frame
+}
+async fn wait_notification(f: &Fixture, connections: usize) {
+    for _ in 0..1200 {
+        if f.notification_senders.lock().unwrap().len() >= connections {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    panic!("Notification connection was not established");
+}
+fn subscribe_fixture(
+    f: &Fixture,
+    manager: &crate::services::sdk::ClientManager,
+    uid: crate::domain::UserId,
+) -> crate::services::sdk::notifications::Subscription {
+    crate::services::sdk::notifications::subscribe(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+        &tokio::runtime::Handle::current(),
+        Arc::new(|| {}),
+    )
+    .unwrap()
+}
+#[tokio::test]
+async fn notifications_use_real_mtls_scoped_path_header_auth_and_stop_on_lock() {
+    let (f, mut manager, uid, _) = clean_remote_fixture().await;
+    f.notification_mode.store(1, Ordering::SeqCst);
+    let subscription = subscribe_fixture(&f, &manager, uid);
+    wait_notification(&f, 1).await;
+    f.notification_senders.lock().unwrap()[0]
+        .send(Some(notification_frame()))
+        .unwrap();
+    let mut received = false;
+    for _ in 0..200 {
+        received |= subscription.take_changed();
+        if received {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(received);
+    let requests = f.requests.lock().unwrap().clone();
+    let (request, fingerprint) = requests
+        .iter()
+        .find(|(r, _)| r.starts_with("GET /vault/notifications/hub "))
+        .unwrap();
+    assert!(
+        request
+            .to_lowercase()
+            .contains("authorization: bearer synthetic-access-token")
+    );
+    assert!(!request.lines().next().unwrap().contains("access_token"));
+    assert_eq!(
+        *fingerprint,
+        f.leaf
+            .digest(MessageDigest::sha256())
+            .unwrap()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    let client = manager.client_for(&uid).unwrap();
+    manager.lock(&uid).unwrap().finish().await;
+    assert!(client.list_vault().await.is_err());
+    for _ in 0..100 {
+        if f.notification_live.load(Ordering::SeqCst) == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(f.notification_live.load(Ordering::SeqCst), 0);
+    assert!(!subscription.is_active());
+}
+#[tokio::test]
+async fn notifications_reconnect_after_disconnect_and_survive_snapshot_generation_changes() {
+    use crate::services::sdk::vault_sync;
+    let (f, manager, uid, _) = clean_remote_fixture().await;
+    f.notification_mode.store(1, Ordering::SeqCst);
+    let subscription = subscribe_fixture(&f, &manager, uid);
+    wait_notification(&f, 1).await;
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    f.notification_senders.lock().unwrap()[0]
+        .send(Some(notification_frame()))
+        .unwrap();
+    for _ in 0..200 {
+        if subscription.take_changed() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(f.notification_senders.lock().unwrap().len(), 1);
+    f.notification_senders.lock().unwrap()[0]
+        .send(None)
+        .unwrap();
+    wait_notification(&f, 2).await;
+    f.notification_senders.lock().unwrap()[1]
+        .send(Some(notification_frame()))
+        .unwrap();
+    let mut received = false;
+    for _ in 0..200 {
+        received |= subscription.take_changed();
+        if received {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(received);
+}
+#[tokio::test]
+async fn notifications_stop_using_replaced_certificate_profile_and_reconnect_with_current_transport()
+ {
+    let (f, manager, uid, _) = clean_remote_fixture().await;
+    f.notification_mode.store(1, Ordering::SeqCst);
+    let _subscription = subscribe_fixture(&f, &manager, uid);
+    wait_notification(&f, 1).await;
+    let record: super::login::AccountRecord = serde_json::from_slice(
+        &std::fs::read(f.root.join("accounts").join(format!("{uid}.json"))).unwrap(),
+    )
+    .unwrap();
+    let profile = f.store.get(record.profile).unwrap();
+    let (key, leaf) = cert("Client B", Some((&f.ca, &f.ca_key)), 3);
+    let bundle = f.bundle("notification-replacement.p12", &key, &leaf);
+    certificate::import(
+        &f.store,
+        profile,
+        &bundle,
+        Zeroizing::new("test-password".into()),
+    )
+    .unwrap();
+    for _ in 0..100 {
+        if f.notification_live.load(Ordering::SeqCst) == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(f.notification_live.load(Ordering::SeqCst), 0);
+    wait_notification(&f, 2).await;
+    let fingerprints: Vec<_> = f
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(r, _)| r.starts_with("GET /vault/notifications/hub "))
+        .map(|(_, fingerprint)| fingerprint.clone())
+        .collect();
+    assert_eq!(fingerprints.len(), 2);
+    assert_ne!(fingerprints[0], fingerprints[1]);
+    assert_eq!(
+        fingerprints[1],
+        leaf.digest(MessageDigest::sha256())
+            .unwrap()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+}
+#[tokio::test]
+async fn notifications_trigger_sync_without_revision_change_coalesce_and_defer_editors() {
+    use crate::services::sdk::{ClientExt, test_support::encrypted_sync_response};
+    let (f, manager, uid, _) = clean_remote_fixture().await;
+    f.notification_mode.store(1, Ordering::SeqCst);
+    let mut core = core_for_automatic_save(manager).await;
+    core.notifications_for_test();
+    wait_notification(&f, 1).await;
+    finish_incoming(&mut core).await;
+    let baseline = f.sync_requests();
+    // Deliberately retain the revision: push must force a proper download.
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    f.sync_response
+        .lock()
+        .unwrap()
+        .1
+        .to_string()
+        .hash(&mut hash);
+    *f.revision_override.lock().unwrap() = Some((hash.finish() & i64::MAX as u64) as i64);
+    core.new_item(bitwarden_vault::CipherType::Login);
+    let editor = core.editor.as_ref().unwrap().id;
+    *f.sync_response.lock().unwrap() = (
+        200,
+        encrypted_sync_response(&core.manager, uid, "Pushed remote entry").await,
+    );
+    f.notification_senders.lock().unwrap()[0]
+        .send(Some(notification_frame().repeat(50)))
+        .unwrap();
+    for _ in 0..30 {
+        core.poll();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(core.editor.as_ref().unwrap().id, editor);
+    assert_eq!(f.sync_requests(), baseline);
+    core.editor = None;
+    core.poll();
+    finish_incoming(&mut core).await;
+    assert_eq!(f.sync_requests(), baseline + 1);
+    assert!(
+        core.manager
+            .client_for(&uid)
+            .unwrap()
+            .list_ciphers()
+            .await
+            .unwrap()
+            .iter()
+            .any(|c| c.name == "Pushed remote entry")
+    );
+    assert_eq!(put_count(&f), 0);
+    assert_eq!(creation_count(&f), 0);
+    assert!(core.notice.is_none());
+}
+#[tokio::test]
+async fn notifications_block_redirects_and_bad_upgrades_without_breaking_polling() {
+    for mode in [0, 3, 4] {
+        let (f, manager, uid, _) = clean_remote_fixture().await;
+        f.notification_mode.store(mode, Ordering::SeqCst);
+        let subscription = subscribe_fixture(&f, &manager, uid);
+        for _ in 0..100 {
+            if f.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(r, _)| r.starts_with("GET /vault/notifications/hub "))
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(!subscription.take_changed());
+        assert!(!subscription.take_reconnected());
+        assert!(
+            !f.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(r, _)| r.contains("elsewhere.invalid"))
+        );
+        let mut core = core_for_automatic_save(manager).await;
+        let baseline = f.sync_requests();
+        *f.sync_response.lock().unwrap() = (
+            200,
+            crate::services::sdk::test_support::encrypted_sync_response(
+                &core.manager,
+                uid,
+                "Polling fallback entry",
+            )
+            .await,
+        );
+        core.incoming_for_test();
+        finish_incoming(&mut core).await;
+        assert_eq!(f.sync_requests(), baseline + 1);
+    }
+}
+
+#[tokio::test]
+async fn notifications_refresh_once_after_unauthorized_upgrade() {
+    let (f, manager, uid, _) = clean_remote_fixture().await;
+    f.notification_mode.store(6, Ordering::SeqCst);
+    let _subscription = subscribe_fixture(&f, &manager, uid);
+    wait_notification(&f, 1).await;
+    let requests = f.requests.lock().unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|(r, _)| r.contains("grant_type=refresh_token"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|(r, _)| r.starts_with("GET /vault/notifications/hub "))
+            .count(),
+        2
+    );
+}
+#[tokio::test]
+async fn notifications_server_logout_locks_even_with_an_open_editor() {
+    let (f, manager, uid, _) = clean_remote_fixture().await;
+    f.notification_mode.store(1, Ordering::SeqCst);
+    let mut core = core_for_automatic_save(manager).await;
+    core.notifications_for_test();
+    wait_notification(&f, 1).await;
+    core.new_item(bitwarden_vault::CipherType::Login);
+    f.notification_senders.lock().unwrap()[0]
+        .send(Some(notification_frame_kind(11)))
+        .unwrap();
+    for _ in 0..200 {
+        core.poll();
+        if !core.manager.is_unlocked(&uid) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(!core.manager.is_unlocked(&uid));
+    assert!(core.editor.is_none());
 }

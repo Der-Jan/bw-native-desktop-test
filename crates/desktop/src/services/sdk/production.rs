@@ -234,6 +234,15 @@ async fn build_entry(
         builder = builder.with_account_transport(client, Arc::new(OfflineOnly));
     }
     let client = PasswordManagerClient(builder.build());
+    // A failed field decryption must never become an empty value in a saved edit.
+    // This client supports Vaultwarden; no server rollout flag may weaken writes.
+    client
+        .flags()
+        .load(std::collections::HashMap::from([(
+            "strict-cipher-decryption".into(),
+            true,
+        )]))
+        .await;
     let mut session = SessionState::new(record.id, client);
     Arc::get_mut(&mut session)
         .expect("new session is unique")

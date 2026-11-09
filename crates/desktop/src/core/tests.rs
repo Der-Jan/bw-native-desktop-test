@@ -140,3 +140,29 @@ async fn widget_copy_after_editor_close_still_requires_copy_authority() {
     assert_eq!(prompt.target.action, services::sdk::Action::Copy);
     assert_eq!(prompt.target.cipher, Some(id));
 }
+
+#[tokio::test]
+async fn synchronization_does_not_discard_an_open_editor_or_allow_a_new_edit_mid_sync() {
+    let mut core = core();
+    let id = install(&mut core, true);
+    core.new_item(CipherType::Login);
+    let editor = core.editor.as_ref().unwrap().id;
+    core.synchronize();
+    assert_eq!(core.editor.as_ref().unwrap().id, editor);
+    assert!(core.sync.is_empty());
+    core.editor = None;
+    core.sync.insert(
+        core.active.unwrap(),
+        SyncState {
+            request: uuid::Uuid::new_v4(),
+            busy: true,
+            error: None,
+        },
+    );
+    core.request(Request::Edit(id));
+    assert!(
+        core.prompt.is_none(),
+        "An edit authorization flow must not race snapshot replacement"
+    );
+    assert!(core.editor.is_none());
+}

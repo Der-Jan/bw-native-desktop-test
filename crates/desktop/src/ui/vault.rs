@@ -343,8 +343,30 @@ impl Application {
             .filter(|count| *count > 0)
         {
             ui.weak(format!(
-                "{count} local changes — not uploaded; download sync paused"
+                "{count} local drafts — use File → Synchronize to upload"
             ));
+        }
+        if let Some(uid) = self.core.active {
+            let conflicts = self.core.manager.local_conflicts(&uid);
+            if !conflicts.is_empty() {
+                ui.collapsing(format!("{} sync conflicts / unconfirmed updates",conflicts.len()), |ui| {
+                    ui.label("Server versions stay current. Drafts are retained and will not be uploaded automatically. Review and save a draft to stage a new update.");
+                    for id in conflicts {
+                        let item = self.core.current_cache().and_then(|c|c.all.iter().find(|v|v.id==Some(id))).cloned();
+                        ui.push_id(id, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(item.as_ref().map_or_else(||format!("Unavailable server entry ({id})"),|i|i.name.clone()));
+                                if ui.add_enabled(item.is_some(),egui::Button::new("Server version")).clicked() {self.core.request(crate::core::model::Request::Read(id));}
+                                if ui.add_enabled(item.as_ref().is_some_and(|i|i.edit&&i.view_password),egui::Button::new("Review local draft…")).clicked() {self.core.request(crate::core::model::Request::ReviewLocal(id));}
+                                ui.menu_button("Discard draft…", |ui| {
+                                    ui.label("Permanently discard these local changes?");
+                                    if ui.button("Confirm discard").clicked() {self.core.request(crate::core::model::Request::DiscardLocal(id));ui.close();}
+                                });
+                            });
+                        });
+                    }
+                });
+            }
         }
         let area = ui.available_rect_before_wrap();
         let list_id = Id::unique("vault-list-focus");

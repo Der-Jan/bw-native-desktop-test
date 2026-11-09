@@ -46,6 +46,7 @@ mod types;
 mod unlock;
 mod user_entry;
 pub mod vault_sync;
+mod vault_writes;
 
 #[cfg(test)]
 mod sdk4_tests;
@@ -271,6 +272,38 @@ impl ClientManager {
             .get(uid)
             .and_then(|e| e.session.snapshot.current())
             .is_some_and(|s| s.persisted.local_edits.contains_key(&id.to_string()))
+    }
+    /// Conflict metadata only; plaintext draft access stays behind the SDK gate.
+    pub fn local_conflicts(&self, uid: &UserId) -> Vec<bitwarden_vault::CipherId> {
+        let Some(snapshot) = self
+            .users
+            .get(uid)
+            .and_then(|e| e.session.snapshot.current())
+        else {
+            return Vec::new();
+        };
+        let mut ids: Vec<_> = snapshot
+            .persisted
+            .local_edits
+            .values()
+            .filter(|edit| edit.state != snapshot::LocalEditState::Pending)
+            .filter_map(|edit| edit.cipher.id)
+            .collect();
+        ids.sort_by_key(ToString::to_string);
+        ids
+    }
+    pub fn local_draft_reprompt(&self, uid: &UserId, id: bitwarden_vault::CipherId) -> bool {
+        self.users
+            .get(uid)
+            .and_then(|e| e.session.snapshot.current())
+            .is_some_and(|s| {
+                s.persisted
+                    .local_edits
+                    .get(&id.to_string())
+                    .is_some_and(|e| {
+                        e.cipher.reprompt == bitwarden_vault::CipherRepromptType::Password
+                    })
+            })
     }
     pub fn last_sync(&self, uid: &UserId) -> Option<chrono::DateTime<chrono::Utc>> {
         self.users

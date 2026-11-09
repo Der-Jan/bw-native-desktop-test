@@ -61,7 +61,7 @@ impl Core {
                         core.refresh_agent();
                         core.load_vault();
                         if core.manager.is_remote(&uid) {
-                            core.synchronize();
+                            core.download();
                         }
                     }
                     Err(_) => {
@@ -231,7 +231,7 @@ impl Core {
                 match self.manager.accept_login(*candidate, &attempt) {
                     Ok(uid) => {
                         self.switch_user(uid);
-                        self.synchronize();
+                        self.download();
                     }
                     Err(e) => self.login.error = Some(e),
                 }
@@ -340,13 +340,19 @@ impl Core {
         );
     }
     pub fn synchronize(&mut self) {
+        self.sync_account(true);
+    }
+    fn download(&mut self) {
+        self.sync_account(false);
+    }
+    fn sync_account(&mut self, upload: bool) {
+        if self.editor.is_some() {
+            self.notify("Save or cancel the open edit before synchronizing.", false);
+            return;
+        }
         let Some(uid) = self.active else {
             return;
         };
-        if self.manager.local_edit_count(&uid) > 0 {
-            self.notify("Download sync is paused while local changes exist.", false);
-            return;
-        }
         if !self.manager.is_unlocked(&uid) {
             return;
         }
@@ -372,7 +378,10 @@ impl Core {
             },
         );
         self.events.spawn(
-            vault_sync::synchronize(client, crate::paths::data_dir(), store),
+            async move {
+                if upload { vault_sync::synchronize(client,crate::paths::data_dir(),store).await }
+                else { vault_sync::download(client,crate::paths::data_dir(),store).await }
+            },
             move |core, result| {
                 let Some(state) = core.sync.get_mut(&uid) else {
                     return;
@@ -386,19 +395,21 @@ impl Core {
                         if core.manager.accepts_session(&report.session)
                             && core.manager.is_unlocked(&uid) =>
                     {
-                        state.error = None;
+                        state.error = report.problems.first().cloned();
                         core.caches.remove(&uid);
                         if core.active == Some(uid) {
                             core.clear_presentation();
                             core.screen = Screen::Vault;
                             core.load_vault();
-                            core.notify(format!("{} entries synchronized", report.ciphers), false);
+                            core.notify(format!("{} entries synchronized; {} changes uploaded; {} drafts need review", report.ciphers, report.uploaded, report.conflicts), report.conflicts > 0 || !report.problems.is_empty());
                         }
                     }
                     Ok(_) => {}
                     Err(error) => {
                         state.error = Some(error.clone());
                         if core.active == Some(uid) {
+                            core.clear_presentation();
+                            core.load_vault();
                             core.notify(error, true);
                         }
                     }

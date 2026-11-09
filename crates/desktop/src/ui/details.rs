@@ -155,6 +155,8 @@ impl Application {
                 let mut edit = false;
                 let mut delete = false;
                 let mut discard = false;
+                let mut review = false;
+                let local_conflict = id.is_some_and(|id|self.core.active.is_some_and(|uid|self.core.manager.local_conflicts(&uid).contains(&id)));
                 let local_edit = id.is_some_and(|id| self.core.active.is_some_and(|uid| self.core.manager.has_local_edit(&uid, id)));
                 egui::ScrollArea::vertical()
                     .id_salt(("details", id))
@@ -169,7 +171,12 @@ impl Application {
                             ui.checkbox(&mut self.reveal, super::labels::text("Reveal secrets"));
                         });
                         if local_edit {
-                            ui.strong("Local changes — not uploaded");
+                            if local_conflict {
+                                ui.strong("Server version — a local draft needs review");
+                                review = ui.add_enabled(detail.edit && detail.view_password,egui::Button::new("Review local draft…")).clicked();
+                            } else {
+                                ui.strong("Local draft — use File → Synchronize to upload");
+                            }
                             ui.weak("Locking and restarting preserve these edits. Logging out removes local account data, including these changes.");
                             ui.collapsing("Discard local changes…", |ui| {
                                 ui.label("Restore this entry from the last downloaded server snapshot? Your local edits will be lost.");
@@ -290,13 +297,14 @@ impl Application {
                     if discard {
                         self.core.request(Request::DiscardLocal(id));
                     }
+                    if review { self.core.request(Request::ReviewLocal(id)); }
                 }
             });
     }
     fn editor(&mut self, ui: &mut egui::Ui) {
         let local_only = self.core.remote();
         if local_only {
-            ui.weak("Changes are saved locally and are not uploaded to the server yet.");
+            ui.weak("Save keeps an encrypted local draft. Use File → Synchronize to upload it.");
         }
         let folders = self
             .core

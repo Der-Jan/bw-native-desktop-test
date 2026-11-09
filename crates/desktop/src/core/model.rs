@@ -40,6 +40,7 @@ pub enum Request {
     CopyText(CipherId, Zeroizing<String>),
     Copy(CipherId, CopyField),
     Edit(CipherId),
+    ReviewLocal(CipherId),
     Save(Box<CipherView>),
     Delete(CipherId),
     DiscardLocal(CipherId),
@@ -56,6 +57,7 @@ impl Request {
             | Self::CopyText(id, _)
             | Self::Copy(id, _)
             | Self::Edit(id)
+            | Self::ReviewLocal(id)
             | Self::DiscardLocal(id)
             | Self::Delete(id) => Some(*id),
             Self::Save(v) => v.id,
@@ -67,7 +69,7 @@ impl Request {
         match self {
             Self::Read(_) => Action::Read,
             Self::Copy(..) | Self::CopyText(..) => Action::Copy,
-            Self::Edit(_) => Action::Edit,
+            Self::Edit(_) | Self::ReviewLocal(_) => Action::Edit,
             Self::Save(_) | Self::DiscardLocal(_) => Action::Write,
             Self::Delete(_) => Action::Delete,
             Self::Export { .. } => Action::Export,

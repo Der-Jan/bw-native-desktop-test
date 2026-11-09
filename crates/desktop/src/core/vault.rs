@@ -99,6 +99,21 @@ impl Core {
                 false,
             ));
         };
+        if matches!(request, Request::DiscardLocal(_))
+            && self
+                .active
+                .is_some_and(|uid| self.manager.local_conflicts(&uid).contains(&id))
+        {
+            return Some((
+                Authorization {
+                    cipher: Some(id),
+                    revision: None,
+                    action,
+                },
+                false,
+                false,
+            ));
+        }
         let item = self
             .current_cache()?
             .all
@@ -113,7 +128,11 @@ impl Core {
                 revision: Some(item.revision_date),
                 action,
             },
-            item.reprompt == bitwarden_vault::CipherRepromptType::Password,
+            item.reprompt == bitwarden_vault::CipherRepromptType::Password
+                || (matches!(request, Request::ReviewLocal(_))
+                    && self
+                        .active
+                        .is_some_and(|uid| self.manager.local_draft_reprompt(&uid, id))),
             denied,
         ))
     }
@@ -121,8 +140,17 @@ impl Core {
         let Some(scope) = self.scope() else {
             return;
         };
+        if self.sync.get(&scope.uid).is_some_and(|s| s.busy)
+            && matches!(
+                request.action(),
+                Action::Edit | Action::Write | Action::Delete
+            )
+        {
+            self.notify("Wait for synchronization to finish before editing.", false);
+            return;
+        }
         if self.remote() && matches!(request.action(), Action::Delete | Action::Export) {
-            self.notify("This synchronized vault is currently read-only.", true);
+            self.notify("Server deletion and export are not implemented yet.", true);
             return;
         }
         self.cancel_prompt();
@@ -207,8 +235,9 @@ impl Core {
             return;
         };
         match request {
-            Request::Read(id) | Request::Edit(id) => {
-                let editing = matches!(request, Request::Edit(_));
+            Request::Read(id) | Request::Edit(id) | Request::ReviewLocal(id) => {
+                let reviewing = matches!(request, Request::ReviewLocal(_));
+                let editing = matches!(request, Request::Edit(_) | Request::ReviewLocal(_));
                 let operation = uuid::Uuid::new_v4();
                 self.detail_request = Some(operation);
                 self.selected = Some(id);
@@ -217,7 +246,10 @@ impl Core {
                 self.detail_open = true;
                 self.spawn_scoped(
                     scope,
-                    client.full_cipher_for(id, if editing { Action::Edit } else { Action::Read }),
+                    async move {
+                        if reviewing { client.review_local(id).await }
+                        else { client.full_cipher_for(id, if editing { Action::Edit } else { Action::Read }).await }
+                    },
                     move |core, result| {
                         if core.detail_request != Some(operation) || core.selected != Some(id) {
                             return;
@@ -226,6 +258,7 @@ impl Core {
                             Ok(view) => {
                                 if editing {
                                     core.editor = Some(Editor::from_cipher(&view));
+                                    if reviewing { core.notify("Review your local draft against the server version. Saving stages a new update; it does not upload automatically.", false); }
                                 }
                                 core.detail = Some(view);
                             }
@@ -295,7 +328,7 @@ impl Core {
                             core.load_vault();
                             core.notify(
                                 if core.remote() {
-                                    "Saved locally — not uploaded"
+                                    "Draft saved — use File → Synchronize to upload"
                                 } else {
                                     "Item saved"
                                 },

@@ -42,8 +42,10 @@ the first runtime/session and demo-storage slice is implemented; remaining work 
 - **Remaining login challenges and encrypted sync** `[L]` — password/TOTP/email
   login, OS-protected tokens and full read-sync snapshots are wired; unsupported
   challenges fail explicitly. Remaining sync work includes polling/WSS, complete
-  key migrations, online CRUD, attachments and
-  Send. Exclude Bitwarden-only passwordless passkey login and unsupported Enterprise
+  key migrations, server creation/deletion and folder writes, attachments and Send.
+  Existing-entry update sync is implemented: manual uploads, revision conflicts,
+  encrypted draft retention, read-after-write reconciliation and per-item durable
+  acknowledgments. Deleted/inaccessible draft recovery into new items remains open. Exclude Bitwarden-only passwordless passkey login and unsupported Enterprise
   policies. Follow
   [login and sync requirements](login-sync-requirements.md), including SDK proof,
   challenge handling, token persistence, transactional snapshots and online writes.

@@ -1,6 +1,6 @@
 # Native desktop login and sync requirements
 
-Status: login and full read-sync implemented for review; writes/notifications deferred, 2026-11-07. Depends on the lifecycle and persistence contracts
+Status: login, full read sync and revision-checked existing-entry updates implemented for review, 2026-11-09. Creation/deletion and notifications remain deferred. Depends on the lifecycle and persistence contracts
 in [security concept](security-concept.md). Networking must obey the
 [mTLS transport policy](mtls-requirements.md), including when no identity is set.
 
@@ -65,9 +65,10 @@ The pre-sync implementation now covers HTTPS US/EU/self-hosted profiles, anonymo
 configuration discovery with explicit origin authorization, bounded prelogin KDF
 parameters, SDK password hashing, password authentication, TOTP/email verification,
 profile identity verification and SDK account-key unlock. Local account UUIDs are
-independent of server user IDs and email addresses. Full read sync now runs after
-login/unlock and on explicit refresh. Real vaults remain read-only: server CRUD,
-import/export and Send are disabled in this slice.
+independent of server user IDs and email addresses. Full downloads run after
+login/unlock and preserve local drafts. Explicit File → Synchronize also uploads
+edits to existing entries. Creation/deletion, folder mutations, import/export and
+Send remain disabled for real accounts.
 
 Credentials are AES-256-GCM ciphertext in private files; random encryption keys
 live in the OS credential store (Secret Service on Linux). Account metadata and SDK
@@ -162,7 +163,64 @@ URLs are not configured automatically.
 Key/password/KDF/security-stamp changes require a new login; automatic key migration
 is deferred. Domains/Send payloads are retained in the typed encrypted snapshot
 but have no full feature UI yet. Organization-policy coverage is described below.
-There is no background polling, WSS, attachment transfer or online write queue.
+There is no background polling, WSS or attachment transfer. Existing-entry drafts
+can be uploaded through explicit synchronization as described below.
+
+## Implemented existing-entry write sync
+
+Save stages an SDK-encrypted draft in the same durable SQLite setting as the
+server snapshot, retaining its original server revision. Startup/unlock downloads
+never dispatch these drafts; explicit File → Synchronize does. No plaintext edit
+queue is persisted. Logout still removes unsent drafts with the local account.
+
+Before writing, fetch and validate a full current snapshot, account keys, security
+stamp, organization keys/membership, policies and item permissions. A changed
+revision, ownership, collection membership, key, attachments, removed folder or
+write restriction makes the draft a conflict. Conflicts remain encrypted and
+separate from current server rows; there is no automatic merge or rebase.
+
+Eligible existing-entry updates use SDK `CipherRequestModel` conversion and
+`PUT /ciphers/<id>` with the original full-precision `lastKnownRevisionDate`, the
+server user ID in `encryptedFor`, and the user key ID when provided. Every request
+uses the account's bounded, origin-scoped TLS/mTLS transport and bearer token.
+No mutation is retried automatically after token errors, rejection or timeout.
+
+Server limitation: Vaultwarden 1.37.5's revision rejection compares whole-second
+age and rejects only values greater than one second. Exact preflight revision
+checks reduce the race window, but cannot make this API a strict atomic
+compare-and-swap: sufficiently close concurrent writes can still be accepted by
+the server. Stronger guarantees require server support. See the
+[revision check](https://github.com/dani-garcia/vaultwarden/blob/1.37.5/src/api/core/ciphers.rs).
+
+An uncertain intent is committed before dispatch. An acknowledged response must
+match the submitted encrypted content and identity before its server revision and
+removal of the draft commit together. Batches commit each acknowledgment separately.
+After dispatch, a read-only refresh reconciles replies lost after a successful
+write by exact encrypted-content comparison (normalizing empty optional arrays).
+Otherwise the draft needs explicit review; it is never silently resent, including
+after a crash or lock. Lock/logout revokes authority before later batch requests.
+
+The vault lists conflicts with Server version, Review local draft and confirmed
+Discard actions. Reviewing requires current read/edit permissions and any current
+or draft password reprompt. It opens the draft's editable content against fresh
+server metadata; only an explicit Save stages a new base revision for a later
+manual sync. Deleted/inaccessible entries retain encrypted drafts, but recovery to
+a new item is not yet available. Draft discard only deletes local data.
+
+Remote clients enable the SDK's strict field decryption so a corrupt field cannot
+silently become empty on save. Password and changed hidden-field history retain
+up to five entries, following SDK edit behavior. Partial items or attachment
+failures cannot be saved. Keyless entries with v1 attachments cannot be edited: the
+SDK would introduce an item key, requiring file-content re-encryption that this
+client does not yet perform. Attachment upload/download and ownership transfers are
+not supported by this write slice.
+
+Verification uses disposable SDK-encrypted accounts behind mandatory client TLS:
+normal upload/offline restart, unchanged original revisions, fresh permissions and
+policies, preflight conflicts, a change between GET and PUT, explicit reapplication,
+lost replies with/without server application, partial batches, lock during dispatch,
+one-use draft reprompt, strict corrupt-field rejection and download-only refresh.
+No real account is used by this harness.
 
 ## Implemented Vaultwarden organization policies
 
@@ -289,21 +347,17 @@ the latest committed snapshot. Apply results only to the correct account and
 generation; invalidation prevents both stale UI updates and storage commits.
 Membership removal and key changes invalidate permissions and decrypted caches.
 
-Deliver read sync first. Until online writes land, disable mutations in real
-profiles and label the vault read-only. Later writes encrypt via the SDK, send to
-the server, accept its assigned IDs/revisions, and persist the confirmed result.
-Treat conflict, validation failure and an unknown server outcome separately.
-After timeout following a sent mutation, reconcile before retrying; do not blindly
-replay creates or deletes. Initial release has no offline mutation queue. A later
-queue requires encrypted persistence, conflict semantics and idempotency design.
+Existing-entry write sync is implemented above. Creation, deletion and folder
+mutations remain disabled until their own server ID, concurrency and ambiguous
+outcome handling is proven. Preserve the current separation between validation
+failure, revision conflict and unknown server outcome. Do not blindly replay
+creates/deletes or extend edit retry semantics to those operations.
 
-For future writable sync, preserve a base revision and encrypted base/local/server
-versions. Vaultwarden rejects stale `lastKnownRevisionDate` updates; resync and
-compare before retrying. Proposed behavior: merge independent field changes, ask
-for same-field conflicts and retain both versions until resolved. Treat deletion
-versus edit, organization/permission changes, attachments and unknown post-timeout
-outcomes explicitly. Do not silently pick a timestamp winner or retry a stale write.
-This is a design requirement, not an implemented write-sync feature.
+Conflict behavior follows Vaultwarden's optimistic concurrency: send the original
+`lastKnownRevisionDate`; on rejection, fetch the current version and keep the
+local draft for explicit review/reapplication or discard. Do not automatically
+merge fields, pick a timestamp winner or retry with a refreshed revision. Retaining
+a draft does not authorize a write after organization/permission changes.
 
 Send requires its own SDK repository, encryption/upload, real access ID and
 profile web-vault link handling. It must not appear operational while backed by
@@ -325,7 +379,7 @@ server and checks expiry even when manual refresh would otherwise be throttled.
 | L3 | Restart locked, offline unlock, rotated refresh token, credential-store lock/failure and permanent session invalidation |
 | Y1 | Initial/update/deletion sync; org membership/key changes; failure during apply preserves the old snapshot |
 | Y2 | Overlapping refreshes coalesce; WSS reconnect/poll fallback; lock/logout during fetch/apply cannot revive state |
-| Y3 | Online create/edit/delete uses server IDs and revisions; conflicts and ambiguous timeouts reconcile without duplicates |
+| Y3 | Existing-entry edit/conflict/ambiguous-result tests pass; create/delete and folder-write gates remain open |
 | Y4 | Two profiles with equal server UUID/email remain isolated; sort preference survives refresh and selection stays on the same cipher ID |
 
 Use synthetic fixtures and an instrumented server/proxy to observe every HTTP and

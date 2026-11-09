@@ -256,7 +256,7 @@ fn ensure_writable(session: &SessionToken) -> Result<(), String> {
         .writable
         .load(std::sync::atomic::Ordering::SeqCst)
     {
-        return Err("Online changes are disabled until synchronization is implemented".into());
+        return Err("This server operation is not implemented; existing item edits use revision-checked synchronization".into());
     }
     Ok(())
 }

@@ -202,3 +202,29 @@ pub async fn encrypted_ssh_sync_response(
     payload["ciphers"].as_array_mut().unwrap().push(wire);
     (payload, public)
 }
+
+/// A pre-per-item-key entry with a v1 attachment, all fields genuinely encrypted
+/// under the user key. Used to prove writes cannot orphan legacy file contents.
+pub async fn encrypted_legacy_attachment_sync_response(
+    manager: &ClientManager,
+    uid: UserId,
+) -> serde_json::Value {
+    use bitwarden_crypto::PrimitiveEncryptable;
+    let mut payload = encrypted_sync_response(manager, uid, "Legacy attachment fixture").await;
+    let client = manager.users.get(&uid).unwrap().session.client().unwrap();
+    let keys = client.0.internal.get_key_store();
+    let mut ctx = keys.context_mut();
+    let mut encrypted = |s: &str| {
+        s.to_owned()
+            .encrypt(&mut ctx, SymmetricKeySlotId::User)
+            .unwrap()
+            .to_string()
+    };
+    let cipher = &mut payload["ciphers"][0];
+    cipher["key"] = serde_json::Value::Null;
+    cipher["name"] = serde_json::json!(encrypted("Legacy attachment fixture"));
+    cipher["login"]["username"] = serde_json::json!(encrypted("Legacy synthetic username"));
+    cipher["login"]["password"] = serde_json::json!(encrypted("Legacy synthetic password"));
+    cipher["attachments"] = serde_json::json!([{"id":"synthetic-v1-attachment","fileName":encrypted("legacy.txt"),"size":"7","sizeName":"7 B"}]);
+    payload
+}

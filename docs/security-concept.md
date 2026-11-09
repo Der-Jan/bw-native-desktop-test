@@ -45,7 +45,10 @@ storage/deletion and account-scoped HTTP mTLS are now implemented for pre-sync
 review. See [login requirements](login-sync-requirements.md) and
 [mTLS requirements](mtls-requirements.md) for precise coverage and limitations.
 Full read sync is implemented with atomic encrypted SDK-SQLite snapshots and
-read-only repositories; server mutations and notifications remain disabled.
+read-only repository adapters. Explicit sync now uploads existing-entry edits with
+revision checks, durable encrypted intent and per-item acknowledgments; startup
+refresh remains download-only. Conflicts retain separate drafts and require
+explicit review/reapplication. Creation/deletion and notifications remain disabled.
 Windows ACL/platform validation, remaining Vaultwarden login challenges and
 organization enrollment/recovery workflows remain open. Vaultwarden organization
 policy enforcement now covers generator requirements, restricted item types,
@@ -60,10 +63,13 @@ all allocator or widget copies. This remains a prototype under review.
 ## Verification
 
 Current verification (organization-policy implementation): `cargo test --workspace`
-passes 194 desktop tests plus one generator test (three desktop tests ignored).
+passes 208 desktop tests plus one generator test (three desktop tests ignored).
 `cargo clippy --workspace --all-targets` passes with existing warnings; the release
 workspace builds. The native Wayland settings-fit test also passes explicitly.
-Policy regressions use real SDK-encrypted disposable accounts over mandatory mTLS
+Write-sync regressions cover revision conflicts, lost responses, partial batches,
+revocation during dispatch, encrypted offline recovery, fresh policies/permissions,
+strict field decryption and one-use conflict review. Policy regressions use real
+SDK-encrypted disposable accounts over mandatory mTLS
 and cover offline restart, backend generator enforcement, list/read/copy/SSH
 restrictions, personal ownership, policy removal and login rejection. Added regression checks cover one-use grants,
 stored-policy enforcement when a caller removes reprompt, cancelled authorization,
@@ -73,6 +79,9 @@ concurrent probes, locked account reload/unlock, token-key removal, redirects,
 exact port scope, independent identities at the same host, explicit server CA
 trust and typed TLS expiry diagnostics for both app and SDK requests. All accounts and certificates in these checks are disposable test fixtures.
 The GUI review uses an isolated profile; no user server or credentials were used.
+The synthetic conflict GUI check expands the conflict list, opens the retained
+draft and explicitly saves it; the conflict disappears and the draft remains
+staged without any automatic upload.
 Read-sync regressions cover encrypted full-snapshot fetch over mandatory mTLS,
 coalescing, replacement/deletions, failed HTTP/incomplete payload preservation,
 lock during fetch, organization-key rollback/removal, namespace isolation and

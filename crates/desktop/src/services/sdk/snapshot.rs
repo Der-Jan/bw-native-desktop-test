@@ -31,8 +31,18 @@ pub(super) struct Persisted {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct LocalEdit {
+    #[serde(default)]
+    pub state: LocalEditState,
     pub cipher: Cipher,
     pub base_revision: DateTime<Utc>,
+}
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) enum LocalEditState {
+    #[default]
+    Pending,
+    Conflict,
+    // Persisted before dispatch: cancellation/crash/timeout must never replay blindly.
+    Uncertain,
 }
 bitwarden_state::register_setting_key!(pub(super) const CACHE:Persisted="native_encrypted_vault_snapshot_v1");
 pub(super) struct Snapshot {
@@ -172,6 +182,12 @@ impl Snapshot {
             collections.push(collection);
         }
         for (id, edit) in &persisted.local_edits {
+            if edit.cipher.id.map(|id| id.to_string()).as_ref() != Some(id) {
+                return Err("Invalid local draft identity".into());
+            }
+            if edit.state != LocalEditState::Pending {
+                continue; // Conflicting drafts are retained separately, never served as current items.
+            }
             let original = ciphers.get(id).ok_or("Local edit has no server entry")?;
             if edit.cipher.id != original.id
                 || edit.cipher.organization_id != original.organization_id
@@ -212,10 +228,12 @@ impl Snapshot {
         let base_revision = persisted
             .local_edits
             .get(&id)
+            .filter(|edit| edit.state == LocalEditState::Pending)
             .map_or(original.revision_date, |edit| edit.base_revision);
         persisted.local_edits.insert(
             id,
             LocalEdit {
+                state: LocalEditState::Pending,
                 cipher,
                 base_revision,
             },
@@ -232,6 +250,13 @@ impl Snapshot {
         if persisted.local_edits.remove(&id.to_string()).is_none() {
             return Err("This item has no local changes".into());
         }
+        Self::restore(
+            persisted,
+            self.persisted.server_user_id,
+            self.persisted.local_account_id,
+        )
+    }
+    pub fn rebuild(&self, persisted: Persisted) -> Result<Arc<Self>, String> {
         Self::restore(
             persisted,
             self.persisted.server_user_id,

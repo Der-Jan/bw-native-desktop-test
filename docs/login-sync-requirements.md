@@ -204,8 +204,12 @@ and visible offline. Existing-item ownership/type transfers remain deferred.
 
 ## Implemented archive and unarchive
 
-Item details shows Archive or Unarchive, its current folder (including No folder),
-and Created / Last changed timestamps in local time. Archive hides the entry from
+Item details uses the item name as its sole compact 18-point heading and shows
+its actual vault (personal or organization), assigned collection names for
+organization entries, current folder (including No folder), and Created / Last
+changed timestamps in local time. Ownership and collection labels come from the
+entry, independently of the selected navigation filters. Archive or Unarchive is
+available alongside Edit. Archive hides the entry from
 the active/favorites lists; the Archive filter exposes it for reading or unarchiving.
 These actions synchronize immediately via Vaultwarden's account-scoped
 `PUT /ciphers/<id>/archive` and `/unarchive` endpoints. The audited 1.37.5 and main

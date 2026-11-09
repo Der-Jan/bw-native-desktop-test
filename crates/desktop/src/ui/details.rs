@@ -126,18 +126,20 @@ impl Application {
             .show(ui, |ui| {
                 ui.style_mut().visuals.override_text_color =
                     Some(super::accent::view_text(ui.ctx(), self.core.appearance));
-                ui.horizontal(|ui| {
-                    ui.heading(if self.core.editor.is_some() {
-                        "Edit item"
-                    } else {
-                        "Item details"
+                let title = self.core.editor.as_ref()
+                    .map(|editor| editor.data["name"].as_str().filter(|name| !name.is_empty()).unwrap_or("New item").to_owned())
+                    .or_else(|| self.core.detail.as_ref().map(|detail| detail.name.clone()))
+                    .unwrap_or_default();
+                ui.horizontal_top(|ui| {
+                    let title_width = (ui.available_width() - 32.).max(0.);
+                    ui.allocate_ui_with_layout(egui::vec2(title_width, 0.), egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.set_min_width(title_width);
+                        ui.add(egui::Label::new(egui::RichText::new(title).size(18.)).wrap());
                     });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("×").on_hover_text("Close (Escape)").clicked() {
-                            self.core.close_details();
-                            self.list_focus = true;
-                        }
-                    });
+                    if ui.button("×").on_hover_text("Close (Escape)").clicked() {
+                        self.core.close_details();
+                        self.list_focus = true;
+                    }
                 });
                 ui.separator();
                 if self.core.editor.is_some() {
@@ -149,7 +151,15 @@ impl Application {
                     return;
                 };
                 let id = detail.id;
-                let name = detail.name.clone();
+                let vault_name = detail.organization_id.map_or_else(
+                    || "My vault".to_owned(),
+                    |id| self.core.active.and_then(|uid| self.core.manager.list_organizations(&uid).into_iter().find(|org| org.id == id))
+                        .map_or_else(|| "Unknown organization".to_owned(), |org| org.name),
+                );
+                let collection_names: Vec<_> = detail.collection_ids.iter().map(|id| {
+                    self.core.current_cache().and_then(|cache| cache.collections.iter().find(|collection| collection.id == *id && Some(collection.organization_id) == detail.organization_id))
+                        .map_or_else(|| "Unknown collection".to_owned(), |collection| collection.name.clone())
+                }).collect();
                 let folder_name = detail.folder_id.map_or_else(
                     || "No folder".to_owned(),
                     |id| {
@@ -173,7 +183,16 @@ impl Application {
                     .id_salt(("details", id))
                     .show(ui, |ui| {
                         ui.style_mut().interaction.selectable_labels = false;
-                        ui.heading(name);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.weak("Vault:");
+                            ui.label(&vault_name);
+                        });
+                        if detail.organization_id.is_some() || !collection_names.is_empty() {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.weak("Collections:");
+                                ui.label(if collection_names.is_empty() { "None".to_owned() } else { collection_names.join(", ") });
+                            });
+                        }
                         ui.horizontal_wrapped(|ui| {
                             ui.weak("Folder:");
                             ui.label(&folder_name);

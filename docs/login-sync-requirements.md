@@ -1,6 +1,6 @@
 # Native desktop login and sync requirements
 
-Status: login, incoming polling, full read sync, item creation, revision-checked updates, attachments and folder management implemented for review, 2026-11-09. Item trash/restore/deletion and push notifications remain deferred. Depends on the lifecycle and persistence contracts
+Status: login, incoming polling, full read sync, item creation, revision-checked updates, archive/unarchive, attachments and folder management implemented for review, 2026-11-09. Item trash/restore/deletion and push notifications remain deferred. Depends on the lifecycle and persistence contracts
 in [security concept](security-concept.md). Networking must obey the
 [mTLS transport policy](mtls-requirements.md), including when no identity is set.
 
@@ -201,6 +201,28 @@ Exact ciphertext matching during read-after-write also resolves a lost response
 without another POST. An uncertain create is retained for explicit review/save or
 discard, never blindly repeated on a timer or restart. Drafts remain encrypted
 and visible offline. Existing-item ownership/type transfers remain deferred.
+
+## Implemented archive and unarchive
+
+Item details shows Archive or Unarchive, its current folder (including No folder),
+and Created / Last changed timestamps in local time. Archive hides the entry from
+the active/favorites lists; the Archive filter exposes it for reading or unarchiving.
+These actions synchronize immediately via Vaultwarden's account-scoped
+`PUT /ciphers/<id>/archive` and `/unarchive` endpoints. The audited 1.37.5 and main
+sources support both. A server rejecting the route produces an explicit error.
+This is per-user metadata, so readable read-only collection entries can be archived
+without changing the shared entry's content or requiring collection edit rights.
+
+The backend requires a current unlocked session, fresh item access/policies and
+unchanged item revision/key/ownership/reprompt. Protected entries use a distinct
+one-use Archive authorization. First synchronize the item's pending content edits.
+A durable intent precedes dispatch; only an authenticated full read confirming the
+requested archive state clears it. Lost replies, restart and incoming sync never
+repeat the PUT automatically. Pending outcomes expose Check server and confirmed
+Dismiss local record; editing that item is blocked until its outcome is resolved
+or explicitly dismissed. Lock/logout revoke in-flight publication. The usual
+account TLS/mTLS transport and redirect restrictions apply. Item deletion remains
+separate and disabled.
 
 ## Implemented attachment transfers
 

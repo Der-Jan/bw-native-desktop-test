@@ -16,6 +16,7 @@ pub enum Action {
     Write,
     Delete,
     Export,
+    Archive,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Authorization {

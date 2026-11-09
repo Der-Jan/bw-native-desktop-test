@@ -1,6 +1,7 @@
 //! Single-threaded application model. Workers return bounded, scoped completions.
 //! No renderer or window toolkit participates in account authority decisions.
 mod account;
+mod archive;
 mod attachments;
 mod desktop;
 mod folders;

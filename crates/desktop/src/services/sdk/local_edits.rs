@@ -19,6 +19,17 @@ impl SessionClient {
             return Err(super::policies::DENIED.into());
         }
         let id = view.id.ok_or("Missing item ID")?;
+        if session.state.snapshot.current().is_some_and(|s| {
+            s.persisted
+                .archive_intent
+                .as_ref()
+                .is_some_and(|intent| intent.cipher == id)
+        }) {
+            return Err(
+                "Check or dismiss this item's unconfirmed archive request before editing it."
+                    .into(),
+            );
+        }
         super::session_client::check_cipher(
             &client,
             &session,

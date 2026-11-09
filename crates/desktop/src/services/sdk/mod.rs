@@ -31,6 +31,7 @@ mod browser;
 pub use browser::BrowserSession;
 mod favicon;
 pub use favicon::FaviconSource;
+pub mod archive;
 pub mod attachments;
 mod client_ext;
 pub mod folder_management;
@@ -336,6 +337,12 @@ impl ClientManager {
                     .map(|(_, server)| *server)
             })
             .unwrap_or(id)
+    }
+    pub fn has_archive_intent(&self, uid: &UserId) -> bool {
+        self.users
+            .get(uid)
+            .and_then(|e| e.session.snapshot.current())
+            .is_some_and(|s| s.persisted.archive_intent.is_some())
     }
     pub fn has_attachment_intent(&self, uid: &UserId) -> bool {
         self.users

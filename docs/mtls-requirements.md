@@ -1,6 +1,6 @@
 # Native desktop mTLS requirements
 
-Status: HTTP login/probe, read sync, incoming polling, item creation/updates, attachments and folder management implemented for review, 2026-11-09.
+Status: HTTP login/probe, read sync, incoming polling, item creation/updates, archive/unarchive, attachments and folder management implemented for review, 2026-11-09.
 The egui frontend preserves these contracts (2026-11-08); see
 [migration validation](egui-migration.md). WSS and item trash/restore/deletion are deferred.
 Implement this with the [security lifecycle](security-concept.md) and
@@ -61,7 +61,7 @@ Each login inherits a separate account profile snapshot and client pool, even fo
 accounts sharing a host. Allowed HTTPS origins include the port; base paths survive
 endpoint resolution. Discovery cannot expand permission. All redirects are blocked.
 The same client identity covers config, prelogin, token/2FA, profile and explicit
-probe/refresh, revision polling, full read-sync, item POST/PUT, attachment metadata/
+probe/refresh, revision polling, full read-sync, item POST/PUT (including archive/unarchive), attachment metadata/
 multipart transfers and folder POST/PUT/DELETE requests. Signed attachment file
 GETs use the same TLS/mTLS identity without an OAuth bearer token. Only the
 account base origin and exact attachment path are accepted, including subpaths;

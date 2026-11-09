@@ -45,7 +45,8 @@ the first runtime/session and demo-storage slice is implemented; remaining work 
   trash/restore/permanent deletion, ownership/sharing transfers and Send.
   Incoming revision polling (15 seconds, periodic full metadata refresh), new-item
   creation with server-ID reconciliation and SDK-encrypted attachment transfers
-  now work through the account-scoped TLS/mTLS transport. Uploads are bounded
+  now work through the account-scoped TLS/mTLS transport. Archive/unarchive also
+  synchronizes immediately with durable intent and read-only outcome confirmation. Uploads are bounded
   in-memory operations; automatic offline file resumption is deferred.
   Folder create/rename/delete now use encrypted, account-scoped requests with
   durable intent, read-after-write reconciliation and preserved entries/drafts.

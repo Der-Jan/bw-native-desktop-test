@@ -150,10 +150,20 @@ impl Application {
                 };
                 let id = detail.id;
                 let name = detail.name.clone();
+                let folder_name = detail.folder_id.map_or_else(
+                    || "No folder".to_owned(),
+                    |id| {
+                        self.core
+                            .current_cache()
+                            .and_then(|cache| cache.folders.iter().find(|folder| folder.id == id))
+                            .map_or_else(|| "Unknown folder".to_owned(), |folder| folder.name.clone())
+                    },
+                );
                 let data = serde_json::to_value(detail).unwrap_or(Value::Null);
                 let mut copy = None;
                 let mut edit = false;
                 let mut delete = false;
+                let mut archive = false;
                 let mut discard = false;
                 let mut review = false;
                 let mut upload=false;let mut download=None;let mut remove_attachment=None;
@@ -164,11 +174,16 @@ impl Application {
                     .show(ui, |ui| {
                         ui.style_mut().interaction.selectable_labels = false;
                         ui.heading(name);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.weak("Folder:");
+                            ui.label(&folder_name);
+                        });
                         ui.horizontal(|ui| {
                             edit = ui.add_enabled(detail.edit && detail.view_password && self.core.active.is_some_and(|uid|self.core.manager.policy_rules_for(&uid).allows_write(detail.r#type,detail.organization_id)), egui::Button::new(super::labels::text("Edit"))).clicked();
                             ui.add_enabled_ui(!self.core.remote(), |ui| {
                                 delete = ui.button("Move to trash").clicked();
                             });
+                            archive = ui.add_enabled(self.core.remote() && detail.deleted_date.is_none() && !local_edit && !self.core.active.is_some_and(|uid| self.core.sync.get(&uid).is_some_and(|s|s.busy) || self.core.manager.has_archive_intent(&uid)), egui::Button::new(if detail.archived_date.is_some() {"Unarchive"} else {"Archive"})).on_hover_text("Change this entry's archive state on the server").clicked();
                             ui.checkbox(&mut self.reveal, super::labels::text("Reveal secrets"));
                         });
                         if local_edit {
@@ -290,8 +305,12 @@ impl Application {
                         }
                         ui.separator();
                         ui.small(format!(
+                            "Created: {}",
+                            detail.creation_date.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M")
+                        ));
+                        ui.small(format!(
                             "Last changed: {}",
-                            data["revisionDate"].as_str().unwrap_or("")
+                            detail.revision_date.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M")
                         ));
                     });
                 if let Some(id) = id {
@@ -308,6 +327,7 @@ impl Application {
                         self.core.request(Request::DiscardLocal(id));
                     }
                     if review { self.core.request(Request::ReviewLocal(id)); }
+                    if archive {self.core.request(Request::Archive{cipher:id,archived:data["archivedDate"].is_null()});}
                     if upload {self.core.pick_attachment(id,None);}
                     if let Some(download)=download {self.core.pick_attachment(id,Some(download));}
                     if let Some(attachment)=remove_attachment {self.core.request(Request::Attachment{cipher:id,operation:crate::services::sdk::attachments::Operation::Delete(attachment)});}

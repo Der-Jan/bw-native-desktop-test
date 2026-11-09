@@ -57,6 +57,10 @@ pub enum Request {
     ReviewLocal(CipherId),
     Save(Box<CipherView>),
     Delete(CipherId),
+    Archive {
+        cipher: CipherId,
+        archived: bool,
+    },
     DiscardLocal(CipherId),
     Attachment {
         cipher: CipherId,
@@ -79,7 +83,7 @@ impl Request {
             | Self::DiscardLocal(id)
             | Self::Delete(id) => Some(*id),
             Self::Save(v) => v.id,
-            Self::Attachment { cipher, .. } => Some(*cipher),
+            Self::Attachment { cipher, .. } | Self::Archive { cipher, .. } => Some(*cipher),
             Self::Export { .. } => None,
         }
     }
@@ -91,6 +95,7 @@ impl Request {
             Self::Edit(_) | Self::ReviewLocal(_) => Action::Edit,
             Self::Save(_) | Self::DiscardLocal(_) => Action::Write,
             Self::Delete(_) => Action::Delete,
+            Self::Archive { .. } => Action::Archive,
             Self::Export { .. } => Action::Export,
             Self::Attachment {
                 operation: crate::services::sdk::attachments::Operation::Download { .. },

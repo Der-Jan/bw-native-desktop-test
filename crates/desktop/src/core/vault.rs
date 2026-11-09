@@ -143,7 +143,7 @@ impl Core {
         if self.sync.get(&scope.uid).is_some_and(|s| s.busy)
             && matches!(
                 request.action(),
-                Action::Edit | Action::Write | Action::Delete
+                Action::Edit | Action::Write | Action::Delete | Action::Archive
             )
         {
             self.notify("Wait for synchronization to finish before editing.", false);
@@ -269,6 +269,9 @@ impl Core {
                         }
                     },
                 );
+            }
+            Request::Archive { cipher, archived } => {
+                self.execute_archive(scope, client, cipher, archived)
             }
             Request::CopyText(id, text) => {
                 self.spawn_scoped(

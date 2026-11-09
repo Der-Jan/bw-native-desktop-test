@@ -56,7 +56,8 @@ mTLS transport, one-use authorization and fresh permissions. Signed file downloa
 carry no OAuth token; authenticated plaintext is published atomically only after
 SDK verification and current session/profile checks. Incoming revision polling
 runs every 15 seconds while unlocked, with periodic metadata refresh and failure
-backoff. Item trash/restore/deletion and push notifications remain disabled.
+backoff. Archive/unarchive changes per-user metadata through durable intent and
+read-only confirmation, including safe recovery after a lost reply. Item trash/restore/deletion and push notifications remain disabled.
 Windows ACL/platform validation, remaining Vaultwarden login challenges and
 organization enrollment/recovery workflows remain open. Vaultwarden organization
 policy enforcement now covers generator requirements, restricted item types,
@@ -70,14 +71,18 @@ all allocator or widget copies. This remains a prototype under review.
 
 ## Verification
 
-Current verification (creation, attachments and incoming-sync implementation): `cargo test --workspace`
-passes 244 desktop tests plus one generator test (three desktop tests ignored).
+Current verification (archive, creation, attachments and incoming-sync implementation): `cargo test --workspace`
+passes 251 desktop tests plus one generator test (three desktop tests ignored).
 `cargo clippy --workspace --all-targets` passes with existing warnings; the release
 workspace builds. The native Wayland settings-fit test also passes explicitly.
 Creation/attachment regressions cover server-assigned IDs, personal and organization
 creation, lost replies, incomplete uploads across restart, legacy v1 downloads,
 file authentication failure, malicious URLs, oversized responses, private output
 publication, revoked authority and connection-profile changes during transfers.
+Archive/unarchive tests cover account-scoped mTLS, preserved content, read-only
+collection permissions, fresh access checks, separate one-use reprompt grants,
+lost replies, unsupported routes, restart recovery, lock during dispatch and
+active/archive filter updates.
 Incoming tests cover revision races, unchanged revisions, periodic policy refresh,
 editor deferral, preserved generator output and tray dispatcher wakeups.
 Write-sync regressions cover revision conflicts, lost responses, partial batches,
@@ -97,7 +102,9 @@ The synthetic conflict GUI check exercises retained draft review and reapplicati
 The attachment/creation GUI check uses a disposable remote-account cache on a
 private Xvfb display: attachment names/actions render, New opens the item editor,
 and Save retains an encrypted new-entry draft when the fixture credential store
-is intentionally unavailable. It does not contact a user server.
+is intentionally unavailable. A further isolated archive-view check confirms
+the Unarchive action, decrypted folder name and local Created / Last changed
+timestamps in entry details. These checks do not contact a user server.
 Automatic-save integration tests prove that successful saves trigger uploads,
 failures do not retry indefinitely, switching accounts cannot misroute a save,
 search/selection survive refresh and protected details remain gated. Folder

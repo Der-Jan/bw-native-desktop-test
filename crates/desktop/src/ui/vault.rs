@@ -394,6 +394,22 @@ impl Application {
         if self
             .core
             .active
+            .is_some_and(|uid| self.core.manager.has_archive_intent(&uid))
+        {
+            ui.group(|ui| {
+                ui.label("An archive request is awaiting confirmation. Check the server before repeating it.");
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Check server").clicked() {self.core.check_folder_outcome();}
+                    ui.menu_button("Dismiss local record…",|ui| {
+                        ui.label("This only clears the local record. It does not undo a server change.");
+                        if ui.button("Confirm dismiss").clicked() {self.core.dismiss_archive_intent();ui.close();}
+                    });
+                });
+            });
+        }
+        if self
+            .core
+            .active
             .is_some_and(|uid| self.core.manager.has_folder_intent(&uid))
         {
             ui.group(|ui| {

@@ -81,7 +81,7 @@ signing and other namespaces remain rejected. See [SSH agent requirements](ssh-a
 ## Verification
 
 Current verification (incoming sync, inline folder saves and Git SSH signing): `cargo test --workspace`
-passes 297 desktop tests plus one generator test (three desktop tests ignored).
+passes 300 desktop tests plus one generator test (three desktop tests ignored).
 `cargo clippy --workspace --all-targets` passes with existing warnings; the release
 workspace builds. The native Wayland settings-fit test also passes explicitly.
 Notification regressions use a disposable mandatory-mTLS WebSocket server and cover

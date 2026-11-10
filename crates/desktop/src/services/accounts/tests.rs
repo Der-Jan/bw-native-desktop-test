@@ -6658,3 +6658,80 @@ async fn inline_folder_changes_require_separate_write_confirmation_for_protected
     assert!(f.sync_response.lock().unwrap().1["ciphers"][0]["folderId"].is_null());
     assert!(core.editor.is_none());
 }
+
+#[tokio::test]
+async fn attachment_upload_over_ten_mb_creates_no_server_slot_or_pending_intent() {
+    use crate::services::sdk::attachments::{self, Operation};
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    let path = f.root.join("oversized-zero-fixture");
+    std::fs::File::create(&path)
+        .unwrap()
+        .set_len(attachments::MAX_UPLOAD as u64 + 1)
+        .unwrap();
+    let result = attachments::perform(
+        manager.client_for(&uid).unwrap(),
+        id,
+        Operation::Upload(path),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!result.applied);
+    assert!(result.report.problems.iter().any(|p| p.contains("10 MB")));
+    assert_eq!(attachment_posts(&f), 0);
+    assert!(!manager.has_attachment_intent(&uid));
+    assert!(f.attachment_files.lock().unwrap().is_empty());
+}
+#[tokio::test]
+async fn existing_attachment_over_ten_mb_can_still_be_downloaded() {
+    use crate::services::sdk::{
+        attachments::{self, Operation},
+        test_support::{
+            encrypted_legacy_attachment_bytes, encrypted_legacy_attachment_sync_response,
+        },
+        vault_sync,
+    };
+    let (f, manager, uid, _) = clean_remote_fixture().await;
+    let mut payload = encrypted_legacy_attachment_sync_response(&manager, uid).await;
+    let id = payload["ciphers"][0]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let plain = vec![42; attachments::MAX_UPLOAD + 1];
+    let encrypted = encrypted_legacy_attachment_bytes(&manager, uid, &plain);
+    payload["ciphers"][0]["attachments"][0]["url"] = serde_json::json!(format!(
+        "{}attachments/{id}/synthetic-v1-attachment?token=fixture",
+        f.profile.base
+    ));
+    payload["ciphers"][0]["attachments"][0]["size"] =
+        serde_json::json!(encrypted.len().to_string());
+    f.attachment_files.lock().unwrap().insert(
+        format!("/vault/attachments/{id}/synthetic-v1-attachment"),
+        encrypted,
+    );
+    *f.sync_response.lock().unwrap() = (200, payload);
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    let output = f.root.join("larger-existing-download");
+    let result = attachments::perform(
+        manager.client_for(&uid).unwrap(),
+        id,
+        Operation::Download {
+            id: "synthetic-v1-attachment".into(),
+            path: output.clone(),
+        },
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(result.applied, "{:?}", result.report.problems);
+    assert_eq!(std::fs::read(output).unwrap(), plain);
+}

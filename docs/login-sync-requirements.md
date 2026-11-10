@@ -355,7 +355,10 @@ requires item edit permission. It does not require permission to delete the item
 Uploads use Vaultwarden's v2 Direct metadata API and an encrypted multipart body.
 The SDK encrypts names, per-file keys and contents; plaintext source paths and
 contents are never persisted in the operation record. The source is a regular
-file (Unix symlinks are rejected), is left unchanged, and is limited to 500 MiB.
+file (Unix symlinks are rejected), is left unchanged, and uploads are limited to
+10 MB (10,000,000 bytes). The limit is enforced before SDK encryption or upload-slot
+creation and shown in the file picker and upload tooltip. Existing larger server
+attachments remain downloadable under the separate 500 MiB download safety cap.
 Encryption/decryption currently buffers the file in memory; streaming very large
 files is future work. Binary transfers have a 15-minute timeout and observe lock
 cancellation at 100 ms intervals. The per-account mutation coordinator serializes

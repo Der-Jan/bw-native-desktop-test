@@ -23,7 +23,10 @@ impl Core {
             async move {
                 match download {
                     None => rfd::AsyncFileDialog::new()
-                        .set_title("Attach file")
+                        .set_title(format!(
+                            "Attach file (maximum {})",
+                            attachments::UPLOAD_LIMIT_LABEL
+                        ))
                         .pick_file()
                         .await
                         .map(|file| Operation::Upload(file.path().into())),

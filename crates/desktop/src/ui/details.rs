@@ -320,7 +320,7 @@ impl Application {
                                 }
                             }
                         }
-                        if self.core.remote() {upload=ui.add_enabled(ready&&detail.edit&&!local_edit,egui::Button::new("Attach file…")).clicked();}
+                        if self.core.remote() {upload=ui.add_enabled(ready&&detail.edit&&!local_edit,egui::Button::new("Attach file…")).on_hover_text(format!("Maximum upload size: {}",crate::services::sdk::attachments::UPLOAD_LIMIT_LABEL)).clicked();}
                         if !ready && detail.deleted_date.is_none() {ui.weak("Attachment transfer or synchronization in progress…");}
                         if let Some(history) =
                             data["passwordHistory"].as_array().filter(|a| !a.is_empty())

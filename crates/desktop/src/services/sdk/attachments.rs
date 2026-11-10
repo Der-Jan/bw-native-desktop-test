@@ -18,8 +18,10 @@ use std::{
     time::{Duration, Instant},
 };
 use zeroize::Zeroizing;
-const MAX_FILE: usize = 500 * 1024 * 1024;
-const MAX_ENCRYPTED: usize = MAX_FILE + 1024;
+// Upload policy is deliberately smaller than the existing-download safety cap.
+pub const MAX_UPLOAD: usize = 10_000_000;
+pub const UPLOAD_LIMIT_LABEL: &str = "10 MB";
+const MAX_ENCRYPTED: usize = 500 * 1024 * 1024 + 1024;
 #[derive(Clone)]
 pub enum Operation {
     Upload(PathBuf),
@@ -268,15 +270,19 @@ fn read_source(path: &Path) -> Result<Zeroizing<Vec<u8>>, String> {
     let meta = file
         .metadata()
         .map_err(|_| "Could not inspect the selected file")?;
-    if !meta.is_file() || meta.len() > MAX_FILE as u64 {
-        return Err("Select a regular file no larger than 500 MiB".into());
+    if !meta.is_file() || meta.len() > MAX_UPLOAD as u64 {
+        return Err(format!(
+            "Select a regular file no larger than {UPLOAD_LIMIT_LABEL}"
+        ));
     }
     let mut contents = Zeroizing::new(Vec::new());
-    file.take((MAX_FILE + 1) as u64)
+    file.take((MAX_UPLOAD + 1) as u64)
         .read_to_end(&mut contents)
         .map_err(|_| "Could not read the selected file")?;
-    if contents.len() > MAX_FILE {
-        return Err("Attachment exceeds the 500 MiB limit".into());
+    if contents.len() > MAX_UPLOAD {
+        return Err(format!(
+            "Attachment exceeds the {UPLOAD_LIMIT_LABEL} upload limit"
+        ));
     }
     Ok(contents)
 }
@@ -646,5 +652,25 @@ impl SessionClient {
         let _lease = session.state.gate.write().await;
         session.ensure_unlocked()?;
         install_intent(&session, &session.state.client()?, None).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn source_accepts_ten_mb_and_rejects_one_byte_over_without_changing_file() {
+        let directory =
+            std::env::temp_dir().join(format!("bw-attachment-size-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("synthetic-zero-file");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_UPLOAD as u64).unwrap();
+        assert_eq!(read_source(&path).unwrap().len(), 10_000_000);
+        file.set_len(MAX_UPLOAD as u64 + 1).unwrap();
+        assert!(read_source(&path).unwrap_err().contains("10 MB"));
+        assert_eq!(file.metadata().unwrap().len(), MAX_UPLOAD as u64 + 1);
+        drop(file);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

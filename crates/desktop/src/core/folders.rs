@@ -7,7 +7,10 @@ impl Core {
         let Some(uid) = self.active.filter(|uid| self.manager.is_unlocked(uid)) else {
             return;
         };
-        if self.editor.is_some() || self.sync.get(&uid).is_some_and(|s| s.busy) {
+        if self.editor.is_some()
+            || self.detail_save.is_some()
+            || self.sync.get(&uid).is_some_and(|s| s.busy)
+        {
             self.notify(
                 "Finish the open edit or synchronization before managing folders.",
                 false,

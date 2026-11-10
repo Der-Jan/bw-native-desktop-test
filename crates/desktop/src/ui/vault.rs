@@ -40,7 +40,12 @@ impl Application {
             .resizable(true)
             .show(ui, |ui| {
                 egui::Frame::NONE
-                    .inner_margin(egui::Margin::symmetric(0, 8))
+                    .inner_margin(egui::Margin {
+                        top: 11,
+                        bottom: 5,
+                        left: 0,
+                        right: 0,
+                    })
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.add(

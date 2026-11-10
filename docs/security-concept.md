@@ -74,7 +74,7 @@ all allocator or widget copies. This remains a prototype under review.
 ## Verification
 
 Current verification (incoming WebSocket push and TLS/mTLS lifecycle): `cargo test --workspace`
-passes 288 desktop tests plus one generator test (three desktop tests ignored).
+passes 292 desktop tests plus one generator test (three desktop tests ignored).
 `cargo clippy --workspace --all-targets` passes with existing warnings; the release
 workspace builds. The native Wayland settings-fit test also passes explicitly.
 Notification regressions use a disposable mandatory-mTLS WebSocket server and cover

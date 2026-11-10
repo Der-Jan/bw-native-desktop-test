@@ -445,6 +445,13 @@ No real account is used by this harness.
 
 ## Implemented folder management
 
+The item-details Folder selector changes an entry's folder directly, including
+No folder, without opening the editor. It uses the same encrypted item save,
+revision checks and automatic outgoing sync as other edits. Read-only/trashed
+items, pending drafts and busy operations disable the selector. Protected items
+require a one-use write confirmation. Closing/navigating away from details while
+the save completes does not reopen or replace the newly selected entry.
+
 File → New folder and the sidebar's New folder action work for real accounts.
 Right-click an existing folder to rename, create a nested folder, or delete it.
 Native windows focus the name input; Enter submits creation/rename and Escape

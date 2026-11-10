@@ -116,6 +116,7 @@ impl Core {
             }
             if self.active == Some(uid)
                 && (self.editor.is_some()
+                    || self.detail_save.is_some()
                     || self.attachment_busy.is_some()
                     || self.folder_editor.is_some()
                     || self.prompt.is_some()

@@ -171,6 +171,9 @@ impl Application {
                             .map_or_else(|| "Unknown folder".to_owned(), |folder| folder.name.clone())
                     },
                 );
+                let mut selected_folder = detail.folder_id;
+                let can_change_folder = self.core.can_change_item_folder();
+                let folders: Vec<_> = self.core.current_cache().map(|c| c.folders.iter().map(|f| (f.id, f.name.clone())).collect()).unwrap_or_default();
                 let data = serde_json::to_value(detail).unwrap_or(Value::Null);
                 let uri_default=self.core.active.and_then(|uid|self.core.manager.policy_rules_for(&uid).uri_default);
                 let mut copy = None;
@@ -199,7 +202,18 @@ impl Application {
                         }
                         ui.horizontal_wrapped(|ui| {
                             ui.weak("Folder:");
-                            ui.label(&folder_name);
+                            ui.add_enabled_ui(can_change_folder, |ui| {
+                                egui::ComboBox::from_id_salt(("details-folder", id))
+                                    .width(ui.available_width().min(240.))
+                                    .truncate()
+                                    .selected_text(&folder_name)
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut selected_folder, None, super::labels::text("No folder"));
+                                        for (folder_id, name) in &folders {
+                                            ui.selectable_value(&mut selected_folder, Some(*folder_id), name);
+                                        }
+                                    });
+                            });
                         });
                         ui.horizontal_wrapped(|ui| {
                             edit = ui.add_enabled(detail.deleted_date.is_none() && detail.edit && detail.view_password && self.core.active.is_some_and(|uid|self.core.manager.policy_rules_for(&uid).allows_write(detail.r#type,detail.organization_id)), egui::Button::new(super::labels::text("Edit"))).clicked();
@@ -340,6 +354,8 @@ impl Application {
                             detail.revision_date.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M")
                         ));
                     });
+                let folder_changed = selected_folder != detail.folder_id;
+                if folder_changed { self.core.set_item_folder(selected_folder); }
                 if let Some(id) = id {
                     if let Some(field) = copy {
                         self.core.request(Request::Copy(id, field));

@@ -70,6 +70,51 @@ impl Core {
         self.detail_request = None;
         self.editor = None;
     }
+    pub fn can_change_item_folder(&self) -> bool {
+        let (Some(uid), Some(detail)) = (self.active, self.detail.as_ref()) else {
+            return false;
+        };
+        self.manager.is_unlocked(&uid)
+            && self.detail_open
+            && detail.id.is_some()
+            && detail.id == self.selected
+            && detail.deleted_date.is_none()
+            && detail.edit
+            && detail.view_password
+            && self
+                .manager
+                .policy_rules_for(&uid)
+                .allows_write(detail.r#type, detail.organization_id)
+            && self.editor.is_none()
+            && self.prompt.is_none()
+            && self.folder_editor.is_none()
+            && self.attachment_busy.is_none()
+            && self.detail_save.is_none()
+            && !self.sync.get(&uid).is_some_and(|s| s.busy)
+            && !self.manager.has_archive_intent(&uid)
+            && !self.manager.has_folder_intent(&uid)
+            && !detail
+                .id
+                .is_some_and(|id| self.manager.has_local_edit(&uid, id))
+    }
+    pub fn set_item_folder(&mut self, folder: Option<bitwarden_vault::FolderId>) {
+        if !self.can_change_item_folder() {
+            return;
+        }
+        if folder.is_some_and(|id| {
+            self.current_cache()
+                .is_none_or(|c| !c.folders.iter().any(|f| f.id == id))
+        }) {
+            self.notify("Folder no longer exists", true);
+            return;
+        }
+        let mut view = self.detail.as_ref().unwrap().clone();
+        if view.folder_id == folder {
+            return;
+        }
+        view.folder_id = folder;
+        self.request(Request::Save(Box::new(view)));
+    }
     pub fn navigate(&mut self, down: bool) {
         let Some(cache) = self.current_cache() else {
             return;
@@ -154,7 +199,7 @@ impl Core {
         let Some(scope) = self.scope() else {
             return;
         };
-        if self.sync.get(&scope.uid).is_some_and(|s| s.busy)
+        if (self.sync.get(&scope.uid).is_some_and(|s| s.busy) || self.detail_save.is_some())
             && matches!(
                 request.action(),
                 Action::Edit | Action::Write | Action::Delete | Action::Restore | Action::Archive
@@ -325,6 +370,9 @@ impl Core {
                 );
             }
             Request::Save(view) => {
+                let save_id = uuid::Uuid::new_v4();
+                self.detail_save = Some(save_id);
+                let detail_request = self.detail_request;
                 let editor_id = self.editor.as_ref().map(|e| e.id);
                 if let Some(editor) = self.editor.as_mut() {
                     editor.busy = true;
@@ -343,9 +391,17 @@ impl Core {
                         if !scope.current(core) {
                             return;
                         }
+                        if core.detail_save == Some(save_id) {
+                            core.detail_save = None;
+                        }
                         match result {
                             Ok(view) => {
-                                if core.editor.as_ref().map(|e| e.id) != editor_id {
+                                if core.editor.as_ref().map(|e| e.id) != editor_id
+                                    || (editor_id.is_none()
+                                        && (core.detail_request != detail_request
+                                            || core.selected != view.id
+                                            || !core.detail_open))
+                                {
                                     core.load_vault();
                                     return;
                                 }

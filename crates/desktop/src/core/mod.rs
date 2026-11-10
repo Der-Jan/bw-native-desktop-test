@@ -136,6 +136,7 @@ pub struct Core {
     pub detail: Option<bitwarden_vault::CipherView>,
     pub detail_open: bool,
     pub detail_request: Option<uuid::Uuid>,
+    pub detail_save: Option<uuid::Uuid>,
     pub(super) duplicate_request: Option<(uuid::Uuid, Arc<std::sync::atomic::AtomicBool>)>,
     pub editor: Option<Editor>,
     pub query: String,
@@ -226,6 +227,7 @@ impl Core {
             detail: None,
             detail_open: false,
             detail_request: None,
+            detail_save: None,
             duplicate_request: None,
             editor: None,
             query: String::new(),
@@ -388,6 +390,7 @@ impl Core {
         self.detail = None;
         self.detail_open = false;
         self.detail_request = None;
+        self.detail_save = None;
         self.editor = None;
         self.generator.clear();
         if let Some(uid) = self.active {

@@ -3437,7 +3437,8 @@ async fn save_automatically(core: &mut crate::core::Core, id: bitwarden_vault::C
 async fn finish_automatic_sync(core: &mut crate::core::Core, uid: crate::domain::UserId) {
     for _ in 0..400 {
         core.poll();
-        if core.sync.get(&uid).is_some_and(|state| !state.busy)
+        if core.detail_save.is_none()
+            && core.sync.get(&uid).is_some_and(|state| !state.busy)
             && (core.active != Some(uid)
                 || (core.current_cache().is_some() && (!core.detail_open || core.detail.is_some())))
         {
@@ -6525,4 +6526,135 @@ async fn incoming_sync_does_not_poll_periodically_but_focus_still_checks() {
     core.check_incoming_now();
     finish_incoming(&mut core).await;
     assert_eq!(f.requests.lock().unwrap().len(), requests + 1);
+}
+
+async fn show_item_details(core: &mut crate::core::Core, id: bitwarden_vault::CipherId) {
+    core.request(crate::core::model::Request::Read(id));
+    for _ in 0..200 {
+        core.poll();
+        if core.detail.as_ref().is_some_and(|v| v.id == Some(id)) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    panic!("Item details did not load");
+}
+#[tokio::test]
+async fn inline_folder_changes_save_and_sync_without_editor_and_preserve_other_fields() {
+    use crate::services::sdk::ClientExt;
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    let mut core = core_for_automatic_save(manager).await;
+    show_item_details(&mut core, id).await;
+    let original = core.detail.as_ref().unwrap().clone();
+    let epoch = core.list_epoch;
+    assert!(original.folder_id.is_some());
+    assert!(core.can_change_item_folder());
+    core.set_item_folder(None);
+    assert!(core.editor.is_none());
+    assert!(!core.can_change_item_folder());
+    finish_automatic_sync(&mut core, uid).await;
+    assert_eq!(put_count(&f), 1);
+    assert_eq!(core.list_epoch, epoch);
+    assert_eq!(core.selected, Some(id));
+    assert!(core.detail.as_ref().unwrap().folder_id.is_none());
+    assert!(core.can_change_item_folder());
+    core.set_item_folder(original.folder_id);
+    finish_automatic_sync(&mut core, uid).await;
+    assert_eq!(put_count(&f), 2);
+    let view = core
+        .manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    assert_eq!(view.folder_id, original.folder_id);
+    assert_eq!(view.name, original.name);
+    assert_eq!(
+        view.login.as_ref().unwrap().username,
+        original.login.as_ref().unwrap().username
+    );
+    assert_eq!(
+        view.login.as_ref().unwrap().password,
+        original.login.as_ref().unwrap().password
+    );
+    assert_eq!(core.manager.local_edit_count(&uid), 0);
+    assert!(core.editor.is_none());
+}
+#[tokio::test]
+async fn inline_folder_changes_reject_missing_folders_read_only_trash_and_pending_drafts() {
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    let mut core = core_for_automatic_save(manager).await;
+    show_item_details(&mut core, id).await;
+    core.set_item_folder(Some(bitwarden_vault::FolderId::new_v4()));
+    assert!(core.detail_save.is_none());
+    core.detail.as_mut().unwrap().edit = false;
+    assert!(!core.can_change_item_folder());
+    core.set_item_folder(None);
+    core.detail.as_mut().unwrap().edit = true;
+    core.detail.as_mut().unwrap().deleted_date = Some(chrono::Utc::now());
+    assert!(!core.can_change_item_folder());
+    core.set_item_folder(None);
+    assert!(core.detail_save.is_none());
+    assert_eq!(put_count(&f), 0);
+    assert_eq!(core.manager.local_edit_count(&uid), 0);
+    let (f, manager, uid, id) = staged_write_fixture().await;
+    let mut core = core_for_automatic_save(manager).await;
+    show_item_details(&mut core, id).await;
+    assert!(!core.can_change_item_folder());
+    core.set_item_folder(None);
+    assert!(core.detail_save.is_none());
+    assert_eq!(put_count(&f), 0);
+    assert_eq!(core.manager.local_edit_count(&uid), 1);
+}
+#[tokio::test]
+async fn inline_folder_save_finishing_after_details_close_does_not_reopen_them() {
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    let mut core = core_for_automatic_save(manager).await;
+    show_item_details(&mut core, id).await;
+    core.set_item_folder(None);
+    core.close_details();
+    finish_automatic_sync(&mut core, uid).await;
+    assert_eq!(put_count(&f), 1);
+    assert!(!core.detail_open);
+    assert!(core.detail.is_none());
+    assert!(core.editor.is_none());
+}
+#[tokio::test]
+async fn inline_folder_changes_require_separate_write_confirmation_for_protected_items() {
+    use crate::services::sdk::vault_sync;
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    f.sync_response.lock().unwrap().1["ciphers"][0]["reprompt"] = serde_json::json!(1);
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    let mut core = core_for_automatic_save(manager).await;
+    core.request(crate::core::model::Request::Read(id));
+    assert!(core.prompt.is_some());
+    core.confirm_password(Zeroizing::new("synthetic-password".into()));
+    for _ in 0..300 {
+        core.poll();
+        if core.detail.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(core.detail.is_some());
+    core.set_item_folder(None);
+    assert!(core.prompt.is_some());
+    assert_eq!(put_count(&f), 0);
+    assert_eq!(core.manager.local_edit_count(&uid), 0);
+    core.cancel_prompt();
+    assert!(core.detail.as_ref().unwrap().folder_id.is_some());
+    core.set_item_folder(None);
+    assert!(core.prompt.is_some());
+    core.confirm_password(Zeroizing::new("synthetic-password".into()));
+    finish_automatic_sync(&mut core, uid).await;
+    assert_eq!(put_count(&f), 1);
+    assert!(f.sync_response.lock().unwrap().1["ciphers"][0]["folderId"].is_null());
+    assert!(core.editor.is_none());
 }

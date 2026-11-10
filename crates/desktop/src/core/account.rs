@@ -378,7 +378,9 @@ impl Core {
             }
             if self.sync.get(&uid).is_some_and(|s| s.busy)
                 || (self.active == Some(uid)
-                    && (self.editor.is_some() || self.folder_editor.is_some()))
+                    && (self.editor.is_some()
+                        || self.detail_save.is_some()
+                        || self.folder_editor.is_some()))
             {
                 self.saved_uploads.insert(uid);
                 continue;
@@ -418,9 +420,19 @@ impl Core {
         self.sync_account_inner(uid, upload, false);
     }
     fn sync_account_inner(&mut self, uid: UserId, upload: bool, quiet: bool) {
+        if self.active == Some(uid) && self.detail_save.is_some() {
+            if !quiet {
+                self.notify(
+                    "Wait for the item save to finish before synchronizing.",
+                    false,
+                );
+            }
+            return;
+        }
         if quiet
             && self.active == Some(uid)
             && (self.prompt.is_some()
+                || self.detail_save.is_some()
                 || self.settings_open
                 || self.attachment_busy.is_some()
                 || self.profile_busy)

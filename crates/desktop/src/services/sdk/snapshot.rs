@@ -35,6 +35,8 @@ pub(super) struct Persisted {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archive_intent: Option<super::archive::Intent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement_intent: Option<super::placement::Intent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachment_intent: Option<super::attachments::Intent>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub created_ids: Vec<(bitwarden_vault::CipherId, bitwarden_vault::CipherId)>,
@@ -93,6 +95,7 @@ impl Snapshot {
                 folder_intent: None,
                 server_revision: None,
                 archive_intent: None,
+                placement_intent: None,
                 attachment_intent: None,
                 created_ids: Vec::new(),
             },
@@ -324,6 +327,8 @@ impl Snapshot {
                     id: view.id.ok_or("Sammlungs-ID fehlt")?,
                     organization_id: view.organization_id,
                     name: view.name,
+                    read_only: view.read_only,
+                    hide_passwords: view.hide_passwords,
                 })
             })
             .collect()

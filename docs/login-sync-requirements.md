@@ -135,7 +135,7 @@ without replacing the previous snapshot. Legacy organization collections without
 keys and validates the derived list. SDK field decryption retains its upstream
 lenient behavior for some legacy cipher fields; this is not a strict cryptographic
 audit of every field. Remote cipher editing enables strict field decryption;
-ownership/type changes stay disabled. Attachment mutations use their own fresh-permission checks and encrypted operation record, described below.
+type changes stay disabled; ownership/collection changes use a separate online flow below. Attachment mutations use their own fresh-permission checks and encrypted operation record, described below.
 
 Client-managed read-only repository adapters expose ciphers and folders from one
 shared immutable snapshot Arc. This is an index over the SDK-SQLite snapshot,
@@ -276,7 +276,7 @@ the local ID is mapped to the server ID, and selection stays on the new entry.
 Exact ciphertext matching during read-after-write also resolves a lost response
 without another POST. An uncertain create is retained for explicit review/save or
 discard, never blindly repeated on a timer or restart. Drafts remain encrypted
-and visible offline. Existing-item ownership/type transfers remain deferred.
+and visible offline. Existing-item type changes remain deferred; personal-to-organization transfers use the dedicated flow below.
 
 ## Implemented archive and unarchive
 
@@ -445,6 +445,49 @@ Automatic-save integration tests also cover successful upload, failures without
 retry loops, retained conflicts, switching away during save, preserved search and
 selection/details, and protected entries remaining hidden after revision changes.
 No real account is used by this harness.
+
+## Implemented organizations and item collection assignments
+
+Item details → **Vault / collections…** opens a native dialog. Personal items can
+move into an eligible confirmed organization with a loaded key and a writable,
+visible-password collection. The user selects collections and explicitly acknowledges
+ownership transfer. Cancel initially has focus; no transfer is submitted merely by
+opening the dialog or pressing Enter. Organization-owned entries stay in their
+organization and can change collection assignments. Existing read-only/hidden-password
+assignments are preserved; the user cannot add/remove those assignments. At least
+one writable collection must remain selected. Organization creation, membership,
+collection CRUD/access administration and moving between organizations/back to a
+personal vault remain web-vault tasks.
+
+These are separate online operations, not ordinary content drafts: personal transfer
+uses `PUT /ciphers/<id>/share` with the SDK-reencrypted cipher and collection IDs;
+collection membership uses `PUT /ciphers/<id>/collections` with IDs only. Both routes
+exist in audited Vaultwarden 1.37.5 and main. The account TLS/mTLS transport and
+protected-action gate apply. Fresh preflight checks the source revision, ciphertext,
+ownership, existing collections and reprompt; target membership, keys, collection
+permissions and current policies are checked again immediately before sending.
+A policy forbidding personal ownership does not prevent moving an existing personal
+item into an eligible organization. Ordinary edits remain subject to that policy.
+
+The SDK moves/decrypts/encrypts the item and rewraps per-item/attachment metadata keys;
+file bytes and private keys never leave the SDK boundary as unencrypted transport
+data. Incomplete decryption and legacy attachments missing keys fail before dispatch
+and require upgrading in the web vault. Modern attachments remain downloadable after
+transfer without reuploading file contents.
+
+A durable encrypted sharing/membership intent is committed before HTTP. Only a full
+server read confirming ownership, collection membership, and for transfers the exact
+encrypted content clears it. No response or mutation retry is trusted blindly, even
+on a 4xx: Vaultwarden's collection changes are not transactional. Manual Synchronize
+reconciles but never replays a sharing request. Pending records survive lock/restart,
+block other mutations/signing of that item, and expose Check server / explicitly
+confirmed Dismiss local record actions. Dismiss does not undo server changes. Normal
+cache refresh preserves list position and applies current access permissions. Open
+placement dialogs defer incoming replacement; lock/account switching clears them.
+
+The collection endpoint has no conditional revision parameter. Preflight cannot
+eliminate a change racing its update; fresh read reconciliation and conservative
+uncertain-operation handling limit the consequences without claiming atomic CAS.
 
 ## Implemented folder management
 

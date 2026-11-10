@@ -42,7 +42,7 @@ the first runtime/session and demo-storage slice is implemented; remaining work 
 - **Remaining login challenges and encrypted sync** `[L]` — password/TOTP/email
   login, OS-protected tokens and full read-sync snapshots are wired; unsupported
   challenges fail explicitly. Remaining sync work includes complete key migrations, item
-  permanent deletion, ownership/sharing transfers and Send.
+  permanent deletion, organization/collection administration, moves between organizations and Send.
   Incoming WebSocket push with focus/reconnect revision checks (no periodic polling), new-item
   creation with server-ID reconciliation and SDK-encrypted attachment transfers
   now work through the account-scoped TLS/mTLS transport. Archive/unarchive also
@@ -50,6 +50,7 @@ the first runtime/session and demo-storage slice is implemented; remaining work 
   Trash/Restore are also synchronized with fresh permissions, a durable lifecycle
   intent and safe lost-reply recovery. Same-account refresh preserves list position. Uploads are bounded
   in-memory operations; automatic offline file resumption is deferred.
+  Personal-to-organization moves and existing-item collection assignments now use a separate online flow with SDK re-encryption, fresh permissions, explicit transfer confirmation and durable read-only recovery.
   Folder create/rename/delete now use encrypted, account-scoped requests with
   durable intent, read-after-write reconciliation and preserved entries/drafts.
   Existing-entry update sync is implemented: automatic uploads after Save, manual

@@ -39,6 +39,7 @@ pub mod incoming;
 mod loader;
 mod local_edits;
 pub mod notifications;
+pub mod placement;
 pub mod policies;
 pub mod production;
 pub mod refresh;
@@ -338,6 +339,39 @@ impl ClientManager {
                     .map(|(_, server)| *server)
             })
             .unwrap_or(id)
+    }
+    pub fn has_placement_intent(&self, uid: &UserId) -> bool {
+        self.users
+            .get(uid)
+            .and_then(|u| u.session.snapshot.current())
+            .is_some_and(|s| s.persisted.placement_intent.is_some())
+    }
+    pub fn placement_organizations(
+        &self,
+        uid: &UserId,
+        id: bitwarden_vault::CipherId,
+    ) -> Vec<Organization> {
+        let Some(snapshot) = self
+            .users
+            .get(uid)
+            .and_then(|u| u.session.snapshot.current())
+        else {
+            return Vec::new();
+        };
+        let Some(cipher) = snapshot.ciphers.get(&id.to_string()) else {
+            return Vec::new();
+        };
+        snapshot
+            .organizations
+            .iter()
+            .filter(|org| {
+                cipher
+                    .organization_id
+                    .is_none_or(|current| current == org.id)
+                    && placement::organization_allowed(&snapshot, cipher, org.id)
+            })
+            .cloned()
+            .collect()
     }
     pub fn has_archive_intent(&self, uid: &UserId) -> bool {
         self.users

@@ -298,6 +298,14 @@ pub async fn perform(
     let exclusive = session.state.gate.write().await;
     session.ensure_unlocked()?;
     let client = session.state.client()?;
+    if session
+        .state
+        .snapshot
+        .current()
+        .is_some_and(|s| super::placement::pending(&s, cipher_id))
+    {
+        return Err("Resolve this item's unconfirmed organization/collection change before transferring attachments".into());
+    }
     let operation_id = uuid::Uuid::new_v4();
     let mutating = !matches!(&operation, Operation::Download { .. });
     let action = if matches!(&operation, Operation::Download { .. }) {

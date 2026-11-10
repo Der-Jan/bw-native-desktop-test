@@ -178,6 +178,7 @@ impl Application {
                 let uri_default=self.core.active.and_then(|uid|self.core.manager.policy_rules_for(&uid).uri_default);
                 let mut copy = None;
                 let mut edit = false;
+                let mut placement = false;
                 let mut delete = false;
                 let mut restore = false;
                 let mut archive = false;
@@ -224,6 +225,9 @@ impl Application {
                                 delete = ui.add_enabled(change_ready && detail.edit && detail.permissions.as_ref().is_none_or(|p|p.delete),egui::Button::new("Move to trash")).on_hover_text("Move this entry to Trash. It can be restored until the server purges it.").clicked();
                             }
                             archive = ui.add_enabled(self.core.remote() && detail.deleted_date.is_none() && !local_edit && !self.core.active.is_some_and(|uid| self.core.sync.get(&uid).is_some_and(|s|s.busy) || self.core.manager.has_archive_intent(&uid)), egui::Button::new(if detail.archived_date.is_some() {"Unarchive"} else {"Archive"})).on_hover_text("Change this entry's archive state on the server").clicked();
+                            if self.core.remote() {
+                                placement = ui.add_enabled(change_ready && detail.deleted_date.is_none() && detail.edit && detail.view_password && !self.core.active.is_some_and(|uid|self.core.manager.has_placement_intent(&uid)),egui::Button::new("Vault / collections…")).clicked();
+                            }
                             ui.checkbox(&mut self.reveal, super::labels::text("Reveal secrets"));
                         });
                         if local_edit {
@@ -304,7 +308,7 @@ impl Application {
                             }
                         }
                         ui.separator();ui.strong("Attachments");
-                        let ready=detail.deleted_date.is_none() && self.core.attachment_busy.is_none() && !self.core.active.is_some_and(|uid|self.core.sync.get(&uid).is_some_and(|s|s.busy));
+                        let ready=detail.deleted_date.is_none() && self.core.placement_editor.is_none() && self.core.attachment_busy.is_none() && !self.core.active.is_some_and(|uid|self.core.sync.get(&uid).is_some_and(|s|s.busy));
                         if let Some(attachments)=data["attachments"].as_array() {
                             for a in attachments {
                                 let name=a["fileName"].as_str().unwrap_or("Attachment");
@@ -356,6 +360,7 @@ impl Application {
                     });
                 let folder_changed = selected_folder != detail.folder_id;
                 if folder_changed { self.core.set_item_folder(selected_folder); }
+                if placement { self.core.open_placement(); }
                 if let Some(id) = id {
                     if let Some(field) = copy {
                         self.core.request(Request::Copy(id, field));
@@ -480,7 +485,16 @@ impl Application {
                                     {
                                         let value = json!(collection.id);
                                         let mut selected = ids.contains(&value);
-                                        if ui.checkbox(&mut selected, &collection.name).changed() {
+                                        if ui
+                                            .add_enabled(
+                                                !collection.read_only && !collection.hide_passwords,
+                                                egui::Checkbox::new(
+                                                    &mut selected,
+                                                    &collection.name,
+                                                ),
+                                            )
+                                            .changed()
+                                        {
                                             if selected {
                                                 ids.push(value);
                                             } else {

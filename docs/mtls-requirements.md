@@ -62,7 +62,7 @@ accounts sharing a host. Allowed HTTPS origins include the port; base paths surv
 endpoint resolution. Discovery cannot expand permission. All redirects are blocked.
 The same client identity covers config, prelogin, token/2FA, profile and explicit
 probe/refresh, authenticated notification upgrades, revision polling, full read-sync, item POST/PUT (including archive/unarchive and soft delete/restore), attachment metadata/
-multipart transfers and folder POST/PUT/DELETE requests. Signed attachment file
+multipart transfers, item organization sharing/collection PUTs and folder POST/PUT/DELETE requests. Signed attachment file
 GETs use the same TLS/mTLS identity without an OAuth bearer token. Only the
 account base origin and exact attachment path are accepted, including subpaths;
 external storage and redirects are rejected. Downloads recheck the transport

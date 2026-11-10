@@ -88,11 +88,13 @@ impl Core {
             && self.editor.is_none()
             && self.prompt.is_none()
             && self.folder_editor.is_none()
+            && self.placement_editor.is_none()
             && self.attachment_busy.is_none()
             && self.detail_save.is_none()
             && !self.sync.get(&uid).is_some_and(|s| s.busy)
             && !self.manager.has_archive_intent(&uid)
             && !self.manager.has_folder_intent(&uid)
+            && !self.manager.has_placement_intent(&uid)
             && !detail
                 .id
                 .is_some_and(|id| self.manager.has_local_edit(&uid, id))
@@ -369,6 +371,11 @@ impl Core {
                     },
                 );
             }
+            Request::Placement {
+                cipher,
+                organization,
+                collections,
+            } => self.execute_placement(scope, client, cipher, organization, collections),
             Request::Save(view) => {
                 let save_id = uuid::Uuid::new_v4();
                 self.detail_save = Some(save_id);
@@ -507,7 +514,7 @@ impl Core {
         if self
             .active
             .is_some_and(|uid| self.sync.get(&uid).is_some_and(|s| s.busy))
-            || self.folder_editor.is_some()
+            || (self.folder_editor.is_some() || self.placement_editor.is_some())
         {
             self.notify(
                 "Wait for synchronization or close the folder dialog before creating an entry.",

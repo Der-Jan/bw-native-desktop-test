@@ -68,6 +68,7 @@ impl Application {
             self.core.fingerprint_open = open;
         }
         self.folder_dialog(ctx);
+        self.placement_dialog(ctx);
         if self.core.export_open {
             self.export(ctx);
         }
@@ -791,6 +792,87 @@ impl Application {
             self.core.folder_editor = None;
         } else if submit {
             self.core.submit_folder();
+        }
+    }
+}
+
+impl Application {
+    fn placement_dialog(&mut self, ctx: &egui::Context) {
+        let Some(editor) = self.core.placement_editor.as_ref() else {
+            if let Some(id) = self.placement_seen.take() {
+                ctx.send_viewport_cmd_to(
+                    egui::ViewportId::from_hash_of(("placement", id)),
+                    egui::ViewportCommand::Close,
+                );
+            }
+            return;
+        };
+        let id = editor.id;
+        let cipher = editor.cipher;
+        let fresh = self.placement_seen != Some(id);
+        self.placement_seen = Some(id);
+        let Some(uid) = self.core.active else {
+            return;
+        };
+        let organizations = self.core.manager.placement_organizations(&uid, cipher);
+        let collections = self
+            .core
+            .current_cache()
+            .map(|c| c.collections.clone())
+            .unwrap_or_default();
+        let prompt_open = self.core.prompt.is_some();
+        let mut submit = false;
+        let mut cancel = false;
+        ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(("placement",id)),egui::ViewportBuilder::default()
+            .with_title("Vault and collections").with_app_id(crate::assets::DESKTOP_APP_ID)
+            .with_icon(crate::assets::window_icon().unwrap_or_default()).with_inner_size([560.,500.]).with_min_inner_size([420.,360.]).with_active(fresh),|ui,_| {
+            if fresh {ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);}
+            cancel=ui.input(|i|i.viewport().close_requested()||i.key_pressed(Key::Escape));
+            egui::CentralPanel::default().show(ui,|ui|{
+                egui::ScrollArea::vertical().show(ui,|ui|{
+                let Some(editor)=self.core.placement_editor.as_mut() else{return;};
+                ui.heading("Vault and collections");
+                ui.add_enabled_ui(!editor.busy && !prompt_open,|ui|{
+                    if let Some(org)=editor.original_organization {
+                        ui.label(format!("Organization: {}",organizations.iter().find(|o|o.id==org).map_or("Unavailable organization",|o|o.name.as_str())));
+                        ui.weak("Organization-owned items stay in their organization.");
+                    } else {
+                        let before=editor.organization;
+                        egui::ComboBox::from_id_salt("placement-org").selected_text(organizations.iter().find(|o|Some(o.id)==editor.organization).map_or("Choose organization…",|o|o.name.as_str()))
+                            .show_ui(ui,|ui|{for org in &organizations {ui.selectable_value(&mut editor.organization,Some(org.id),&org.name);}});
+                        if before!=editor.organization {editor.collections.clear();editor.acknowledged=false;}
+                        ui.label("Moving this item transfers ownership to the organization. Other members may gain access. You cannot move it back to My vault using this app.");
+                    }
+                    ui.label("Collections");
+                    egui::ScrollArea::vertical().max_height(180.).show(ui,|ui|{
+                        let mut found=false;
+                        for collection in collections.iter().filter(|c|Some(c.organization_id)==editor.organization) {
+                            found=true;
+                            let mut selected=editor.collections.contains(&collection.id);
+                            if ui.add_enabled(!collection.read_only&&!collection.hide_passwords,egui::Checkbox::new(&mut selected,&collection.name))
+                                .on_disabled_hover_text("This collection assignment cannot be changed with your permissions").changed() {
+                                if selected {editor.collections.push(collection.id);} else {editor.collections.retain(|id|*id!=collection.id);}
+                            }
+                        }
+                        if !found {ui.weak("No available collections. Check organization access in the web vault, then synchronize.");}
+                    });
+                    if editor.original_organization.is_none() {ui.checkbox(&mut editor.acknowledged,"I understand that ownership will be transferred to the organization");}
+                    if let Some(error)=&editor.error {ui.colored_label(ui.visuals().error_fg_color,error);}
+                    ui.horizontal(|ui|{
+                        let response=ui.button("Cancel"); if fresh {response.request_focus();} cancel|=response.clicked();
+                        let ready=editor.organization.is_some()&&!editor.collections.is_empty()&&(editor.original_organization.is_some()||editor.acknowledged);
+                        submit|=ui.add_enabled(ready,egui::Button::new(if editor.original_organization.is_none(){"Move to organization"}else{"Save collections"})).clicked();
+                    });
+                });
+                if editor.busy {ui.horizontal(|ui|{ui.spinner();ui.label("Synchronizing vault and collections…");});}
+                });
+            });
+        });
+        if cancel {
+            self.core.placement_editor = None;
+            self.core.cancel_prompt();
+        } else if submit {
+            self.core.submit_placement();
         }
     }
 }

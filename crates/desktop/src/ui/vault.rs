@@ -429,6 +429,22 @@ impl Application {
         if self
             .core
             .active
+            .is_some_and(|uid| self.core.manager.has_placement_intent(&uid))
+        {
+            ui.group(|ui| {
+                ui.label("An organization/collection change is awaiting confirmation. It will not be repeated automatically.");
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Check server").clicked() { self.core.check_folder_outcome(); }
+                    ui.menu_button("Dismiss local record…",|ui| {
+                        ui.label("This clears only the local record. It does not undo sharing or collection changes on the server.");
+                        if ui.button("Confirm dismiss").clicked() { self.core.dismiss_placement_intent(); ui.close(); }
+                    });
+                });
+            });
+        }
+        if self
+            .core
+            .active
             .is_some_and(|uid| self.core.manager.has_archive_intent(&uid))
         {
             ui.group(|ui| {

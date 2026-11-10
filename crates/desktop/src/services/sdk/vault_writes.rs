@@ -95,6 +95,11 @@ pub(super) fn reconcile(
         .folder_intent
         .clone()
         .filter(|intent| !intent.confirmed(&fresh));
+    persisted.placement_intent = old
+        .persisted
+        .placement_intent
+        .clone()
+        .filter(|i| !i.confirmed(&fresh));
     persisted.archive_intent = old
         .persisted
         .archive_intent

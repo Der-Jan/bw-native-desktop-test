@@ -78,10 +78,18 @@ connections cannot request Git signatures. Payloads carry hashes rather than ful
 commits, so approval does not attest a repository or caller identity. Generic
 signing and other namespaces remain rejected. See [SSH agent requirements](ssh-agent-requirements.md).
 
+Organization transfer and collection assignment use a separate online mutation
+boundary with explicit transfer acknowledgement, one-use write authorization,
+fresh source/target checks, SDK key rewrapping and encrypted durable intent. Full
+reads reconcile lost replies; failed/unknown requests are never automatically
+replayed. Known incomplete/legacy attachments cannot be moved unsafely. Organization
+administration, collection CRUD and moves between organizations remain outside
+this implementation. See [organization/collection flow](login-sync-requirements.md#implemented-organizations-and-item-collection-assignments).
+
 ## Verification
 
 Current verification (incoming sync, inline folder saves and Git SSH signing): `cargo test --workspace`
-passes 300 desktop tests plus one generator test (three desktop tests ignored).
+passes 308 desktop tests plus one generator test (three desktop tests ignored).
 `cargo clippy --workspace --all-targets` passes with existing warnings; the release
 workspace builds. The native Wayland settings-fit test also passes explicitly.
 Notification regressions use a disposable mandatory-mTLS WebSocket server and cover

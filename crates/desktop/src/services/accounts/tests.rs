@@ -118,6 +118,7 @@ struct Fixture {
     folder_mode: Arc<std::sync::atomic::AtomicU8>,
     attachment_mode: Arc<std::sync::atomic::AtomicU8>,
     archive_mode: Arc<std::sync::atomic::AtomicU8>,
+    placement_mode: Arc<std::sync::atomic::AtomicU8>,
     attachment_files: Arc<Mutex<std::collections::HashMap<String, Vec<u8>>>>,
     revision_override: Arc<Mutex<Option<i64>>>,
     notification_mode: Arc<std::sync::atomic::AtomicU8>,
@@ -176,6 +177,8 @@ impl Fixture {
         let server_write_mode = write_mode.clone();
         let folder_mode = Arc::new(std::sync::atomic::AtomicU8::new(1));
         let server_folder_mode = folder_mode.clone();
+        let placement_mode = Arc::new(std::sync::atomic::AtomicU8::new(1));
+        let server_placement_mode = placement_mode.clone();
         let archive_mode = Arc::new(std::sync::atomic::AtomicU8::new(1));
         let server_archive_mode = archive_mode.clone();
         let attachment_mode = Arc::new(std::sync::atomic::AtomicU8::new(1));
@@ -657,6 +660,100 @@ impl Fixture {
                     let _ = stream.write_all(body.as_bytes());
                     continue;
                 }
+                if verb == "PUT"
+                    && path.starts_with("/vault/api/ciphers/")
+                    && (path.ends_with("/share") || path.ends_with("/collections"))
+                {
+                    let mode = server_placement_mode.load(Ordering::SeqCst);
+                    if mode == 3 {
+                        continue;
+                    }
+                    if mode == 6 {
+                        std::thread::sleep(std::time::Duration::from_millis(400));
+                    }
+                    let request: serde_json::Value =
+                        serde_json::from_str(req.split_once("\r\n\r\n").unwrap().1).unwrap();
+                    let id = path
+                        .strip_prefix("/vault/api/ciphers/")
+                        .unwrap()
+                        .split('/')
+                        .next()
+                        .unwrap();
+                    let mut sync = sync_payload.lock().unwrap();
+                    let cipher = sync.1["ciphers"]
+                        .as_array_mut()
+                        .unwrap()
+                        .iter_mut()
+                        .find(|c| c["id"].as_str() == Some(id))
+                        .unwrap();
+                    let status = if mode == 4 { "403 Forbidden" } else { "200 OK" };
+                    if mode != 4 && mode != 5 {
+                        if path.ends_with("/share") {
+                            let data = &request["cipher"];
+                            assert_eq!(
+                                chrono::DateTime::parse_from_rfc3339(
+                                    data["lastKnownRevisionDate"].as_str().unwrap()
+                                )
+                                .unwrap(),
+                                chrono::DateTime::parse_from_rfc3339(
+                                    cipher["revisionDate"].as_str().unwrap()
+                                )
+                                .unwrap()
+                            );
+                            for key in [
+                                "name",
+                                "notes",
+                                "fields",
+                                "login",
+                                "card",
+                                "identity",
+                                "secureNote",
+                                "sshKey",
+                                "bankAccount",
+                                "driversLicense",
+                                "passport",
+                                "favorite",
+                                "reprompt",
+                                "folderId",
+                                "key",
+                                "passwordHistory",
+                                "type",
+                                "organizationId",
+                                "archivedDate",
+                            ] {
+                                cipher[key] = data[key].clone();
+                            }
+                            if let Some(updates) = data["attachments2"].as_object() {
+                                for file in
+                                    cipher["attachments"].as_array_mut().into_iter().flatten()
+                                {
+                                    if let Some(update) =
+                                        file["id"].as_str().and_then(|id| updates.get(id))
+                                    {
+                                        file["key"] = update["key"].clone();
+                                        file["fileName"] = update["fileName"].clone();
+                                    }
+                                }
+                            }
+                            cipher["revisionDate"] = serde_json::json!(
+                                (chrono::DateTime::parse_from_rfc3339(
+                                    cipher["revisionDate"].as_str().unwrap()
+                                )
+                                .unwrap()
+                                    + chrono::Duration::seconds(2))
+                                .to_rfc3339()
+                            );
+                        }
+                        cipher["collectionIds"] = request["collectionIds"].clone();
+                        cipher["edit"] = serde_json::json!(true);
+                    }
+                    if mode == 2 {
+                        continue;
+                    }
+                    let body = cipher.to_string();
+                    let _=stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes());
+                    continue;
+                }
                 if first.starts_with("PUT /vault/api/ciphers/") {
                     let mode = server_write_mode.load(Ordering::SeqCst);
                     let body: serde_json::Value =
@@ -904,6 +1001,7 @@ impl Fixture {
             folder_mode,
             attachment_mode,
             archive_mode,
+            placement_mode,
             attachment_files,
             revision_override,
         }
@@ -6734,4 +6832,500 @@ async fn existing_attachment_over_ten_mb_can_still_be_downloaded() {
     .unwrap();
     assert!(result.applied, "{:?}", result.report.problems);
     assert_eq!(std::fs::read(output).unwrap(), plain);
+}
+
+async fn placement_fixture() -> (
+    Fixture,
+    crate::services::sdk::ClientManager,
+    crate::domain::UserId,
+    bitwarden_vault::CipherId,
+    bitwarden_vault::CipherId,
+    bitwarden_core::OrganizationId,
+    Vec<bitwarden_collections::collection::CollectionId>,
+) {
+    use crate::services::sdk::{
+        test_support::{encrypted_org_sync_response, encrypted_sync_response},
+        vault_sync,
+    };
+    let f = Fixture::new();
+    let (manager, uid) = f.account().await;
+    let personal = encrypted_sync_response(&manager, uid, "Personal share fixture").await;
+    let personal_id = personal["ciphers"][0]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let (mut payload, org, org_id) = encrypted_org_sync_response(&manager, uid).await;
+    payload["ciphers"][0]["edit"] = serde_json::json!(true);
+    payload["ciphers"]
+        .as_array_mut()
+        .unwrap()
+        .push(personal["ciphers"][0].clone());
+    payload["folders"] = personal["folders"].clone();
+    payload["collections"][0]["readOnly"] = serde_json::json!(false);
+    let first = payload["collections"][0]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let mut second = payload["collections"][0].clone();
+    let second_id = bitwarden_collections::collection::CollectionId::new_v4();
+    second["id"] = serde_json::json!(second_id);
+    payload["collections"].as_array_mut().unwrap().push(second);
+    *f.sync_response.lock().unwrap() = (200, payload);
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    (
+        f,
+        manager,
+        uid,
+        personal_id,
+        org_id,
+        org,
+        vec![first, second_id],
+    )
+}
+fn placement_writes(f: &Fixture) -> usize {
+    f.requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(r, _)| {
+            r.starts_with("PUT /vault/api/ciphers/")
+                && (r.lines().next().unwrap().contains("/share ")
+                    || r.lines().next().unwrap().contains("/collections "))
+        })
+        .count()
+}
+#[tokio::test]
+async fn placement_moves_personal_item_with_sdk_crypto_and_updates_org_collections() {
+    use crate::services::sdk::{ClientExt, placement};
+    let (f, manager, uid, personal, org_item, org, ids) = placement_fixture().await;
+    crate::services::sdk::test_support::retain_sync_gui_fixture(&f.root);
+    let original = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(personal)
+        .await
+        .unwrap();
+    let result = placement::change(
+        manager.client_for(&uid).unwrap(),
+        personal,
+        org,
+        vec![ids[0]],
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(result.applied, "{:?}", result.report.problems);
+    assert!(!manager.has_placement_intent(&uid));
+    let moved = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(personal)
+        .await
+        .unwrap();
+    assert_eq!(moved.organization_id, Some(org));
+    assert_eq!(moved.name, original.name);
+    assert_eq!(
+        moved.login.as_ref().unwrap().password,
+        original.login.as_ref().unwrap().password
+    );
+    assert_eq!(moved.folder_id, original.folder_id);
+    assert_eq!(moved.collection_ids, vec![ids[0]]);
+    let before = f.sync_response.lock().unwrap().1["ciphers"][0].clone();
+    let result = placement::change(
+        manager.client_for(&uid).unwrap(),
+        org_item,
+        org,
+        vec![ids[1]],
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(result.applied, "{:?}", result.report.problems);
+    let after = f.sync_response.lock().unwrap().1["ciphers"][0].clone();
+    for field in ["name", "login", "key", "revisionDate"] {
+        assert_eq!(before[field], after[field]);
+    }
+    assert_eq!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .full_cipher(org_item)
+            .await
+            .unwrap()
+            .collection_ids,
+        vec![ids[1]]
+    );
+    assert_eq!(placement_writes(&f), 2);
+}
+#[tokio::test]
+async fn placement_lost_replies_reconcile_and_uncertain_requests_never_replay() {
+    use crate::services::sdk::{ClientExt, placement, vault_sync};
+    for mode in [2, 3, 4, 5] {
+        let (f, manager, uid, personal, _, org, ids) = placement_fixture().await;
+        f.placement_mode.store(mode, Ordering::SeqCst);
+        let result = placement::change(
+            manager.client_for(&uid).unwrap(),
+            personal,
+            org,
+            vec![ids[0]],
+            f.root.clone(),
+            f.store.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            result.applied,
+            mode == 2,
+            "mode {mode}: {:?}",
+            result.report.problems
+        );
+        assert_eq!(manager.has_placement_intent(&uid), mode != 2);
+        assert_eq!(placement_writes(&f), 1);
+        vault_sync::synchronize(
+            manager.client_for(&uid).unwrap(),
+            f.root.clone(),
+            f.store.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(placement_writes(&f), 1);
+        if mode != 2 {
+            let mut view = manager
+                .client_for(&uid)
+                .unwrap()
+                .full_cipher(personal)
+                .await
+                .unwrap();
+            view.name = "Blocked pending move".into();
+            assert!(
+                manager
+                    .client_for(&uid)
+                    .unwrap()
+                    .save_cipher(view)
+                    .await
+                    .is_err()
+            );
+            manager
+                .client_for(&uid)
+                .unwrap()
+                .dismiss_placement_intent()
+                .await
+                .unwrap();
+            assert!(!manager.has_placement_intent(&uid));
+        }
+    }
+}
+#[tokio::test]
+async fn placement_fresh_permissions_membership_and_revision_block_stale_changes() {
+    use crate::services::sdk::placement;
+    for mode in 0..4 {
+        let (f, manager, uid, personal, _, org, ids) = placement_fixture().await;
+        {
+            let mut payload = f.sync_response.lock().unwrap();
+            match mode {
+                0 => payload.1["collections"][0]["readOnly"] = serde_json::json!(true),
+                1 => payload.1["profile"]["organizations"][0]["status"] = serde_json::json!(1),
+                2 => {
+                    payload.1["ciphers"][1]["revisionDate"] = serde_json::json!(
+                        (chrono::Utc::now() + chrono::Duration::seconds(5)).to_rfc3339()
+                    )
+                }
+                _ => payload.1["ciphers"][1]["edit"] = serde_json::json!(false),
+            }
+        }
+        let result = placement::change(
+            manager.client_for(&uid).unwrap(),
+            personal,
+            org,
+            vec![ids[0]],
+            f.root.clone(),
+            f.store.clone(),
+        )
+        .await;
+        assert!(result.is_err() || !result.unwrap().applied, "mode {mode}");
+        assert_eq!(placement_writes(&f), 0);
+        assert!(!manager.has_placement_intent(&uid));
+    }
+}
+#[tokio::test]
+async fn placement_preserves_read_only_assignments_and_rejects_invalid_destinations() {
+    use crate::services::sdk::{placement, vault_sync};
+    let (f, manager, uid, personal, org_item, org, ids) = placement_fixture().await;
+    f.sync_response.lock().unwrap().1["collections"][0]["readOnly"] = serde_json::json!(true);
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    for selected in [
+        vec![],
+        vec![ids[1]],
+        vec![ids[1], ids[1]],
+        vec![bitwarden_collections::collection::CollectionId::new_v4()],
+    ] {
+        assert!(
+            placement::change(
+                manager.client_for(&uid).unwrap(),
+                org_item,
+                org,
+                selected,
+                f.root.clone(),
+                f.store.clone()
+            )
+            .await
+            .is_err()
+        );
+    }
+    let result = placement::change(
+        manager.client_for(&uid).unwrap(),
+        org_item,
+        org,
+        ids.clone(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(result.applied, "{:?}", result.report.problems);
+    assert_eq!(placement_writes(&f), 1);
+    assert!(
+        placement::change(
+            manager.client_for(&uid).unwrap(),
+            personal,
+            bitwarden_core::OrganizationId::new_v4(),
+            vec![ids[1]],
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn placement_rewraps_attachment_metadata_without_reuploading_files() {
+    use crate::services::sdk::{
+        ClientExt,
+        attachments::{self, Operation},
+        placement,
+    };
+    let (f, manager, uid, personal, _, org, ids) = placement_fixture().await;
+    assert!(upload_fixture(&f, &manager, uid, personal).await.applied);
+    let aid = first_attachment(&manager, uid, personal).await;
+    let before = f.attachment_files.lock().unwrap().clone();
+    let result = placement::change(
+        manager.client_for(&uid).unwrap(),
+        personal,
+        org,
+        vec![ids[0]],
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(result.applied, "{:?}", result.report.problems);
+    assert_eq!(*f.attachment_files.lock().unwrap(), before);
+    let output = f.root.join("shared-attachment-download");
+    let result = attachments::perform(
+        manager.client_for(&uid).unwrap(),
+        personal,
+        Operation::Download {
+            id: aid,
+            path: output.clone(),
+        },
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(result.applied, "{:?}", result.report.problems);
+    assert_eq!(
+        std::fs::read(output).unwrap(),
+        b"Synthetic private attachment contents\n"
+    );
+    assert_eq!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .full_cipher(personal)
+            .await
+            .unwrap()
+            .organization_id,
+        Some(org)
+    );
+}
+#[tokio::test]
+async fn placement_legacy_attachments_require_upgrade_instead_of_unsafe_transfer() {
+    use crate::services::sdk::{
+        placement, test_support::encrypted_legacy_attachment_sync_response, vault_sync,
+    };
+    let (f, manager, uid, _, _, org, ids) = placement_fixture().await;
+    let legacy = encrypted_legacy_attachment_sync_response(&manager, uid).await;
+    let id = legacy["ciphers"][0]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    {
+        let mut payload = f.sync_response.lock().unwrap();
+        payload.1["ciphers"][1] = legacy["ciphers"][0].clone();
+        payload.1["folders"] = legacy["folders"].clone();
+    }
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    let result = placement::change(
+        manager.client_for(&uid).unwrap(),
+        id,
+        org,
+        vec![ids[0]],
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!result.applied);
+    assert!(
+        result
+            .report
+            .problems
+            .iter()
+            .any(|e| e.contains("legacy attachment"))
+    );
+    assert_eq!(placement_writes(&f), 0);
+    assert!(!manager.has_placement_intent(&uid));
+}
+#[tokio::test]
+async fn placement_unconfirmed_request_survives_restart_and_lock_without_replay() {
+    use crate::services::sdk::{placement, production, vault_sync};
+    let (f, manager, uid, personal, _, org, ids) = placement_fixture().await;
+    f.placement_mode.store(3, Ordering::SeqCst);
+    assert!(
+        !placement::change(
+            manager.client_for(&uid).unwrap(),
+            personal,
+            org,
+            vec![ids[0]],
+            f.root.clone(),
+            f.store.clone()
+        )
+        .await
+        .unwrap()
+        .applied
+    );
+    drop(manager);
+    let mut restored = production::test_load(&f.root, &f.store).await;
+    restored
+        .unlock_data_for(&uid)
+        .unwrap()
+        .unlock("synthetic-password".into())
+        .await
+        .unwrap();
+    assert!(restored.has_placement_intent(&uid));
+    vault_sync::synchronize(
+        restored.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(placement_writes(&f), 1);
+    restored
+        .client_for(&uid)
+        .unwrap()
+        .dismiss_placement_intent()
+        .await
+        .unwrap();
+    f.placement_mode.store(6, Ordering::SeqCst);
+    let client = restored.client_for(&uid).unwrap();
+    let root = f.root.clone();
+    let store = f.store.clone();
+    let pending = tokio::spawn(placement::change(
+        client,
+        personal,
+        org,
+        vec![ids[0]],
+        root,
+        store,
+    ));
+    for _ in 0..200 {
+        if placement_writes(&f) == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let lock = restored.lock(&uid).unwrap();
+    assert!(pending.await.unwrap().is_err());
+    lock.finish().await;
+    assert!(restored.client_for(&uid).is_none());
+}
+#[tokio::test]
+async fn placement_dialog_requires_explicit_transfer_confirmation_and_master_password() {
+    use crate::services::sdk::{ClientExt, vault_sync};
+    let (f, manager, uid, personal, _, org, ids) = placement_fixture().await;
+    f.sync_response.lock().unwrap().1["ciphers"][1]["reprompt"] = serde_json::json!(1);
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    let mut core = core_for_automatic_save(manager).await;
+    core.request(crate::core::model::Request::Read(personal));
+    core.confirm_password(Zeroizing::new("synthetic-password".into()));
+    for _ in 0..300 {
+        core.poll();
+        if core.detail.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(core.detail.is_some());
+    core.open_placement();
+    let editor = core.placement_editor.as_mut().unwrap();
+    editor.organization = Some(org);
+    editor.collections = vec![ids[0]];
+    let baseline = f.requests.lock().unwrap().len();
+    core.incoming_for_test();
+    finish_incoming(&mut core).await;
+    assert_eq!(f.requests.lock().unwrap().len(), baseline);
+    core.submit_placement();
+    assert!(core.prompt.is_none());
+    assert_eq!(placement_writes(&f), 0);
+    core.placement_editor.as_mut().unwrap().acknowledged = true;
+    core.submit_placement();
+    assert!(core.prompt.is_some());
+    assert_eq!(placement_writes(&f), 0);
+    core.cancel_prompt();
+    assert_eq!(placement_writes(&f), 0);
+    core.submit_placement();
+    core.confirm_password(Zeroizing::new("synthetic-password".into()));
+    finish_automatic_sync(&mut core, uid).await;
+    assert_eq!(placement_writes(&f), 1);
+    assert!(core.placement_editor.is_none());
+    assert!(
+        core.manager
+            .client_for(&uid)
+            .unwrap()
+            .full_cipher(personal)
+            .await
+            .is_err()
+    );
 }

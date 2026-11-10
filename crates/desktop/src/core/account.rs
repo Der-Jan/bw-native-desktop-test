@@ -380,7 +380,7 @@ impl Core {
                 || (self.active == Some(uid)
                     && (self.editor.is_some()
                         || self.detail_save.is_some()
-                        || self.folder_editor.is_some()))
+                        || (self.folder_editor.is_some() || self.placement_editor.is_some())))
             {
                 self.saved_uploads.insert(uid);
                 continue;
@@ -440,7 +440,10 @@ impl Core {
             return;
         }
 
-        if self.active == Some(uid) && (self.editor.is_some() || self.folder_editor.is_some()) {
+        if self.active == Some(uid)
+            && (self.editor.is_some()
+                || (self.folder_editor.is_some() || self.placement_editor.is_some()))
+        {
             if !quiet {
                 self.notify("Save or cancel the open edit before synchronizing.", false);
             }

@@ -15,6 +15,16 @@ pub struct Folder {
     pub name: String,
     pub revision: chrono::DateTime<chrono::Utc>,
 }
+pub struct PlacementEditor {
+    pub id: uuid::Uuid,
+    pub cipher: CipherId,
+    pub organization: Option<bitwarden_core::OrganizationId>,
+    pub original_organization: Option<bitwarden_core::OrganizationId>,
+    pub collections: Vec<bitwarden_collections::collection::CollectionId>,
+    pub acknowledged: bool,
+    pub busy: bool,
+    pub error: Option<String>,
+}
 pub struct FolderEditor {
     pub id: uuid::Uuid,
     pub target: Option<(FolderId, chrono::DateTime<chrono::Utc>)>,
@@ -59,6 +69,11 @@ pub enum Request {
     Edit(CipherId),
     ReviewLocal(CipherId),
     Save(Box<CipherView>),
+    Placement {
+        cipher: CipherId,
+        organization: bitwarden_core::OrganizationId,
+        collections: Vec<bitwarden_collections::collection::CollectionId>,
+    },
     Delete(CipherId),
     Restore(CipherId),
     Archive {
@@ -88,7 +103,9 @@ impl Request {
             | Self::Delete(id)
             | Self::Restore(id) => Some(*id),
             Self::Save(v) => v.id,
-            Self::Attachment { cipher, .. } | Self::Archive { cipher, .. } => Some(*cipher),
+            Self::Placement { cipher, .. }
+            | Self::Attachment { cipher, .. }
+            | Self::Archive { cipher, .. } => Some(*cipher),
             Self::Export { .. } => None,
         }
     }
@@ -98,7 +115,7 @@ impl Request {
             Self::Read(_) => Action::Read,
             Self::Copy(..) | Self::CopyText(..) => Action::Copy,
             Self::Edit(_) | Self::ReviewLocal(_) => Action::Edit,
-            Self::Save(_) | Self::DiscardLocal(_) => Action::Write,
+            Self::Save(_) | Self::DiscardLocal(_) | Self::Placement { .. } => Action::Write,
             Self::Delete(_) => Action::Delete,
             Self::Restore(_) => Action::Restore,
             Self::Archive { .. } => Action::Archive,

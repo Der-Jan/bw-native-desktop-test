@@ -19,6 +19,17 @@ impl SessionClient {
             return Err(super::policies::DENIED.into());
         }
         let id = view.id.ok_or("Missing item ID")?;
+        if session
+            .state
+            .snapshot
+            .current()
+            .is_some_and(|s| super::placement::pending(&s, id))
+        {
+            return Err(
+                "Resolve this item's unconfirmed organization/collection change before editing"
+                    .into(),
+            );
+        }
         if session.state.snapshot.current().is_some_and(|s| {
             s.persisted
                 .archive_intent

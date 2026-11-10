@@ -113,6 +113,9 @@ pub async fn change_state(
         .snapshot
         .current()
         .ok_or("Synchronize first")?;
+    if super::placement::pending(&before, id) {
+        return Err("Resolve this item’s unconfirmed organization/collection change first".into());
+    }
     if before.persisted.archive_intent.is_some() {
         return Err(
             "An item change is unconfirmed. Check the server before another change.".into(),

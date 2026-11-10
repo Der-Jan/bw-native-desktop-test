@@ -66,7 +66,13 @@ impl AgentSession {
                         continue;
                     }
                     let Some(id) = encrypted.id else { continue };
-                    if pending == Some(id) {
+                    if pending == Some(id)
+                        || session
+                            .state
+                            .snapshot
+                            .current()
+                            .is_some_and(|s| super::placement::pending(&s, id))
+                    {
                         continue;
                     }
                     let Ok(mut view) = client.clone().full_cipher(id).await else {
@@ -131,6 +137,14 @@ impl AgentSession {
                         .as_ref()
                         .is_some_and(|i| i.cipher == identity.id)
                 }) {
+                    return Err(DENIED.into());
+                }
+                if session
+                    .state
+                    .snapshot
+                    .current()
+                    .is_some_and(|s| super::placement::pending(&s, identity.id))
+                {
                     return Err(DENIED.into());
                 }
                 super::session_client::check_cipher(

@@ -57,6 +57,10 @@ pub struct Collection {
     pub id: CollectionId,
     pub organization_id: OrganizationId,
     pub name: String,
+    #[serde(default)]
+    pub read_only: bool,
+    #[serde(default)]
+    pub hide_passwords: bool,
 }
 
 /// UI-facing snapshot of a single user account. App caches one

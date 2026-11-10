@@ -9,6 +9,7 @@ mod folders;
 pub mod generator;
 mod incoming;
 pub mod model;
+mod placement;
 mod profile;
 #[cfg(test)]
 mod tests;
@@ -137,6 +138,7 @@ pub struct Core {
     pub detail_open: bool,
     pub detail_request: Option<uuid::Uuid>,
     pub detail_save: Option<uuid::Uuid>,
+    pub placement_editor: Option<model::PlacementEditor>,
     pub(super) duplicate_request: Option<(uuid::Uuid, Arc<std::sync::atomic::AtomicBool>)>,
     pub editor: Option<Editor>,
     pub query: String,
@@ -228,6 +230,7 @@ impl Core {
             detail_open: false,
             detail_request: None,
             detail_save: None,
+            placement_editor: None,
             duplicate_request: None,
             editor: None,
             query: String::new(),
@@ -391,6 +394,7 @@ impl Core {
         self.detail_open = false;
         self.detail_request = None;
         self.detail_save = None;
+        self.placement_editor = None;
         self.editor = None;
         self.generator.clear();
         if let Some(uid) = self.active {

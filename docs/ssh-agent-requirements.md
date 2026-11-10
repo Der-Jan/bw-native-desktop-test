@@ -56,7 +56,7 @@ when the request has both proofs; otherwise it still defaults to **Allow once**.
 The dialog shows the vault item, public-key
 fingerprint, SSH username, local process information and the verified server-key
 fingerprints if available. Process names/PIDs are informational, not trusted
-application identity. Unbound requests are explicitly labelled and never remembered.
+application identity. Unbound authentication requests are explicitly labelled and never remembered.
 The native dialog opens as a separate window above other windows, retaining the
 vault's previous visibility. Enter/Space activate its focused button; Tab and
 Shift+Tab stay within its actions; Escape and native/custom close deny. A visible
@@ -66,13 +66,69 @@ The dialog expires after 45 seconds. Dismiss, Escape, hiding the window, disconn
 lock, logout, account switch, sync generation change and disabling the service
 prevent a pending signature from being returned.
 
-**Allow until vault locks** is offered only with cryptographically verified OpenSSH
+For SSH authentication, **Allow until vault locks** is offered only with cryptographically verified OpenSSH
 session bindings **and** a host-bound authentication payload covering the terminal
 host key, and is scoped to item ID, revision, public key, SSH username and
 entire verified host-key forwarding path. Authority/mode changes clear grants.
 **Never ask** deliberately allows local same-user processes to authenticate with
 eligible keys while the active account is unlocked; the settings section explains
 this effect. It does not bypass vault permissions or reprompt exclusions.
+
+## Git commit and tag signing
+
+Git-namespaced OpenSSH SSHSIG signing is implemented through the same agent socket.
+Enable the SSH agent, unlock the account containing the desired SSH key and set
+`SSH_AUTH_SOCK` as above. Save that key's **public key only** from item details to,
+for example, `~/.ssh/vault-signing.pub`. No private-key file or custom signing helper
+is needed. Configure Git (omit `--global` for repository-only configuration):
+
+```sh
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/vault-signing.pub
+git config --global commit.gpgsign true
+# Optional: sign annotated tags by default.
+git config --global tag.gpgsign true
+```
+
+`git commit -S` and `git tag -s <tag>` use OpenSSH `ssh-keygen`, which asks the
+agent to sign the SHA-256/SHA-512 digest in the `git` namespace. The agent accepts
+only the exact SSHSIG preamble, `git` namespace, empty reserved field, supported
+hash algorithm and corresponding digest length, with no trailing bytes. It rejects
+other namespaces, arbitrary raw data and known session-bound/forwarded connections.
+The same supported vault keys and SDK permission/revision checks apply; RSA uses
+SHA-2 signatures. Protected, archived, trashed and hidden-password keys stay excluded.
+
+Git-compatible requests have a separate native approval with **Allow once** initially
+focused, even when SSH login prompts are disabled or default to remembering hosts.
+**Allow until lock** grants only Git-namespaced signing with that account/key/revision,
+not SSH authentication. Host grants never authorize Git signing. Remembered Git
+grants may be used by other same-user processes with access to the socket; no
+verified repository or application identity is implied. Account/session/mode changes,
+lock, logout, sync or agent disable revoke grants and pending requests as before.
+
+The request contains a hash, not the commit or repository. The dialog identifies
+the vault key, fingerprint and informational local process; it cannot verify that
+the caller is Git, identify a repository, or display the signed changes. No content
+hash, signature payload or private key is logged.
+
+For local verification, maintain an `allowed_signers` file containing trusted public
+keys and set `gpg.ssh.allowedSignersFile`. For example, a line is
+`you@example.com namespaces="git" ssh-ed25519 AAAA...`, followed by:
+
+```sh
+git config --global gpg.ssh.allowedSignersFile ~/.ssh/allowed_signers
+git verify-commit HEAD
+git verify-tag <tag>
+```
+
+A hosting service has its own signing-key registration/trust configuration.
+References: [Git SSH configuration](https://git-scm.com/docs/git-config),
+[OpenSSH SSHSIG protocol](https://github.com/openssh/openssh-portable/blob/master/PROTOCOL.sshsig).
+Real-command regression tests run `ssh-keygen -Y sign/verify`, `git commit -S`,
+`git tag -s`, `git verify-commit` and `git verify-tag` in isolated temporary profiles,
+with Ed25519 and RSA keys. Tampered content and other SSHSIG namespaces are rejected.
+Parser, approval separation, default Enter/Escape, cancellation and lock revocation
+are also covered. No user Git/SSH configuration is read or modified by those tests.
 
 ## Key and protocol boundary
 
@@ -86,10 +142,10 @@ this effect. It does not bypass vault permissions or reprompt exclusions.
   cache, exported key file or secret-bearing UI message is used. Temporary string
   buffers under application control are zeroized; third-party importer allocations
   and operating-system memory are outside that guarantee.
-- Signing accepts the exact SSH user-authentication payload, with consistent key,
-  algorithm, username and session ID. Plain `publickey` requests never reuse or
-  create remembered grants, even on a connection with a verified binding. Generic
-  signing, Git/SSHSIG signing,
+- SSH authentication accepts the exact user-authentication payload, with consistent key,
+  algorithm, username and session ID. Git SSHSIG signing has the separate strict
+  namespace/format boundary described above. Plain `publickey` requests never reuse or
+  create remembered grants, even on a connection with a verified binding. Generic signing, non-Git SSHSIG namespaces,
   ssh-add mutation, key removal and agent control requests fail closed.
 - `session-bind@openssh.com` verifies the server's signature over the session ID,
   bounds forwarding chains, rejects conflicting/reordered bindings and requires
@@ -133,7 +189,7 @@ The stronger reusable-approval rule also follows
 The protocol extension is documented by
 [OpenSSH PROTOCOL.agent](https://github.com/openssh/openssh-portable/blob/master/PROTOCOL.agent).
 This implementation does not copy Prizm's Swift runtime or rely on the unfinished
-Electron V2 agent. Cross-platform parity, generic/Git signing and protected-key
+Electron V2 agent. Cross-platform parity, arbitrary non-Git signing and protected-key
 reprompt remain separate work.
 
 

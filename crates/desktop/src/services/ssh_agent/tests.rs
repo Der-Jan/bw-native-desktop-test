@@ -263,6 +263,7 @@ async fn approval_times_out_and_context_change_clears_cached_grants() {
     );
     let epoch = agent.shared.state.lock().unwrap().epoch;
     let auth = protocol::Authentication {
+        purpose: SigningPurpose::Authentication,
         username: "alice".into(),
         hosts: vec![[1; 32]],
         fingerprints: vec!["verified test host".into()],
@@ -624,4 +625,418 @@ async fn explicit_until_lock_is_available_with_default_once_but_plain_auth_canno
     assert_eq!(approval.default_decision, Decision::Once);
     approval.respond(Decision::Deny);
     assert_eq!(task.await.unwrap(), vec![5]);
+}
+
+fn git_request(key: &[u8], namespace: &str, algorithm: &str, digest: &[u8]) -> Vec<u8> {
+    let mut data = b"SSHSIG".to_vec();
+    push_string(&mut data, namespace.as_bytes());
+    push_string(&mut data, b"");
+    push_string(&mut data, algorithm.as_bytes());
+    push_string(&mut data, digest);
+    let mut packet = vec![13];
+    push_string(&mut packet, key);
+    push_string(&mut packet, &data);
+    packet.extend_from_slice(&0u32.to_be_bytes());
+    packet
+}
+#[tokio::test]
+async fn git_sshsig_parser_accepts_only_bounded_git_namespace_and_valid_hashes() {
+    let (_, _, identity) = crate::services::sdk::ssh_agent::test_fixture().await;
+    for (alg, len) in [("sha256", 32), ("sha512", 64)] {
+        let packet = git_request(&identity.public_key, "git", alg, &vec![7; len]);
+        let parsed = parse_sign(&packet, &Bindings::default()).unwrap();
+        assert_eq!(parsed.authentication.purpose, SigningPurpose::Git);
+        assert!(parsed.authentication.hosts.is_empty());
+        for i in 0..packet.len() {
+            assert!(parse_sign(&packet[..i], &Bindings::default()).is_err());
+        }
+    }
+    for (namespace, alg, len) in [
+        ("file", "sha512", 64),
+        ("Git", "sha512", 64),
+        ("git\0", "sha512", 64),
+        ("git", "sha1", 20),
+        ("git", "sha256", 64),
+        ("git", "sha512", 32),
+        ("git", "sha512", 0),
+    ] {
+        assert!(
+            parse_sign(
+                &git_request(&identity.public_key, namespace, alg, &vec![0; len]),
+                &Bindings::default()
+            )
+            .is_err()
+        );
+    }
+    // Reject nonempty reserved fields and extra bytes inside signed data,
+    // even when the outer agent request is well formed.
+    for (reserved, trailing) in [(b"future".as_slice(), false), (b"".as_slice(), true)] {
+        let mut data = b"SSHSIG".to_vec();
+        push_string(&mut data, b"git");
+        push_string(&mut data, reserved);
+        push_string(&mut data, b"sha512");
+        push_string(&mut data, &[0; 64]);
+        if trailing {
+            data.push(0);
+        }
+        let mut packet = vec![13];
+        push_string(&mut packet, &identity.public_key);
+        push_string(&mut packet, &data);
+        packet.extend_from_slice(&0u32.to_be_bytes());
+        assert!(parse_sign(&packet, &Bindings::default()).is_err());
+    }
+    let mut trailing = git_request(&identity.public_key, "git", "sha512", &[0; 64]);
+    trailing.push(0);
+    assert!(parse_sign(&trailing, &Bindings::default()).is_err());
+    let mut flags = git_request(&identity.public_key, "git", "sha512", &[0; 64]);
+    let end = flags.len();
+    flags[end - 1] = 255;
+    assert!(parse_sign(&flags, &Bindings::default()).is_err());
+    for forwarded in [false, true] {
+        let mut bindings = Bindings::default();
+        assert_eq!(
+            bindings.extension(&host_binding(&[3; 32], forwarded)),
+            vec![6]
+        );
+        assert!(
+            parse_sign(
+                &git_request(&identity.public_key, "git", "sha512", &[0; 64]),
+                &bindings
+            )
+            .is_err()
+        );
+    }
+    let failed = Bindings {
+        failed: true,
+        ..Default::default()
+    };
+    assert!(
+        parse_sign(
+            &git_request(&identity.public_key, "git", "sha512", &[0; 64]),
+            &failed
+        )
+        .is_err()
+    );
+}
+async fn next_approval(events: &mut broadcast::Receiver<UiEvent>) -> Arc<Approval> {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let UiEvent::Approval(a) = events.recv().await.unwrap() {
+                return a;
+            }
+        }
+    })
+    .await
+    .expect("approval timed out")
+}
+#[tokio::test]
+async fn git_approvals_are_separate_from_authentication_even_when_ssh_prompts_are_disabled() {
+    let (manager, uid, identity) = crate::services::sdk::ssh_agent::test_fixture().await;
+    let mut agent = AgentRuntime::new();
+    agent.shared.state.lock().unwrap().enabled = true;
+    agent.set_context(manager.agent_session_for(&uid), SshPromptBehavior::Never);
+    let epoch = agent.shared.state.lock().unwrap().epoch;
+    let mut events = agent.events().subscribe();
+    let packet = git_request(&identity.public_key, "git", "sha512", &[1; 64]);
+    let shared = agent.shared.clone();
+    let first = packet.clone();
+    let pending = tokio::spawn(async move {
+        shared
+            .handle(first, &mut Bindings::default(), epoch, "synthetic signer")
+            .await
+    });
+    let approval = next_approval(&mut events).await;
+    assert_eq!(approval.purpose, SigningPurpose::Git);
+    assert_eq!(approval.title(), "Allow Git signing");
+    assert_eq!(approval.default_decision, Decision::Once);
+    assert!(approval.can_remember);
+    assert!(approval.hosts.is_empty());
+    approval.respond(Decision::UntilLock);
+    assert_eq!(pending.await.unwrap()[0], 14);
+    assert_eq!(agent.shared.state.lock().unwrap().grants.len(), 1);
+    let second = git_request(&identity.public_key, "git", "sha256", &[2; 32]);
+    assert_eq!(
+        agent
+            .shared
+            .handle(second, &mut Bindings::default(), epoch, "synthetic signer")
+            .await[0],
+        14
+    );
+    // Remembering Git signing does not create or alter an SSH-host grant.
+    assert!(
+        agent
+            .shared
+            .state
+            .lock()
+            .unwrap()
+            .grants
+            .iter()
+            .all(|g| g.purpose == SigningPurpose::Git)
+    );
+    agent.set_context(manager.agent_session_for(&uid), SshPromptBehavior::Always);
+    assert!(agent.shared.state.lock().unwrap().grants.is_empty());
+    let epoch = agent.shared.state.lock().unwrap().epoch;
+    let shared = agent.shared.clone();
+    let pending = tokio::spawn(async move {
+        shared
+            .handle(packet, &mut Bindings::default(), epoch, "synthetic signer")
+            .await
+    });
+    let approval = next_approval(&mut events).await;
+    approval.respond(Decision::Deny);
+    assert_eq!(pending.await.unwrap(), vec![5]);
+}
+#[tokio::test]
+async fn remembered_ssh_host_approval_does_not_authorize_git_signing() {
+    let (manager, uid, identity) = crate::services::sdk::ssh_agent::test_fixture().await;
+    let mut agent = AgentRuntime::new();
+    agent.shared.state.lock().unwrap().enabled = true;
+    agent.set_context(
+        manager.agent_session_for(&uid),
+        SshPromptBehavior::RememberUntilLock,
+    );
+    let epoch = agent.shared.state.lock().unwrap().epoch;
+    let mut events = agent.events().subscribe();
+    let mut bindings = Bindings::default();
+    let sid = [4; 32];
+    bindings.extension(&host_binding(&sid, false));
+    let auth = auth_request(
+        &identity.public_key,
+        &sid,
+        "alice",
+        Some(&bindings.values[0].host),
+    );
+    let shared = agent.shared.clone();
+    let pending = tokio::spawn(async move {
+        shared
+            .handle(auth, &mut bindings, epoch, "synthetic ssh")
+            .await
+    });
+    next_approval(&mut events)
+        .await
+        .respond(Decision::UntilLock);
+    assert_eq!(pending.await.unwrap()[0], 14);
+    let packet = git_request(&identity.public_key, "git", "sha512", &[0; 64]);
+    let shared = agent.shared.clone();
+    let pending = tokio::spawn(async move {
+        shared
+            .handle(packet, &mut Bindings::default(), epoch, "synthetic signer")
+            .await
+    });
+    let approval = next_approval(&mut events).await;
+    assert_eq!(approval.purpose, SigningPurpose::Git);
+    assert_eq!(approval.default_decision, Decision::Once);
+    approval.respond(Decision::Deny);
+    assert_eq!(pending.await.unwrap(), vec![5]);
+    assert_eq!(agent.shared.state.lock().unwrap().grants.len(), 1);
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn git_signing_pending_approval_is_cancelled_on_lock_and_disconnect() {
+    let (mut manager, uid, identity) = crate::services::sdk::ssh_agent::test_fixture().await;
+    let (mut agent, base) = runtime();
+    agent.configure(true);
+    agent.set_context(manager.agent_session_for(&uid), SshPromptBehavior::Always);
+    let mut events = agent.events().subscribe();
+    let mut stream = tokio::net::UnixStream::connect(agent.path()).await.unwrap();
+    let packet = git_request(&identity.public_key, "git", "sha512", &[0; 64]);
+    // Disconnect while awaiting consent: the dialog must be dismissed.
+    stream.write_u32(packet.len() as u32).await.unwrap();
+    stream.write_all(&packet).await.unwrap();
+    let approval = next_approval(&mut events).await;
+    drop(stream);
+    for _ in 0..10 {
+        if matches!(events.recv().await.unwrap(),UiEvent::Dismiss(id) if id==approval.id) {
+            break;
+        }
+    }
+    assert!(approval.reply.lock().unwrap().as_ref().unwrap().is_closed());
+    let mut stream = tokio::net::UnixStream::connect(agent.path()).await.unwrap();
+    let pending = tokio::spawn(async move { exchange(&mut stream, &packet).await });
+    let approval = next_approval(&mut events).await;
+    let lock = manager.lock(&uid).unwrap();
+    agent.set_context(None, SshPromptBehavior::Always);
+    approval.respond(Decision::UntilLock);
+    assert!(!approval.current());
+    assert!(pending.await.is_err());
+    lock.finish().await;
+    assert!(agent.shared.state.lock().unwrap().grants.is_empty());
+    agent.stop();
+    std::fs::remove_dir(base).unwrap();
+}
+
+#[cfg(unix)]
+fn isolated_signing_command(program: &str, base: &Path, socket: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    command
+        .env_clear()
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("HOME", base)
+        .env("XDG_CONFIG_HOME", base)
+        .env("LC_ALL", "C.UTF-8")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("SSH_AUTH_SOCK", socket)
+        .current_dir(base)
+        .stdin(std::process::Stdio::null());
+    command
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn real_git_commits_tags_and_openssh_signatures_interoperate_with_ed25519_and_rsa() {
+    use crate::services::sdk::ClientExt;
+    use bitwarden_ssh::generator::{KeyAlgorithm, generate_sshkey};
+    for rsa in [false, true] {
+        let (manager, uid, mut identity) = crate::services::sdk::ssh_agent::test_fixture().await;
+        if rsa {
+            let mut view = manager
+                .client_for(&uid)
+                .unwrap()
+                .full_cipher(identity.id)
+                .await
+                .unwrap();
+            let key = generate_sshkey(KeyAlgorithm::Rsa3072).unwrap();
+            let ssh = view.ssh_key.as_mut().unwrap();
+            ssh.private_key = key.private_key;
+            ssh.public_key = key.public_key;
+            ssh.fingerprint = key.fingerprint;
+            manager
+                .client_for(&uid)
+                .unwrap()
+                .save_cipher(view)
+                .await
+                .unwrap();
+            identity = manager
+                .agent_session_for(&uid)
+                .unwrap()
+                .identities()
+                .await
+                .unwrap()
+                .remove(0);
+        }
+        let (mut agent, base) = runtime();
+        agent.configure(true);
+        agent.set_context(manager.agent_session_for(&uid), SshPromptBehavior::Always);
+        let mut events = agent.events().subscribe();
+        let public = PublicKey::from_bytes(&identity.public_key)
+            .unwrap()
+            .to_openssh()
+            .unwrap();
+        std::fs::write(base.join("signing.pub"), format!("{public}\n")).unwrap();
+        std::fs::write(
+            base.join("allowed_signers"),
+            format!("test@example.invalid namespaces=\"git\" {public}\n"),
+        )
+        .unwrap();
+        std::fs::write(base.join("message"), b"synthetic SSHSIG signing fixture").unwrap();
+        std::fs::write(base.join("tampered"), b"modified SSHSIG signing fixture").unwrap();
+        let socket = agent.path().to_owned();
+        let directory = base.clone();
+        let mut commands = tokio::task::spawn_blocking(move || {
+            let run = |program: &str, args: &[&str]| {
+                let output = isolated_signing_command(program, &directory, &socket)
+                    .args(args)
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{program} {args:?}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                output
+            };
+            run(
+                "ssh-keygen",
+                &["-Y", "sign", "-f", "signing.pub", "-n", "git", "message"],
+            );
+            let mut verify = isolated_signing_command("ssh-keygen", &directory, &socket);
+            verify.args([
+                "-Y",
+                "verify",
+                "-f",
+                "allowed_signers",
+                "-I",
+                "test@example.invalid",
+                "-n",
+                "git",
+                "-s",
+                "message.sig",
+            ]);
+            let output = verify
+                .stdin(std::fs::File::open(directory.join("message")).unwrap())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                !verify
+                    .stdin(std::fs::File::open(directory.join("tampered")).unwrap())
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+            // Neither generic SSHSIG namespaces nor forged content are accepted.
+            let other = isolated_signing_command("ssh-keygen", &directory, &socket)
+                .args(["-Y", "sign", "-f", "signing.pub", "-n", "file", "tampered"])
+                .output()
+                .unwrap();
+            assert!(!other.status.success());
+            run("git", &["init", "--quiet"]);
+            for (key, value) in [
+                ("user.name", "Synthetic Git signer"),
+                ("user.email", "test@example.invalid"),
+                ("gpg.format", "ssh"),
+                ("user.signingkey", "signing.pub"),
+                ("gpg.ssh.allowedSignersFile", "allowed_signers"),
+            ] {
+                run("git", &["config", "--local", key, value]);
+            }
+            run(
+                "git",
+                &[
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "commit",
+                    "--allow-empty",
+                    "-S",
+                    "-m",
+                    "Synthetic signed commit",
+                ],
+            );
+            run("git", &["verify-commit", "HEAD"]);
+            run(
+                "git",
+                &["tag", "-s", "-m", "Synthetic signed tag", "synthetic-tag"],
+            );
+            run("git", &["verify-tag", "synthetic-tag"]);
+            let output = run("git", &["log", "-1", "--format=%G?"]);
+            assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "G");
+        });
+        let mut count = 0;
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            loop {
+                tokio::select! {
+                    event=events.recv()=>{
+                        if let UiEvent::Approval(approval)=event.unwrap() {
+                            assert_eq!(approval.purpose,SigningPurpose::Git);
+                            assert_eq!(approval.default_decision,Decision::Once);
+                            assert!(approval.hosts.is_empty());
+                            count+=1; approval.respond(Decision::Once);
+                        }
+                    },
+                    result=&mut commands=> {result.unwrap();break;},
+                }
+            }
+        })
+        .await
+        .expect("Git/OpenSSH integration timed out");
+        assert_eq!(count, 3, "Only the SSHSIG, commit and tag need approval");
+        agent.stop();
+        std::fs::remove_dir_all(base).unwrap();
+    }
 }

@@ -376,6 +376,7 @@ impl Application {
                             )
                             .changed();
                         ui.label(app.core.ssh_agent.status());
+                        ui.weak("Supports SSH authentication and Git signing. Git signing requests have separate approvals.");
                         ui.monospace(app.core.ssh_agent.path().display().to_string());
                         ui.horizontal(|ui| {
                             ui.monospace(app.core.ssh_agent.shell_setup());

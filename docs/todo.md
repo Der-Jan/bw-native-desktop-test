@@ -572,8 +572,10 @@ socket protocol, with bounded transport, per-signature approval, verified sessio
 binding and revocation on lock/account/sync transitions. It does not wait for the
 Electron V2 runtime. See [SSH agent setup, security boundary and remaining work](ssh-agent-requirements.md).
 
-Remaining: Windows named pipes, protected-item master-password reprompt, broader
-macOS validation and independently reviewed generic/Git-signing support if needed.
+Remaining: Windows named pipes, protected-item master-password reprompt and broader
+macOS validation. Git-namespaced SSHSIG signing is implemented with separate
+approvals and real Git/OpenSSH interoperability tests; arbitrary signing remains
+unsupported.
 
 ### Drop `ShellScope` if iced fixes `Stack`'s capture leak
 

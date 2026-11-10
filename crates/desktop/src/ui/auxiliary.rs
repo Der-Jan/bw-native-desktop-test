@@ -58,7 +58,7 @@ impl Application {
             ctx.show_viewport_immediate(
                 ssh_id,
                 egui::ViewportBuilder::default()
-                    .with_title("Allow SSH authentication")
+                    .with_title(approval.title())
                     .with_app_id(crate::assets::DESKTOP_APP_ID)
                     .with_icon(crate::assets::window_icon().unwrap_or_default())
                     .with_inner_size([500., 350.])
@@ -219,6 +219,8 @@ impl Application {
 }
 fn ssh_content(ui: &mut egui::Ui, approval: &Approval, fresh: bool) -> Option<Decision> {
     if fresh {
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::Title(approval.title().to_owned()));
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
         ui.ctx()
             .send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
@@ -228,16 +230,21 @@ fn ssh_content(ui: &mut egui::Ui, approval: &Approval, fresh: bool) -> Option<De
     egui::ScrollArea::vertical()
         .max_height(230.)
         .show(ui, |ui| {
-            ui.heading(super::labels::text("Allow SSH authentication?"));
+            let git = approval.purpose == crate::services::ssh_agent::SigningPurpose::Git;
+            ui.heading(super::labels::text(if git { "Allow Git signing?" } else { "Allow SSH authentication?" }));
             ui.label(&approval.key_name);
             ui.monospace(&approval.fingerprint);
-            ui.label(format!(
-                "Requested by {} ({})",
-                approval.process, approval.username
-            ));
-            if approval.hosts.is_empty() {
-                ui.weak("Unverified destination: allow once only.");
+            if git {
+                ui.label(format!("Requested by {}", approval.process));
+                ui.label("Sign Git data with this key (namespace: git).");
+                ui.weak("Git-compatible request: the content hash does not identify a repository or show what is being signed.");
+                ui.weak("Allow until lock applies only to Git signing with this key.");
             } else {
+                ui.label(format!("Requested by {} ({})", approval.process, approval.username));
+            }
+            if !git && approval.hosts.is_empty() {
+                ui.weak("Unverified destination: allow once only.");
+            } else if !git {
                 ui.label("Verified host binding:");
                 for host in &approval.hosts {
                     ui.monospace(host);
@@ -411,13 +418,15 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn focused_default_enter_and_escape_are_bound_to_current_approval() {
-        for (remember, until, expected) in [
-            (false, false, Decision::Once),
-            (true, false, Decision::Once),
-            (true, true, Decision::UntilLock),
+        use crate::services::ssh_agent::SigningPurpose::{Authentication, Git};
+        for (remember, until, purpose, expected) in [
+            (false, false, Authentication, Decision::Once),
+            (true, false, Authentication, Decision::Once),
+            (true, true, Authentication, Decision::UntilLock),
+            (true, true, Git, Decision::Once),
         ] {
             let (_manager, approval) =
-                crate::services::ssh_agent::test_ui_approval(remember, until).await;
+                crate::services::ssh_agent::test_ui_approval(remember, until, purpose).await;
             assert!(approval.current());
             let ctx = egui::Context::default();
             let mut fonts = egui::FontDefinitions::empty();

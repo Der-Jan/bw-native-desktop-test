@@ -1,6 +1,7 @@
 //! Opt-in SSH agent. Only the active unlocked SDK session can serve keys.
 //! Approvals/grants are transient and bound to authority generation, revision,
-//! key, SSH username and the verified host-key path. No private keys are cached.
+//! key and purpose. SSH-login grants also bind the username and verified host-key
+//! path; Git signing uses a separate explicit grant. No private keys are cached.
 mod protocol;
 #[cfg(unix)]
 mod transport;
@@ -9,6 +10,7 @@ use crate::services::{
     preferences::SshPromptBehavior,
     sdk::ssh_agent::{AgentIdentity, AgentSession},
 };
+pub use protocol::SigningPurpose;
 use protocol::{Bindings, MAX_PACKET, push_string};
 use std::{
     collections::HashSet,
@@ -30,6 +32,7 @@ pub enum UiEvent {
     Dismiss(Uuid),
 }
 pub struct Approval {
+    pub purpose: SigningPurpose,
     pub id: Uuid,
     pub key_name: String,
     pub fingerprint: String,
@@ -50,6 +53,12 @@ impl std::fmt::Debug for Approval {
     }
 }
 impl Approval {
+    pub fn title(&self) -> &'static str {
+        match self.purpose {
+            SigningPurpose::Authentication => "Allow SSH authentication",
+            SigningPurpose::Git => "Allow Git signing",
+        }
+    }
     pub fn current(&self) -> bool {
         self.shared.upgrade().is_some_and(|s| s.current(self.epoch))
     }
@@ -65,6 +74,7 @@ impl Approval {
 }
 #[derive(Hash, PartialEq, Eq)]
 struct Grant {
+    purpose: SigningPurpose,
     id: bitwarden_vault::CipherId,
     revision: chrono::DateTime<chrono::Utc>,
     key: [u8; 32],
@@ -159,16 +169,18 @@ impl Shared {
             return vec![5];
         };
         let grant = Grant {
+            purpose: request.authentication.purpose,
             id: identity.id,
             revision: identity.revision,
             key: openssl::sha::sha256(&identity.public_key),
             user: request.authentication.username.clone(),
             hosts: request.authentication.hosts.clone(),
         };
-        let remembered = request.authentication.rememberable
-            && !grant.hosts.is_empty()
-            && self.state.lock().unwrap().grants.contains(&grant);
-        let decision = if mode == SshPromptBehavior::Never || remembered {
+        let git = request.authentication.purpose == SigningPurpose::Git;
+        let rememberable = request.authentication.rememberable && (git || !grant.hosts.is_empty());
+        let remembered = rememberable && self.state.lock().unwrap().grants.contains(&grant);
+        // Turning off SSH-login prompts must not silently authorize data signing.
+        let decision = if (mode == SshPromptBehavior::Never && !git) || remembered {
             Decision::Once
         } else {
             self.approve(&identity, &request.authentication, epoch, process, mode)
@@ -186,9 +198,8 @@ impl Shared {
             return vec![5];
         }
         if matches!(decision, Decision::UntilLock)
-            && !grant.hosts.is_empty()
-            && request.authentication.rememberable
-            && mode != SshPromptBehavior::Never
+            && rememberable
+            && (git || mode != SshPromptBehavior::Never)
         {
             let mut state = self.state.lock().unwrap();
             if state.epoch == epoch && state.grants.len() < 128 {
@@ -212,6 +223,7 @@ impl Shared {
         };
         let (tx, rx) = oneshot::channel();
         let approval = Arc::new(Approval {
+            purpose: auth.purpose,
             id: Uuid::new_v4(),
             key_name: identity.name.clone(),
             fingerprint: identity.fingerprint.clone(),
@@ -219,7 +231,10 @@ impl Shared {
             process: process.into(),
             hosts: auth.fingerprints.clone(),
             can_remember: auth.rememberable,
-            default_decision: if auth.rememberable && mode == SshPromptBehavior::RememberUntilLock {
+            default_decision: if auth.purpose == SigningPurpose::Authentication
+                && auth.rememberable
+                && mode == SshPromptBehavior::RememberUntilLock
+            {
                 Decision::UntilLock
             } else {
                 Decision::Once
@@ -414,6 +429,7 @@ mod tests;
 pub(crate) async fn test_ui_approval(
     can_remember: bool,
     default_until_lock: bool,
+    purpose: SigningPurpose,
 ) -> (crate::services::sdk::ClientManager, Arc<Approval>) {
     let (manager, uid, identity) = crate::services::sdk::ssh_agent::test_fixture().await;
     let mut agent = AgentRuntime::new();
@@ -427,9 +443,14 @@ pub(crate) async fn test_ui_approval(
         },
     );
     let auth = protocol::Authentication {
+        purpose,
         username: "test-user".into(),
-        hosts: if can_remember { vec![[7; 32]] } else { vec![] },
-        fingerprints: if can_remember {
+        hosts: if can_remember && purpose == SigningPurpose::Authentication {
+            vec![[7; 32]]
+        } else {
+            vec![]
+        },
+        fingerprints: if can_remember && purpose == SigningPurpose::Authentication {
             vec!["SHA256:synthetic-test-host".into()]
         } else {
             vec![]

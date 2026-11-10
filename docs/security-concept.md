@@ -71,10 +71,17 @@ the audited Vaultwarden versions; global deauthorization is not normal logout.
 See the Vaultwarden compatibility audit in [login requirements](login-sync-requirements.md). Dropping UI/SDK strings does not guarantee erasure of
 all allocator or widget copies. This remains a prototype under review.
 
+Git-namespaced SSHSIG signing is supported through the agent, with strict digest/
+namespace framing, separate explicit approvals and purpose-bound transient grants.
+SSH-login prompt suppression does not authorize Git signing. Known bound/forwarded
+connections cannot request Git signatures. Payloads carry hashes rather than full
+commits, so approval does not attest a repository or caller identity. Generic
+signing and other namespaces remain rejected. See [SSH agent requirements](ssh-agent-requirements.md).
+
 ## Verification
 
-Current verification (incoming WebSocket push and TLS/mTLS lifecycle): `cargo test --workspace`
-passes 292 desktop tests plus one generator test (three desktop tests ignored).
+Current verification (incoming sync, inline folder saves and Git SSH signing): `cargo test --workspace`
+passes 297 desktop tests plus one generator test (three desktop tests ignored).
 `cargo clippy --workspace --all-targets` passes with existing warnings; the release
 workspace builds. The native Wayland settings-fit test also passes explicitly.
 Notification regressions use a disposable mandatory-mTLS WebSocket server and cover

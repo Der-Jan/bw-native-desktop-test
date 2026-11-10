@@ -1,5 +1,5 @@
-//! Bounded SSH-agent framing and public-key authentication/session binding only.
-//! The agent does not offer generic signing, key import, removal or remote control.
+//! Bounded SSH authentication and Git-namespaced SSHSIG requests.
+//! Arbitrary signing, key import, removal and remote control remain unavailable.
 use crate::services::sdk::ssh_agent::{signing_algorithm, verify_binding};
 pub const MAX_PACKET: usize = 65_536;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,12 +128,18 @@ impl Bindings {
 }
 #[derive(Clone)]
 pub struct Authentication {
+    pub purpose: SigningPurpose,
     pub username: String,
     pub hosts: Vec<[u8; 32]>,
     pub fingerprints: Vec<String>,
-    /// Both a verified binding chain and an authentication signature covering
-    /// its terminal host key are required before a grant may be reused.
+    /// SSH-login grants require a verified chain and host-bound signature.
+    /// Git signing grants instead bind the explicit signing purpose and key.
     pub rememberable: bool,
+}
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum SigningPurpose {
+    Authentication,
+    Git,
 }
 pub struct SignRequest {
     pub public_key: Vec<u8>,
@@ -154,6 +160,38 @@ pub fn parse_sign(packet: &[u8], bindings: &Bindings) -> Result<SignRequest> {
     let flags = reader.u32()?;
     reader.end()?;
     let algorithm = signing_algorithm(public_key, flags).map_err(|_| Invalid)?;
+    if let Some(signed) = data.strip_prefix(b"SSHSIG") {
+        // Git signing cannot use an established session-bound connection.
+        // Reject known forwarded/authenticated SSH connections before approval.
+        if !bindings.values.is_empty() {
+            return Err(Invalid);
+        }
+        let mut git = Reader::new(signed);
+        if git.text()? != "git" || !git.string()?.is_empty() {
+            return Err(Invalid);
+        }
+        let digest_len = match git.text()? {
+            "sha256" => 32,
+            "sha512" => 64,
+            _ => return Err(Invalid),
+        };
+        if git.string()?.len() != digest_len {
+            return Err(Invalid);
+        }
+        git.end()?;
+        return Ok(SignRequest {
+            public_key: public_key.into(),
+            data: data.into(),
+            flags,
+            authentication: Authentication {
+                purpose: SigningPurpose::Git,
+                username: String::new(),
+                hosts: Vec::new(),
+                fingerprints: Vec::new(),
+                rememberable: true,
+            },
+        });
+    }
     let mut auth = Reader::new(data);
     let session = auth.string()?;
     if !(16..=128).contains(&session.len()) || auth.byte()? != 50 {
@@ -191,6 +229,7 @@ pub fn parse_sign(packet: &[u8], bindings: &Bindings) -> Result<SignRequest> {
         return Err(Invalid);
     }
     let authentication = Authentication {
+        purpose: SigningPurpose::Authentication,
         rememberable: host.is_some() && !bindings.values.is_empty(),
         username: user.into(),
         hosts: bindings

@@ -75,7 +75,11 @@ pub fn run() -> eframe::Result {
         };
         let title = match surface {
             Surface::Main => "Bitwarden",
-            Surface::Approval => "Allow SSH authentication",
+            Surface::Approval => app
+                .borrow()
+                .as_ref()
+                .and_then(|a| a.core.ssh_approval.as_ref())
+                .map_or("SSH key approval", |a| a.title()),
             Surface::BrowserApproval => "Allow browser unlock",
             Surface::Magnify => "Bitwarden quick search",
         };

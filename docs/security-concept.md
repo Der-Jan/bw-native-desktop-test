@@ -86,10 +86,18 @@ replayed. Known incomplete/legacy attachments cannot be moved unsafely. Organiza
 administration, collection CRUD and moves between organizations remain outside
 this implementation. See [organization/collection flow](login-sync-requirements.md#implemented-organizations-and-item-collection-assignments).
 
+Forward proxy credentials are separate from vault/token authority: CONNECT Basic
+authentication uses only the configured proxy, with a native, memory-only prompt;
+no origin request is replayed on consent. Settings redacts proxy URL credentials.
+Transport generations handle credential replacement/forget, SDK auth middleware is
+preserved, and WSS continues with end-to-end vault mTLS. Tests cover authenticated
+tunnels, bypass rules, header separation, cancellation and preserving a hidden vault.
+Proxy/TLS diagnostics remain sanitized. See [mTLS/proxy requirements](mtls-requirements.md).
+
 ## Verification
 
-Current verification (incoming sync, inline folder saves and Git SSH signing): `cargo test --workspace`
-passes 308 desktop tests plus one generator test (three desktop tests ignored).
+Current verification (including proxy authentication and HTTP/HTTPS CONNECT with mTLS/WSS): `cargo test --workspace`
+passes 315 desktop tests plus one generator test (three desktop tests ignored).
 `cargo clippy --workspace --all-targets` passes with existing warnings; the release
 workspace builds. The native Wayland settings-fit test also passes explicitly.
 Notification regressions use a disposable mandatory-mTLS WebSocket server and cover

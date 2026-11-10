@@ -67,6 +67,7 @@ impl Application {
                 });
             self.core.fingerprint_open = open;
         }
+        self.proxy_dialog(ctx);
         self.folder_dialog(ctx);
         self.placement_dialog(ctx);
         if self.core.export_open {
@@ -254,6 +255,20 @@ impl Application {
                                 super::labels::text("Show website icons"),
                             )
                             .changed();
+                        ui.separator();
+                        ui.heading("Proxy configuration (read only)");
+                        if let Some(broker)=app.core.proxy_broker() {
+                            let rows=broker.rows();
+                            if rows.is_empty(){ui.weak("No proxy environment variables were set at startup.");}
+                            for (name,value) in rows {ui.horizontal_wrapped(|ui|{ui.strong(name);ui.label(value);});}
+                            ui.weak("HTTPS traffic uses HTTPS_PROXY, then ALL_PROXY, with NO_PROXY bypass rules. Lowercase variants are also read. Restart to apply environment changes. Desktop proxy settings, PAC and SOCKS are not used.");
+                            if broker.address().is_some() {
+                                ui.horizontal(|ui| {
+                                    if ui.button("Authenticate proxy…").clicked(){broker.request_auth();}
+                                    if ui.add_enabled(broker.has_credentials(),egui::Button::new("Forget session credentials")).clicked(){broker.forget();}
+                                });
+                            }
+                        }
                         ui.separator();
                         ui.heading("Desktop");
                         changed |= ui
@@ -873,6 +888,66 @@ impl Application {
             self.core.cancel_prompt();
         } else if submit {
             self.core.submit_placement();
+        }
+    }
+}
+
+impl Application {
+    fn proxy_dialog(&mut self, ctx: &egui::Context) {
+        let Some(id) = self.core.proxy_auth.as_ref().map(|f| f.challenge.id) else {
+            if let Some(previous) = self.proxy_seen.take() {
+                ctx.send_viewport_cmd_to(
+                    egui::ViewportId::from_hash_of(("proxy-auth", previous)),
+                    egui::ViewportCommand::Close,
+                );
+            }
+            return;
+        };
+        let fresh = self.proxy_seen != Some(id);
+        self.proxy_seen = Some(id);
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of(("proxy-auth", id)),
+            egui::ViewportBuilder::default()
+                .with_title("Proxy authentication")
+                .with_app_id(crate::assets::DESKTOP_APP_ID)
+                .with_icon(crate::assets::window_icon().unwrap_or_default())
+                .with_inner_size([520., 360.])
+                .with_min_inner_size([420., 320.])
+                .with_always_on_top()
+                .with_active(fresh),
+            |ui, _| {
+                egui::CentralPanel::default().show(ui, |ui| self.proxy_content(ui, fresh));
+            },
+        );
+    }
+    pub(super) fn proxy_content(&mut self, ui: &mut egui::Ui, fresh: bool) {
+        if fresh {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+        let mut submit = false;
+        let mut cancel = ui.input(|i| i.viewport().close_requested() || i.key_pressed(Key::Escape));
+        egui::ScrollArea::vertical().show(ui,|ui|{
+            let Some(form)=self.core.proxy_auth.as_mut()else{return;};
+            ui.heading("Proxy authentication");ui.label(&form.challenge.address);
+            ui.label("HTTP Basic authentication. Credentials stay in memory for this app session.");
+            if form.challenge.rejected{ui.colored_label(ui.visuals().error_fg_color,"The proxy rejected the previous credentials.");}
+            ui.label("Username");
+            let username=ui.add(egui::TextEdit::singleline(&mut *form.username).char_limit(1024).desired_width(f32::INFINITY));
+            if fresh{username.request_focus();}
+            ui.label("Password");
+            let password=secret(ui,&mut form.password,("proxy-password",form.challenge.id),false);
+            submit|=password.lost_focus()&&ui.input(|i|i.key_pressed(Key::Enter));
+            if let Some(error)=&form.error{ui.colored_label(ui.visuals().error_fg_color,error);}
+            ui.weak("After saving, retry sign-in or synchronize. WebSocket reconnects use these credentials automatically. Pending writes are not resent.");
+            ui.horizontal(|ui|{
+                cancel|=ui.button("Cancel").clicked();
+                submit|=ui.add_enabled(!form.username.is_empty(),egui::Button::new("Save credentials")).clicked();
+            });
+        });
+        if cancel {
+            self.core.cancel_proxy();
+        } else if submit {
+            self.core.submit_proxy();
         }
     }
 }

@@ -168,6 +168,7 @@ pub struct ProfileStore {
     root: PathBuf,
     inner: Arc<Mutex<Registry>>,
     pub secrets: SecretStore,
+    pub proxy: super::proxy::Broker,
 }
 impl ProfileStore {
     pub fn root(&self) -> &Path {
@@ -211,6 +212,7 @@ impl ProfileStore {
             .collect();
         Ok(Self {
             root: root.to_path_buf(),
+            proxy: super::proxy::Broker::environment(),
             inner: Arc::new(Mutex::new(Registry { profiles, epochs })),
             secrets,
         })

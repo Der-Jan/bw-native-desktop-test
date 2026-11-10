@@ -112,4 +112,5 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }

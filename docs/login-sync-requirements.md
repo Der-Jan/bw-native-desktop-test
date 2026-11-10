@@ -217,6 +217,17 @@ arbitrary regex-versus-regex intersection is not inferred. The matcher follows t
 implementation; registrable-domain extraction uses the static
 [PSL library](https://docs.rs/psl/latest/psl/), with no runtime domain lookup.
 
+## Forward proxy configuration and authentication
+
+Settings exposes read-only startup proxy environment values with URL credentials
+redacted. Account HTTPS traffic and WSS upgrades use the same configured proxy and
+NO_PROXY bypass rules. HTTP/HTTPS CONNECT and interactive Basic authentication are
+implemented; SOCKS, PAC and integrated NTLM/Kerberos are outside this slice.
+A 407 opens a native credential dialog without revealing a hidden vault. Credentials
+last only for the app session and can be forgotten in Settings. No failed write is
+replayed by the dialog; retry login or synchronize explicitly. WSS reconnects reuse
+session credentials automatically. See [proxy transport and verification](mtls-requirements.md).
+
 ## Implemented automatic incoming sync
 
 Unlocked Vaultwarden accounts connect directly to `notifications/hub` beneath the

@@ -52,6 +52,7 @@ pub struct Application {
     pub username_domain: String,
     pub folder_seen: Option<uuid::Uuid>,
     pub placement_seen: Option<uuid::Uuid>,
+    pub proxy_seen: Option<uuid::Uuid>,
     pub export_format: usize,
     pub export_password: Zeroizing<String>,
     pub export_confirm: Zeroizing<String>,
@@ -118,6 +119,7 @@ impl Application {
             username_domain: String::new(),
             folder_seen: None,
             placement_seen: None,
+            proxy_seen: None,
             export_format: 0,
             export_password: Zeroizing::default(),
             export_confirm: Zeroizing::default(),
@@ -259,6 +261,7 @@ impl eframe::App for Application {
         if self.core.ready_to_quit()
             || (self.surface == window_loop::Surface::Main && self.core.hidden)
             || (self.surface == window_loop::Surface::Approval && self.core.ssh_approval.is_none())
+            || (self.surface == window_loop::Surface::ProxyAuth && self.core.proxy_auth.is_none())
             || (self.surface == window_loop::Surface::BrowserApproval
                 && self.core.browser_approval.is_none())
             || (self.surface == window_loop::Surface::Magnify && !self.core.magnify_requested)

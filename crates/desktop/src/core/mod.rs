@@ -11,6 +11,7 @@ mod incoming;
 pub mod model;
 mod placement;
 mod profile;
+mod proxy;
 #[cfg(test)]
 mod tests;
 mod transfer;
@@ -139,6 +140,7 @@ pub struct Core {
     pub detail_request: Option<uuid::Uuid>,
     pub detail_save: Option<uuid::Uuid>,
     pub placement_editor: Option<model::PlacementEditor>,
+    pub proxy_auth: Option<model::ProxyAuth>,
     pub(super) duplicate_request: Option<(uuid::Uuid, Arc<std::sync::atomic::AtomicBool>)>,
     pub editor: Option<Editor>,
     pub query: String,
@@ -231,6 +233,7 @@ impl Core {
             detail_request: None,
             detail_save: None,
             placement_editor: None,
+            proxy_auth: None,
             duplicate_request: None,
             editor: None,
             query: String::new(),
@@ -320,6 +323,7 @@ impl Core {
         {
             self.notice = None;
         }
+        self.poll_proxy();
         self.flush_saved_uploads();
         self.poll_incoming();
         self.refresh_agent();
@@ -371,6 +375,12 @@ impl Core {
         self.clear_presentation_inner(true);
     }
     fn clear_presentation_inner(&mut self, preserve_list: bool) {
+        if !preserve_list {
+            if let Some(broker) = self.proxy_broker() {
+                broker.cancel_pending();
+            }
+            self.proxy_auth = None;
+        }
         if preserve_list {
             self.scroll_to = None;
         } else {

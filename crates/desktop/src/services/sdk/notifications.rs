@@ -26,6 +26,13 @@ use tokio_util::sync::CancellationToken;
 const LIMIT: usize = 64 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 type Socket = WebSocketStream<reqwest_account::Upgraded>;
+struct Connection {
+    socket: Socket,
+    transport: crate::services::accounts::transport::Transport,
+    endpoint: url::Url,
+    expires: i64,
+    proxy_version: u64,
+}
 
 #[derive(Default)]
 struct Hints {
@@ -96,12 +103,10 @@ async fn run(
             return;
         }
         let connected = connect(&current, root.clone(), store.clone(), &cancelled).await;
-        if let Ok((socket, transport, endpoint, expires)) = connected {
+        if let Ok(connection) = connected {
             let started = tokio::time::Instant::now();
             let _ = cancelled
-                .run_until_cancelled(listen(
-                    socket, &transport, &endpoint, expires, &hints, &wake, &current,
-                ))
+                .run_until_cancelled(listen(connection, &hints, &wake, &current))
                 .await;
             if started.elapsed() > Duration::from_secs(30) {
                 failures = 0;
@@ -126,15 +131,7 @@ async fn connect(
     root: PathBuf,
     store: ProfileStore,
     cancelled: &CancellationToken,
-) -> Result<
-    (
-        Socket,
-        crate::services::accounts::transport::Transport,
-        url::Url,
-        i64,
-    ),
-    String,
-> {
+) -> Result<Connection, String> {
     // Refresh needs a short lease; revoke cancels the outer future even during TLS.
     let lease = session.state.gate.read().await;
     let mut authority =
@@ -156,6 +153,7 @@ async fn connect(
             .timeout(IO_TIMEOUT)
             .build()
             .map_err(|_| "Could not prepare notification connection")?;
+        let proxy_version = authority.transport.proxy_version();
         let response = cancelled
             .run_until_cancelled(authority.transport.execute(request))
             .await
@@ -217,25 +215,33 @@ async fn connect(
             })
             .await
             .ok_or("Notification session cancelled")??;
-        return Ok((
+        if authority.transport.proxy_version() != proxy_version {
+            return Err("Proxy authentication changed during upgrade".into());
+        }
+        return Ok(Connection {
             socket,
-            authority.transport,
+            transport: authority.transport,
             endpoint,
-            authority.credentials.expires_at,
-        ));
+            expires: authority.credentials.expires_at,
+            proxy_version,
+        });
     }
     Err("Notification session expired".into())
 }
 
 async fn listen(
-    mut socket: Socket,
-    transport: &crate::services::accounts::transport::Transport,
-    endpoint: &url::Url,
-    expires: i64,
+    connection: Connection,
     hints: &Hints,
     wake: &Arc<dyn Fn() + Send + Sync>,
     session: &SessionToken,
 ) -> Result<(), String> {
+    let Connection {
+        mut socket,
+        transport,
+        endpoint,
+        expires,
+        proxy_version,
+    } = connection;
     let mut decoder = Decoder::default();
     let mut guard = tokio::time::interval(Duration::from_millis(100));
     guard.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -246,7 +252,8 @@ async fn listen(
         tokio::select! {
             biased;
             _ = guard.tick() => {
-                transport.check(endpoint)?;
+                transport.check(&endpoint)?;
+                if transport.proxy_version()!=proxy_version {return Err("Proxy authentication changed".into());}
                 if !session.state.network_authorized.load(Ordering::SeqCst) { return Err("Notification session expired".into()); }
                 let now = tokio::time::Instant::now();
                 if (!decoder.ready && now >= handshake_deadline) || now.duration_since(last_received) > Duration::from_secs(45) { return Err("Notification connection timed out".into()); }
@@ -258,7 +265,8 @@ async fn listen(
                 }
             }
             message = socket.next() => {
-                transport.check(endpoint)?;
+                transport.check(&endpoint)?;
+                if transport.proxy_version()!=proxy_version {return Err("Proxy authentication changed".into());}
                 if !session.state.network_authorized.load(Ordering::SeqCst) { return Err("Notification session expired".into()); }
                 let was_ready = decoder.ready;
                 last_received = tokio::time::Instant::now();

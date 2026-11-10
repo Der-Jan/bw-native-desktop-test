@@ -63,7 +63,9 @@ the first runtime/session and demo-storage slice is implemented; remaining work 
 - **Native mTLS completion** `[L]` — scoped login/probe HTTP transport, import,
   expiry checks and offline recovery settings are wired. Complete the remaining gates in [mTLS requirements](mtls-requirements.md), including
   account-scoped bindings from the iOS work, endpoint isolation, secret storage,
-  HTTP/WSS coverage, expiry recovery and certificate replacement.
+  broader platform HTTP/HTTPS-proxy and WSS coverage, expiry recovery and certificate replacement.
+  Read-only environment proxy display, interactive memory-only Basic credentials
+  and authenticated CONNECT/WSS with end-to-end mTLS are implemented.
 - **Remaining iOS sorting parity** `[M]` — persistent Name / Last changed / displayed Base URL column sorting is implemented. Add locale collation and the distinct raw-URI / registrable-domain modes; follow
   [iOS sorting requirements](vault-sorting-requirements.md), including four modes,
   stable selection, domain fixtures and clearing derived keys on lock.

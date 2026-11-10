@@ -21,6 +21,7 @@ use crate::{
 pub struct ClientBuilder {
     settings: Option<ClientSettings>,
     account_http_client: Option<reqwest::Client>,
+    account_executor: Option<Arc<dyn reqwest_middleware::Middleware>>,
     identity_policy: Vec<Arc<dyn reqwest_middleware::Middleware>>,
     token_handler: Arc<dyn TokenHandler>,
     state_registry: Option<StateRegistry>,
@@ -36,6 +37,7 @@ impl ClientBuilder {
         Self {
             settings: None,
             account_http_client: None,
+            account_executor: None,
             identity_policy: Vec::new(),
             token_handler: Arc::new(NoopTokenHandler),
             state_registry: None,
@@ -66,6 +68,16 @@ impl ClientBuilder {
         self.account_http_client = Some(client);
         self.identity_policy.push(policy.clone());
         self.middleware.insert(0, policy);
+        self
+    }
+
+    /// Host-owned dispatch after all SDK authentication middleware. This permits
+    /// replacing proxy-authenticated clients without bypassing SDK token handling.
+    pub fn with_account_executor(
+        mut self,
+        executor: Arc<dyn reqwest_middleware::Middleware>,
+    ) -> Self {
+        self.account_executor = Some(executor);
         self
     }
 
@@ -130,6 +142,9 @@ impl ClientBuilder {
         for policy in &self.identity_policy {
             identity_builder = identity_builder.with_arc(policy.clone());
         }
+        if let Some(executor) = &self.account_executor {
+            identity_builder = identity_builder.with_arc(executor.clone());
+        }
         let identity = bitwarden_api_identity::Configuration {
             base_path: settings.identity_url,
             client: identity_builder.build(),
@@ -171,7 +186,11 @@ impl ClientBuilder {
         for mw in self.middleware {
             middleware_builder = middleware_builder.with_arc(mw);
         }
-        let bw_http_client = middleware_builder.with_arc(auth_middleware).build();
+        middleware_builder = middleware_builder.with_arc(auth_middleware);
+        if let Some(executor) = self.account_executor {
+            middleware_builder = middleware_builder.with_arc(executor);
+        }
+        let bw_http_client = middleware_builder.build();
         let api = bitwarden_api_api::Configuration {
             base_path: settings.api_url,
             client: bw_http_client,

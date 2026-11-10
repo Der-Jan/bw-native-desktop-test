@@ -2,7 +2,7 @@ use super::profile::{ProfileStore, ServerProfile};
 use reqwest_account::{Client, Response, Url};
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
@@ -18,6 +18,9 @@ pub struct Transport {
     pub profile: ServerProfile,
     pub(super) client: Client,
     epoch: Arc<AtomicU64>,
+    source: ProfileStore,
+    notifications: bool,
+    live: Arc<Mutex<(u64, Client)>>,
 }
 impl Transport {
     /// Call on a blocking worker: loading a private key may require OS credential-store unlock.
@@ -71,13 +74,17 @@ impl Transport {
                 );
             }
         }
+        let (builder, proxy_version) = store.proxy.configure(builder)?;
         let client = builder
             .build()
             .map_err(|_| "Could not construct secure account transport")?;
         let t = Self {
             profile,
+            live: Arc::new(Mutex::new((proxy_version, client.clone()))),
             client,
             epoch,
+            source: store.clone(),
+            notifications,
         };
         t.check(&Url::parse(&t.profile.base).map_err(|_| "Invalid saved endpoint")?)?;
         Ok(t)
@@ -91,14 +98,49 @@ impl Transport {
         }
         self.profile.check(url)
     }
+    pub fn proxy_version(&self) -> u64 {
+        self.source.proxy.version()
+    }
+    async fn execution_client(&self) -> Result<(u64, Client), String> {
+        for _ in 0..3 {
+            let version = self.source.proxy.version();
+            let cached = self.live.lock().unwrap().clone();
+            if cached.0 == version {
+                return Ok(cached);
+            }
+            let store = self.source.clone();
+            let profile = self.profile.clone();
+            let notifications = self.notifications;
+            let fresh =
+                tokio::task::spawn_blocking(move || Self::build(&store, profile, notifications))
+                    .await
+                    .map_err(|_| "Could not refresh proxy transport")??;
+            let next = fresh.live.lock().unwrap().clone();
+            if next.0 == self.source.proxy.version() {
+                *self.live.lock().unwrap() = next.clone();
+                return Ok(next);
+            }
+        }
+        Err("Proxy authentication changed; retry with the current credentials".into())
+    }
     pub async fn execute(&self, request: reqwest_account::Request) -> Result<Response, String> {
         self.check(request.url())?;
-        let response = self
-            .client
-            .execute(request)
-            .await
-            .map_err(|error| connection_failure(&error))?;
+        let (version, client) = self.execution_client().await?;
+        self.check(request.url())?;
+        let response = client.execute(request).await.map_err(|error| {
+            if self.source.proxy.authentication_error(&error, version) {
+                super::proxy::AUTH_REQUIRED.into()
+            } else {
+                connection_failure(&error)
+            }
+        })?;
         self.check(response.url())?;
+        if self.source.proxy.version() != version {
+            return Err(
+                "Proxy authentication changed during the request; retry with current credentials"
+                    .into(),
+            );
+        }
         if response.status().is_redirection() {
             return Err(
                 "Server redirects are blocked; configure the final trusted endpoint explicitly"
@@ -112,6 +154,9 @@ impl Transport {
         let new = Self {
             profile,
             client: self.client.clone(),
+            live: self.live.clone(),
+            source: store.clone(),
+            notifications: self.notifications,
             epoch,
         };
         new.check(&new.profile.default_api()?)?;
@@ -129,10 +174,38 @@ impl Transport {
         &self,
         builder: bitwarden_core::ClientBuilder,
     ) -> bitwarden_core::ClientBuilder {
-        builder.with_account_transport(self.client.clone(), self.policy())
+        builder
+            .with_account_transport(self.client.clone(), self.policy())
+            .with_account_executor(self.executor())
+    }
+    pub(super) fn executor(&self) -> Arc<dyn reqwest_middleware::Middleware> {
+        Arc::new(Executor(self.clone()))
     }
     pub fn policy(&self) -> Arc<dyn reqwest_middleware::Middleware> {
         Arc::new(self.clone())
+    }
+}
+#[derive(Debug)]
+struct DispatchFailure(String);
+impl std::fmt::Display for DispatchFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for DispatchFailure {}
+struct Executor(Transport);
+#[async_trait::async_trait]
+impl reqwest_middleware::Middleware for Executor {
+    async fn handle(
+        &self,
+        req: reqwest_account::Request,
+        _: &mut http::Extensions,
+        _: reqwest_middleware::Next<'_>,
+    ) -> Result<Response, reqwest_middleware::Error> {
+        self.0
+            .execute(req)
+            .await
+            .map_err(|e| reqwest_middleware::Error::Middleware(DispatchFailure(e).into()))
     }
 }
 #[async_trait::async_trait]
@@ -146,6 +219,11 @@ impl reqwest_middleware::Middleware for Transport {
         self.check(req.url())
             .map_err(|e| reqwest_middleware::Error::Middleware(std::io::Error::other(e).into()))?;
         let response = next.run(req, ext).await.map_err(|error| {
+            if let reqwest_middleware::Error::Middleware(details) = &error
+                && details.downcast_ref::<DispatchFailure>().is_some()
+            {
+                return error;
+            }
             reqwest_middleware::Error::Middleware(
                 std::io::Error::other(connection_failure(&error)).into(),
             )
@@ -194,6 +272,9 @@ pub async fn json_body_limited(
 fn connection_failure(error: &(dyn std::error::Error + 'static)) -> String {
     let mut cause = Some(error);
     while let Some(error) = cause {
+        if let Some(safe) = error.downcast_ref::<DispatchFailure>() {
+            return safe.0.clone();
+        }
         if let Some(tls) = error.downcast_ref::<rustls::Error>()
             && let Some(message) = tls_failure(tls)
         {

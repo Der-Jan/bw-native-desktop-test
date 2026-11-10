@@ -10,6 +10,12 @@ use std::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+pub struct ProxyAuth {
+    pub challenge: crate::services::accounts::proxy::Challenge,
+    pub username: Zeroizing<String>,
+    pub password: Zeroizing<String>,
+    pub error: Option<String>,
+}
 pub struct Folder {
     pub id: FolderId,
     pub name: String,

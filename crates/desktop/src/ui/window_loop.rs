@@ -15,6 +15,7 @@ pub enum Surface {
     Main,
     Approval,
     BrowserApproval,
+    ProxyAuth,
     Magnify,
 }
 #[derive(Default)]
@@ -71,6 +72,7 @@ pub fn run() -> eframe::Result {
             Surface::Main => [1200., 840.],
             Surface::Approval => [500., 350.],
             Surface::BrowserApproval => [580., 420.],
+            Surface::ProxyAuth => [520., 360.],
             Surface::Magnify => [600., 420.],
         };
         let title = match surface {
@@ -81,6 +83,7 @@ pub fn run() -> eframe::Result {
                 .and_then(|a| a.core.ssh_approval.as_ref())
                 .map_or("SSH key approval", |a| a.title()),
             Surface::BrowserApproval => "Allow browser unlock",
+            Surface::ProxyAuth => "Proxy authentication",
             Surface::Magnify => "Bitwarden quick search",
         };
         let mut viewport = egui::ViewportBuilder::default()
@@ -173,6 +176,9 @@ pub fn run() -> eframe::Result {
                 // Finish durable cleanup without reopening.
                 else if !app.core.hidden {
                     surface = Surface::Main;
+                    break;
+                } else if app.core.proxy_auth.is_some() {
+                    surface = Surface::ProxyAuth;
                     break;
                 } else if app.core.browser_approval.is_some() {
                     surface = Surface::BrowserApproval;

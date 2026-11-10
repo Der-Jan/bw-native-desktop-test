@@ -152,6 +152,12 @@ impl Application {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }
+            window_loop::Surface::ProxyAuth => {
+                let fresh =
+                    self.proxy_seen != self.core.proxy_auth.as_ref().map(|f| f.challenge.id);
+                self.proxy_seen = self.core.proxy_auth.as_ref().map(|f| f.challenge.id);
+                egui::CentralPanel::default().show(ui, |ui| self.proxy_content(ui, fresh));
+            }
             window_loop::Surface::Main => {}
         }
     }

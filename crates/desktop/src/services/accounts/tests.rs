@@ -7329,3 +7329,423 @@ async fn placement_dialog_requires_explicit_transfer_confirmation_and_master_pas
             .is_err()
     );
 }
+
+trait ProxyIo: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> ProxyIo for T {}
+
+struct ConnectProxy {
+    client_certificates: Arc<std::sync::atomic::AtomicUsize>,
+    address: String,
+    authentication: Arc<AtomicBool>,
+    requests: Arc<Mutex<Vec<String>>>,
+    stop: tokio_util::sync::CancellationToken,
+    task: tokio::task::JoinHandle<()>,
+}
+impl Drop for ConnectProxy {
+    fn drop(&mut self) {
+        self.stop.cancel();
+        self.task.abort();
+    }
+}
+impl ConnectProxy {
+    async fn new(profile: &ServerProfile) -> Self {
+        Self::start(profile, None).await
+    }
+    async fn new_tls(f: &Fixture) -> Self {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+        let mut roots = rustls::RootCertStore::empty();
+        roots
+            .add(CertificateDer::from(f.ca.to_der().unwrap()))
+            .unwrap();
+        // Request a client certificate, allowing anonymous proxies. The vault
+        // identity must not be offered even though its issuing CA matches.
+        let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
+            Arc::new(roots),
+            provider.clone(),
+        )
+        .allow_unauthenticated()
+        .build()
+        .unwrap();
+        let (key, certificate) = cert("localhost", Some((&f.ca, &f.ca_key)), 3);
+        let config = rustls::ServerConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
+            .unwrap()
+            .with_client_cert_verifier(verifier)
+            .with_single_cert(
+                vec![CertificateDer::from(certificate.to_der().unwrap())],
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+                    key.private_key_to_pkcs8().unwrap(),
+                )),
+            )
+            .unwrap();
+        Self::start(
+            &f.profile,
+            Some(tokio_rustls::TlsAcceptor::from(Arc::new(config))),
+        )
+        .await
+    }
+    async fn start(profile: &ServerProfile, tls: Option<tokio_rustls::TlsAcceptor>) -> Self {
+        let target = url::Url::parse(&profile.base).unwrap();
+        let authority = format!("localhost:{}", target.port().unwrap());
+        let port = target.port().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = if tls.is_some() {
+            format!(
+                "https://localhost:{}",
+                listener.local_addr().unwrap().port()
+            )
+        } else {
+            format!("http://{}", listener.local_addr().unwrap())
+        };
+        let client_certificates = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let certificates = client_certificates.clone();
+        let authentication = Arc::new(AtomicBool::new(false));
+        let require = authentication.clone();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let received = requests.clone();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let cancelled = stop.clone();
+        let task = tokio::spawn(async move {
+            let mut workers = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    _=cancelled.cancelled()=>break,
+                    _=workers.join_next(),if !workers.is_empty()=>{},
+                    connection=listener.accept()=>{
+                        let Ok((incoming,_))=connection else{break;};
+                        let tls=tls.clone(); let certificates=certificates.clone();
+                        let authority=authority.clone();let received=received.clone();let require=require.clone();let cancelled=cancelled.clone();
+                        workers.spawn(async move{
+                            use tokio::io::{AsyncReadExt,AsyncWriteExt};
+                            let mut incoming: Box<dyn ProxyIo> = if let Some(tls)=tls {
+                                let Ok(Ok(stream))=tokio::time::timeout(std::time::Duration::from_secs(3), tls.accept(incoming)).await else{return;};
+                                if stream.get_ref().1.peer_certificates().is_some_and(|c|!c.is_empty()) {
+                                    certificates.fetch_add(1,Ordering::SeqCst);
+                                }
+                                Box::new(stream)
+                            } else { Box::new(incoming) };
+                            let headers=tokio::time::timeout(std::time::Duration::from_secs(3),async{
+                                let mut bytes=Vec::new();
+                                while bytes.len()<16*1024 {bytes.push(incoming.read_u8().await?);if bytes.ends_with(b"\r\n\r\n"){return Ok::<_,std::io::Error>(bytes);}}
+                                Err(std::io::Error::other("Oversized proxy headers"))
+                            }).await;
+                            let Ok(Ok(headers))=headers else{return;};let headers=String::from_utf8(headers).unwrap();
+                            received.lock().unwrap().push(headers.clone());
+                            if headers.lines().next()!=Some(format!("CONNECT {authority} HTTP/1.1").as_str()) {return;}
+                            let expected=format!("Basic {}",base64::Engine::encode(&base64::engine::general_purpose::STANDARD,b"synthetic-proxy-user:synthetic-proxy-password"));
+                            let valid=headers.lines().any(|l|l.split_once(':').is_some_and(|(k,v)|k.eq_ignore_ascii_case("proxy-authorization")&&v.trim()==expected));
+                            if require.load(Ordering::SeqCst)&&!valid {
+                                let _=incoming.write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"synthetic\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;return;
+                            }
+                            let Ok(mut outgoing)=tokio::net::TcpStream::connect(("127.0.0.1",port)).await else{return;};
+                            if incoming.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await.is_err(){return;}
+                            tokio::select!{_=cancelled.cancelled()=>{},_=tokio::io::copy_bidirectional(&mut incoming,&mut outgoing)=>{}}
+                        });
+                    },
+                }
+            }
+        });
+        Self {
+            client_certificates,
+            address,
+            authentication,
+            requests,
+            stop,
+            task,
+        }
+    }
+}
+#[tokio::test]
+async fn proxy_connect_authentication_tunnels_mtls_websockets_and_reconnects() {
+    use crate::services::accounts::proxy::Broker;
+    let mut f = Fixture::new();
+    let proxy = ConnectProxy::new(&f.profile).await;
+    f.store.proxy = Broker::test(&proxy.address, "");
+    let (manager, uid) = f.account().await;
+    f.notification_mode.store(1, Ordering::SeqCst);
+    proxy.authentication.store(true, Ordering::SeqCst);
+    let before = f.requests.lock().unwrap().len();
+    let subscription = subscribe_fixture(&f, &manager, uid);
+    let challenge = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Some(challenge) = f.store.proxy.pending() {
+                break challenge;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        f.requests.lock().unwrap().len(),
+        before,
+        "A rejected tunnel must never fall back to the origin"
+    );
+    f.store
+        .proxy
+        .submit(
+            challenge.id,
+            Zeroizing::new("synthetic-proxy-user".into()),
+            Zeroizing::new("synthetic-proxy-password".into()),
+        )
+        .unwrap();
+    wait_notification(&f, 1).await;
+    f.notification_senders.lock().unwrap()[0]
+        .send(Some(notification_frame()))
+        .unwrap();
+    let mut changed = false;
+    for _ in 0..200 {
+        changed |= subscription.take_changed();
+        if changed {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(changed);
+    let expected = f
+        .leaf
+        .digest(MessageDigest::sha256())
+        .unwrap()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    for (request, fingerprint) in f.requests.lock().unwrap().iter() {
+        assert_eq!(
+            *fingerprint, expected,
+            "mTLS must still authenticate directly to the origin"
+        );
+        assert!(
+            !request
+                .to_ascii_lowercase()
+                .contains("proxy-authorization:")
+        );
+    }
+    for request in proxy.requests.lock().unwrap().iter() {
+        assert!(
+            !request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer")
+        );
+        assert!(!request.contains("synthetic-access-token"));
+    }
+    f.notification_senders.lock().unwrap()[0]
+        .send(None)
+        .unwrap();
+    wait_notification(&f, 2).await;
+    assert!(proxy.requests.lock().unwrap().iter().any(|r| {
+        r.to_ascii_lowercase()
+            .contains("proxy-authorization: basic")
+    }));
+    f.store.proxy.forget();
+    for _ in 0..200 {
+        if f.notification_live.load(Ordering::SeqCst) == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(
+        f.notification_live.load(Ordering::SeqCst),
+        0,
+        "Forgetting credentials retires existing tunnels"
+    );
+    drop(subscription);
+}
+#[tokio::test]
+async fn proxy_credentials_refresh_existing_transports_and_sdk_middleware_without_replay() {
+    use crate::services::accounts::proxy::{AUTH_REQUIRED, Broker};
+    let mut f = Fixture::new();
+    let proxy = ConnectProxy::new(&f.profile).await;
+    f.store.proxy = Broker::test(&proxy.address, "");
+    let profile = f.import();
+    let transport = Transport::new(&f.store, profile).unwrap();
+    let client = transport
+        .configure_sdk(bitwarden_core::ClientBuilder::new().with_settings(
+            bitwarden_core::ClientSettings {
+                identity_url: f.profile.endpoint("identity").unwrap().to_string(),
+                ..Default::default()
+            },
+        ))
+        .build();
+    let url = f.profile.endpoint("api/config").unwrap();
+    proxy.authentication.store(true, Ordering::SeqCst);
+    let request = transport
+        .request(reqwest_account::Method::GET, url.clone())
+        .unwrap()
+        .build()
+        .unwrap();
+    assert!(
+        transport
+            .execute(request)
+            .await
+            .unwrap_err()
+            .contains(AUTH_REQUIRED)
+    );
+    assert!(f.requests.lock().unwrap().is_empty());
+    let challenge = f.store.proxy.pending().unwrap();
+    f.store
+        .proxy
+        .submit(
+            challenge.id,
+            Zeroizing::new("synthetic-proxy-user".into()),
+            Zeroizing::new("wrong-password".into()),
+        )
+        .unwrap();
+    let request = transport
+        .request(reqwest_account::Method::GET, url.clone())
+        .unwrap()
+        .build()
+        .unwrap();
+    assert!(
+        transport
+            .execute(request)
+            .await
+            .unwrap_err()
+            .contains(AUTH_REQUIRED)
+    );
+    let challenge = f.store.proxy.pending().unwrap();
+    assert!(challenge.rejected);
+    assert!(f.requests.lock().unwrap().is_empty());
+    f.store
+        .proxy
+        .submit(
+            challenge.id,
+            Zeroizing::new("synthetic-proxy-user".into()),
+            Zeroizing::new("synthetic-proxy-password".into()),
+        )
+        .unwrap();
+    client
+        .auth()
+        .prelogin("test@example.invalid".into())
+        .await
+        .unwrap();
+    let api = client.internal.get_api_configurations();
+    assert!(
+        api.api_config
+            .client
+            .get(url.clone())
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    assert_eq!(f.requests.lock().unwrap().len(), 2);
+    f.store.proxy.forget();
+    assert!(!f.store.proxy.has_credentials());
+    assert!(api.api_config.client.get(url).send().await.is_err());
+    assert_eq!(f.requests.lock().unwrap().len(), 2);
+}
+#[tokio::test]
+async fn proxy_no_proxy_bypasses_connect_for_websocket_connections() {
+    use crate::services::accounts::proxy::Broker;
+    let mut f = Fixture::new();
+    let proxy = ConnectProxy::new(&f.profile).await;
+    f.store.proxy = Broker::test(&proxy.address, "localhost");
+    let (manager, uid) = f.account().await;
+    f.notification_mode.store(1, Ordering::SeqCst);
+    let _subscription = subscribe_fixture(&f, &manager, uid);
+    wait_notification(&f, 1).await;
+    assert!(proxy.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn proxy_dialog_preserves_hidden_vault_and_cancels_credentials_on_lock() {
+    use crate::services::accounts::proxy::Broker;
+    let mut f = Fixture::new();
+    let proxy = ConnectProxy::new(&f.profile).await;
+    f.store.proxy = Broker::test(&proxy.address, "");
+    let (manager, uid) = f.account().await;
+    let mut core = crate::core::Core::test(manager);
+    core.hidden = true;
+    f.store.proxy.request_auth();
+    core.poll();
+    let id = core.proxy_auth.as_ref().unwrap().challenge.id;
+    assert!(core.hidden);
+    core.proxy_auth.as_mut().unwrap().username = Zeroizing::new("synthetic-proxy-user".into());
+    core.proxy_auth.as_mut().unwrap().password = Zeroizing::new("synthetic-proxy-password".into());
+    core.clear_presentation_for_refresh();
+    assert_eq!(core.proxy_auth.as_ref().unwrap().challenge.id, id);
+    core.lock_user(uid);
+    assert!(core.proxy_auth.is_none());
+    assert!(f.store.proxy.pending().is_none());
+    assert!(
+        f.store
+            .proxy
+            .submit(
+                id,
+                Zeroizing::new("stale".into()),
+                Zeroizing::new("stale".into())
+            )
+            .is_err()
+    );
+    assert!(!f.store.proxy.has_credentials());
+    assert!(core.hidden);
+}
+
+#[tokio::test]
+async fn https_proxy_tunnels_mtls_websockets_without_receiving_vault_identity() {
+    use crate::services::accounts::proxy::Broker;
+    let mut f = Fixture::new();
+    let proxy = ConnectProxy::new_tls(&f).await;
+    f.store.proxy = Broker::test(&proxy.address, "");
+    let (manager, uid) = f.account().await;
+    proxy.authentication.store(true, Ordering::SeqCst);
+    f.store.proxy.request_auth();
+    let challenge = f.store.proxy.pending().unwrap();
+    f.store
+        .proxy
+        .submit(
+            challenge.id,
+            Zeroizing::new("synthetic-proxy-user".into()),
+            Zeroizing::new("synthetic-proxy-password".into()),
+        )
+        .unwrap();
+    f.notification_mode.store(1, Ordering::SeqCst);
+    let subscription = subscribe_fixture(&f, &manager, uid);
+    wait_notification(&f, 1).await;
+    f.notification_senders.lock().unwrap()[0]
+        .send(Some(notification_frame()))
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while !subscription.take_changed() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    f.notification_senders.lock().unwrap()[0]
+        .send(None)
+        .unwrap();
+    wait_notification(&f, 2).await;
+    assert_eq!(
+        proxy.client_certificates.load(Ordering::SeqCst),
+        0,
+        "The HTTPS proxy requested a matching certificate but must never receive the vault identity"
+    );
+    let expected = f
+        .leaf
+        .digest(MessageDigest::sha256())
+        .unwrap()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    for (headers, fingerprint) in f.requests.lock().unwrap().iter() {
+        assert_eq!(*fingerprint, expected);
+        assert!(
+            !headers
+                .to_ascii_lowercase()
+                .contains("proxy-authorization:")
+        );
+    }
+    let requests = proxy.requests.lock().unwrap();
+    assert!(requests.iter().any(|r| {
+        r.to_ascii_lowercase()
+            .contains("proxy-authorization: basic")
+    }));
+    assert!(
+        requests
+            .iter()
+            .all(|r| !r.to_ascii_lowercase().contains("authorization: bearer"))
+    );
+}

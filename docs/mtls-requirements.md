@@ -86,6 +86,52 @@ Synthetic mandatory-mTLS tests verify the actual peer fingerprint, replacement b
 a different identity, base-path retention, header auth, reconnect, rejected upgrades
 and redirects, and focus/manual-check fallback. Windows/macOS still require platform testing.
 
+Forward-proxy support now captures HTTP/HTTPS proxy environment settings when the
+profile registry opens. Settings shows a read-only, credential-redacted summary
+of uppercase/lowercase HTTPS_PROXY, ALL_PROXY, HTTP_PROXY and NO_PROXY. Account
+HTTPS/WSS uses HTTPS_PROXY (or ALL_PROXY) with the library's NO_PROXY rules;
+HTTP_PROXY is displayed but does not route HTTPS traffic. Invalid/unsupported
+configured HTTPS proxies fail closed instead of silently connecting directly.
+Restart to apply environment changes; desktop proxy settings, PAC and SOCKS are
+not consulted by this account transport.
+
+A failed CONNECT with HTTP 407 queues a separate native Basic-authentication
+dialog. Credentials are held in memory, scoped to the configured proxy, and
+never saved to account metadata, preferences or the OS credential store. URL
+credentials and invalid values are redacted from Settings/errors. Cancel suppresses
+repeated prompts until Authenticate proxy is requested in Settings. Forget session
+credentials invalidates cached account clients and existing WebSocket tunnels;
+environment-supplied credentials remain configured until the environment changes.
+HTTP proxy Basic credentials are sent to the proxy before the encrypted server
+tunnel; HTTPS proxies additionally encrypt that proxy connection. Digest,
+NTLM/Kerberos and client-certificate authentication to the forward proxy are not
+implemented by this credential dialog. Vault mTLS remains inside CONNECT.
+
+The failed origin operation is not automatically replayed after proxy login.
+Retry sign-in or use Synchronize for eligible edits; uncertain mutations retain
+their existing reconciliation rules. WebSocket reconnects load the new credentials
+automatically. Existing SDK API/Identity clients also use refreshed proxy credentials
+through a small host-executor hook after SDK authentication middleware; the outer
+endpoint policy remains in place. Broker version checks discard stale responses
+and retire WSS connections across credential changes. No vault bearer token or
+proxy authorization header is attached to the wrong protocol layer.
+
+Linux tests use an actual authenticated CONNECT relay and a mandatory-mTLS origin:
+407 creates a prompt and sends no origin request, wrong credentials reprompt,
+existing SDK API/Identity clients refresh, WSS messages/reconnect work through the
+tunnel, forgetting credentials retires tunnels, and NO_PROXY bypasses them. The
+origin peer fingerprint proves mTLS remains end to end. Proxy headers contain no
+vault bearer token; origin headers contain no Proxy-Authorization. Configuration
+redaction, prompt deduplication, cancellation, stale responses and hidden-vault
+handling are covered. The CONNECT 407 error uses hyper-util's exact static diagnostic
+because that error type is not publicly re-exported; the lockfile and integration
+test guard this dependency boundary. An additional HTTPS-forward-proxy fixture
+requests an optional client certificate from the same CA as the vault identity:
+HTTP and WSS tunnels succeed, including reconnects, without presenting that identity
+to the proxy; the origin still requires and receives it. The vendored reqwest
+0.13.5 patch clears the outer proxy TLS client-certificate resolver, retaining it
+for the inner origin TLS session. Platform proxy matrices remain acceptance work.
+
 Known remaining acceptance work: broader online CRUD coverage, chain policy beyond expiry/signature/key-usage and TLS backend validation, multi-identity selection (currently
 rejected), reference storage deduplication by fingerprint, comprehensive Windows ACL
 and macOS/Windows platform validation. Old unreferenced identity ciphertext/keys are

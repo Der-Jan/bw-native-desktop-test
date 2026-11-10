@@ -6507,3 +6507,22 @@ async fn notifications_server_logout_locks_even_with_an_open_editor() {
     assert!(!core.manager.is_unlocked(&uid));
     assert!(core.editor.is_none());
 }
+
+#[tokio::test]
+async fn incoming_sync_does_not_poll_periodically_but_focus_still_checks() {
+    let (f, manager, _, _) = clean_remote_fixture().await;
+    let mut core = core_for_automatic_save(manager).await;
+    core.incoming_for_test();
+    finish_incoming(&mut core).await;
+    let requests = f.requests.lock().unwrap().len();
+    // A passed timer deadline must not initiate another server check.
+    for _ in 0..10 {
+        core.expire_incoming_deadlines_for_test();
+        core.poll();
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(f.requests.lock().unwrap().len(), requests);
+    core.check_incoming_now();
+    finish_incoming(&mut core).await;
+    assert_eq!(f.requests.lock().unwrap().len(), requests + 1);
+}

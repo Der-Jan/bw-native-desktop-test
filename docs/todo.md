@@ -43,7 +43,7 @@ the first runtime/session and demo-storage slice is implemented; remaining work 
   login, OS-protected tokens and full read-sync snapshots are wired; unsupported
   challenges fail explicitly. Remaining sync work includes complete key migrations, item
   permanent deletion, ownership/sharing transfers and Send.
-  Incoming WebSocket push with reconnect, revision polling fallback (15 seconds, periodic full metadata refresh), new-item
+  Incoming WebSocket push with focus/reconnect revision checks (no periodic polling), new-item
   creation with server-ID reconciliation and SDK-encrypted attachment transfers
   now work through the account-scoped TLS/mTLS transport. Archive/unarchive also
   synchronizes immediately with durable intent and read-only outcome confirmation.

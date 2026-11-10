@@ -84,7 +84,7 @@ certificate expiry and profile epoch every 100 ms and before accepting data, and
 cancel on lock/logout. Replacement reconnects load the new protected identity.
 Synthetic mandatory-mTLS tests verify the actual peer fingerprint, replacement by
 a different identity, base-path retention, header auth, reconnect, rejected upgrades
-and redirects, and polling fallback. Windows/macOS still require platform testing.
+and redirects, and focus/manual-check fallback. Windows/macOS still require platform testing.
 
 Known remaining acceptance work: broader online CRUD coverage, chain policy beyond expiry/signature/key-usage and TLS backend validation, multi-identity selection (currently
 rejected), reference storage deduplication by fingerprint, comprehensive Windows ACL

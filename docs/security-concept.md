@@ -57,8 +57,8 @@ carry no OAuth token; authenticated plaintext is published atomically only after
 SDK verification and current session/profile checks. Incoming authenticated WebSocket hints trigger read-only refreshes through the
 sync coordinator, with a scoped HTTP/1.1 TLS/mTLS upgrade, bounded protocol decoding,
 revocable per-unlock subscriptions and reconnect backoff. No payload is applied
-as vault data. Server logout hints lock immediately. Revision polling remains
-enabled every 15 seconds, with periodic metadata refresh and failure backoff. Archive/unarchive changes per-user metadata through durable intent and
+as vault data. Server logout hints lock immediately. Revision checks run on startup/unlock, focus and reconnect, with retry backoff
+after failures. There is no periodic server polling. Archive/unarchive changes per-user metadata through durable intent and
 read-only confirmation, including safe recovery after a lost reply. Trash/restore now use the same durable lifecycle mechanism with fresh delete/restore permissions. Permanent deletion remains disabled.
 Windows ACL/platform validation, remaining Vaultwarden login challenges and
 organization enrollment/recovery workflows remain open. Vaultwarden organization
@@ -74,14 +74,15 @@ all allocator or widget copies. This remains a prototype under review.
 ## Verification
 
 Current verification (incoming WebSocket push and TLS/mTLS lifecycle): `cargo test --workspace`
-passes 287 desktop tests plus one generator test (three desktop tests ignored).
+passes 288 desktop tests plus one generator test (three desktop tests ignored).
 `cargo clippy --workspace --all-targets` passes with existing warnings; the release
 workspace builds. The native Wayland settings-fit test also passes explicitly.
 Notification regressions use a disposable mandatory-mTLS WebSocket server and cover
 header-only authentication, actual client-certificate fingerprints and replacement,
 reconnect after dropped connections, credential refresh after 401, snapshot-generation
 changes, lock/server logout, unchanged-revision push, burst coalescing, editor
-deferral, rejected redirects/upgrades and polling fallback. Decoder tests cover
+deferral, rejected redirects/upgrades and explicit-check fallback. A regression confirms successful checks do not
+repeat when timer deadlines pass. Decoder tests cover
 fragmented/coalesced SignalR records, oversize/deep/malformed input and hub closure.
 Creation/attachment regressions cover server-assigned IDs, personal and organization
 creation, lost replies, incomplete uploads across restart, legacy v1 downloads,

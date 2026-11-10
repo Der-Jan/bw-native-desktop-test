@@ -1,12 +1,13 @@
 use super::*;
 use services::sdk::incoming;
 use services::sdk::notifications;
-const INTERVAL: Duration = Duration::from_secs(15);
+const RETRY: Duration = Duration::from_secs(30);
 #[derive(Default)]
 pub(super) struct PollState {
     pub next: Option<Instant>,
     pub busy: bool,
     pub failures: u8,
+    checked: bool,
     push: Option<notifications::Subscription>,
     dirty: bool,
     push_after: Option<Instant>,
@@ -39,6 +40,7 @@ impl Core {
         }
         for state in self.incoming.values_mut() {
             state.next = None;
+            state.checked = false;
         }
         self.poll_incoming();
     }
@@ -51,6 +53,12 @@ impl Core {
     pub(crate) fn notifications_for_test(&mut self) {
         self.notifications_enabled = true;
         self.incoming_for_test();
+    }
+    #[cfg(test)]
+    pub(crate) fn expire_incoming_deadlines_for_test(&mut self) {
+        for state in self.incoming.values_mut() {
+            state.next = None;
+        }
     }
     #[cfg(test)]
     pub(crate) fn incoming_idle_for_test(&self) -> bool {
@@ -100,6 +108,7 @@ impl Core {
                 state.dirty |= push.take_changed();
                 if push.take_reconnected() {
                     state.next = None;
+                    state.checked = false;
                 }
             }
             if self.sync.get(&uid).is_some_and(|s| s.busy) {
@@ -123,7 +132,7 @@ impl Core {
                 self.sync_account_background(uid);
                 continue;
             }
-            if state.busy || state.next.is_some_and(|at| at > now) {
+            if state.busy || state.checked || state.next.is_some_and(|at| at > now) {
                 continue;
             }
             let (Some(client), Some(store)) =
@@ -134,7 +143,8 @@ impl Core {
             let token = client.session();
             let root = store.root().to_path_buf();
             state.busy = true;
-            state.next = Some(now + INTERVAL);
+            state.checked = true;
+            state.next = None;
             self.events.spawn(
                 incoming::changed(client, root, store),
                 move |core, result| {
@@ -148,14 +158,15 @@ impl Core {
                     match result {
                         Ok(changed) => {
                             state.failures = 0;
-                            state.next = Some(Instant::now() + INTERVAL);
                             if changed {
                                 core.sync_account_background(uid);
                             }
                         }
                         Err(error) => {
                             state.failures = state.failures.saturating_add(1).min(3);
-                            state.next = Some(Instant::now() + INTERVAL * (1u32 << state.failures));
+                            state.checked = false;
+                            state.next =
+                                Some(Instant::now() + RETRY * (1u32 << (state.failures - 1)));
                             if let Some(sync) = core.sync.get_mut(&uid) {
                                 sync.error = Some(error);
                             }

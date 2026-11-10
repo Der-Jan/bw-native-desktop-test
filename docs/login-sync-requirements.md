@@ -1,6 +1,6 @@
 # Native desktop login and sync requirements
 
-Status: login, incoming WebSocket push with polling fallback, full read sync, item creation, revision-checked updates, archive/unarchive, trash/restore, attachments and folder management implemented for review, 2026-11-09. Permanent item deletion remains deferred. Depends on the lifecycle and persistence contracts
+Status: login, incoming WebSocket push with focus/reconnect reconciliation, full read sync, item creation, revision-checked updates, archive/unarchive, trash/restore, attachments and folder management implemented for review, 2026-11-09. Permanent item deletion remains deferred. Depends on the lifecycle and persistence contracts
 in [security concept](security-concept.md). Networking must obey the
 [mTLS transport policy](mtls-requirements.md), including when no identity is set.
 
@@ -181,7 +181,7 @@ URLs are not configured automatically.
 Key/password/KDF/security-stamp changes require a new login; automatic key migration
 is deferred. Domains/Send payloads are retained in the typed encrypted snapshot
 but have no full feature UI yet. Organization-policy coverage is described below.
-Incoming WebSocket notifications, polling fallback and attachment transfers are implemented below. New and existing entry drafts synchronize after each successful save.
+Incoming WebSocket notifications, focus/reconnect checks and attachment transfers are implemented below. New and existing entry drafts synchronize after each successful save.
 
 ## Implemented URI rule display and duplicate view
 
@@ -241,22 +241,23 @@ serialized credential refresh is reused before expiry and once after a 401.
 The HTTP/1.1 client is built by the same transport constructor as SDK HTTP, so
 servers offering HTTP/2 cannot accidentally suppress the RFC 6455 upgrade.
 
-Accounts also check `/accounts/revision-date` every 15 seconds through
-the account transport. An unchanged revision avoids a full download. A full read
-also runs at least every five minutes while eligible, because policy and other
-metadata changes need not advance the user revision. The checkpoint is read
-before `/sync`, so a change racing the download is seen on the next check. A
-revision endpoint returning 404 falls back to full reads. Polling remains enabled
-when WebSockets are connected, disabled on the server, or blocked by the reverse
-proxy. Without push, visibility is normally within one interval plus network time.
+Revision checks run at startup/unlock, when focus returns, and after a successful
+WebSocket reconnect; there is no periodic server polling. Checks use
+`/accounts/revision-date` through the account transport. An unchanged revision
+avoids a full download unless the snapshot is at least five minutes old, in which
+case that triggered check also refreshes policy and other metadata. This age test
+does not schedule network requests. The revision checkpoint precedes `/sync`, so
+later notifications or triggered checks can detect changes racing the download.
+A revision endpoint returning 404 makes triggered checks use full reads. If push
+is unavailable, updates arrive on focus, reconnect or manual Synchronize.
 Vaultwarden must enable WebSockets and its proxy must forward upgrades; see the
 [Vaultwarden configuration](https://github.com/dani-garcia/vaultwarden/wiki/Enabling-WebSocket-notifications).
 
 The dispatcher wakes even while the main window is hidden in the tray; restoring
 focus requests a check. Per-account probes coalesce, fail quietly and back off to
-30/60/120 seconds. Lock/logout stop authenticated polling. Open editors, password
+30/60/120 seconds. Lock/logout stop authenticated incoming checks. Open editors, password
 prompts, settings and file pickers defer background replacement; after they close,
-pending notifications and polling resume. Search, list position, selected entry and an open generator are retained; changed
+pending notifications and checks resume. Search, list position, selected entry and an open generator are retained; changed
 protected entries require authorization again. Incoming refresh never submits
 local drafts or replays uncertain outgoing requests. Manual Synchronize remains
 available to retry eligible pending edits.
@@ -587,10 +588,10 @@ logout and credential-store errors.
 ## Sync and mutation semantics
 
 Use one sync coordinator per account. Coalesce manual refresh, startup refresh,
-periodic polling, and notification events; do not run concurrent state-replacing
+focus/reconnect checks, and notification events; do not run concurrent state-replacing
 syncs. Notifications trigger reconciliation rather than directly trusting event
 payloads as vault state. Reconnect with bounded exponential backoff and jitter;
-poll as a documented fallback if push support is unavailable.
+use focus/reconnect checks and manual Synchronize if push is unavailable.
 
 Fetch and validate encrypted state into staging, then apply an internally
 consistent snapshot. Include ciphers, folders, organization keys, memberships,

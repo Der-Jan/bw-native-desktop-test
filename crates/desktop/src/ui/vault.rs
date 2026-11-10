@@ -39,24 +39,28 @@ impl Application {
             .min_size(175.)
             .resizable(true)
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::Image::from_bytes(
-                            "bytes://password-manager.svg",
-                            crate::assets::PASSWORD_MANAGER_LOGO,
-                        )
-                        .tint(if ui.visuals().dark_mode {
-                            egui::Color32::WHITE
-                        } else {
-                            egui::Color32::from_rgb(22, 92, 225)
-                        })
-                        .fit_to_exact_size(egui::vec2(170., 42.)),
-                    );
-                    if ui.small_button("«").clicked() {
-                        self.core.settings.sidebar_collapsed = true;
-                        self.core.save_settings();
-                    }
-                });
+                egui::Frame::NONE
+                    .inner_margin(egui::Margin::symmetric(0, 8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::Image::from_bytes(
+                                    "bytes://password-manager.svg",
+                                    crate::assets::PASSWORD_MANAGER_LOGO,
+                                )
+                                .tint(if ui.visuals().dark_mode {
+                                    egui::Color32::WHITE
+                                } else {
+                                    egui::Color32::from_rgb(22, 92, 225)
+                                })
+                                .fit_to_exact_size(egui::vec2(170., 42.)),
+                            );
+                            if ui.small_button("«").clicked() {
+                                self.core.settings.sidebar_collapsed = true;
+                                self.core.save_settings();
+                            }
+                        });
+                    });
                 let accounts = self.core.manager.accounts();
                 let selected = accounts
                     .iter()

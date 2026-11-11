@@ -29,6 +29,15 @@ build.mkdir(parents=True, exist_ok=True)
 output = ROOT / 'dist/ubuntu-24.04'
 output.mkdir(parents=True, exist_ok=True)
 image = 'localhost/bw-ubuntu24-build'
+# Keep generated caches/artifacts writable by the developer with either engine.
+container = [args.engine, 'run', '--rm']
+if 'podman' in Path(args.engine).name:
+    container += ['--userns=keep-id']
+else:
+    security = json.loads(subprocess.check_output(
+        [args.engine, 'info', '--format', '{{json .SecurityOptions}}'], text=True))
+    if not any('rootless' in option for option in security):
+        container += ['--user', f'{os.getuid()}:{os.getgid()}']
 run([args.engine, 'build', '-t', image, '-f', ROOT / 'tools/packaging/ubuntu-24.04.Dockerfile', ROOT / 'tools/packaging'])
 if not args.package_only:
     toolchain = args.toolchain
@@ -62,7 +71,7 @@ if not args.package_only:
     metadata = build / 'build-info.json'
     metadata.unlink(missing_ok=True)
     epoch = git('log', '-1', '--format=%ct')
-    run([args.engine, 'run', '--rm', '-v', f'{build}:/build:rw', '-v', f'{toolchain}:/toolchain:ro',
+    run([*container, '-v', f'{build}:/build:rw', '-v', f'{toolchain}:/toolchain:ro',
          '-e', 'PATH=/toolchain/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
          '-e', 'CARGO_HOME=/build/cargo-cache', '-e', 'CARGO_TARGET_DIR=/build/target',
          '-e', f'CARGO_BUILD_JOBS={args.jobs}', '-e', f'SOURCE_DATE_EPOCH={epoch}',
@@ -75,7 +84,7 @@ if not args.package_only:
     metadata.write_text(json.dumps(information, indent=2) + '\n')
 else:
     information = json.loads((build / 'build-info.json').read_text())
-run([args.engine, 'run', '--rm', '-v', f'{build}:/build:rw', '-v', f'{output}:/output:rw',
+run([*container, '-v', f'{build}:/build:rw', '-v', f'{output}:/output:rw',
      '-v', f'{ROOT / "tools/packaging/make-ubuntu-deb.py"}:/make-deb.py:ro',
      '-e', f'SOURCE_DATE_EPOCH={information["epoch"]}', image,
      'python3', '/make-deb.py', '--source', '/build/source', '--target', '/build/target',

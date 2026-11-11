@@ -15,6 +15,8 @@ Use `--toolchain /path/to/toolchain` to select a directory containing `bin/cargo
 and `bin/rustc`, or `--engine docker` to select Docker. The host toolchain must
 itself run on Ubuntu 24.04. Build output/caches live in `target/ubuntu-24.04`;
 packages and SHA-256 checksums are written to `dist/ubuntu-24.04`.
+Container user mapping preserves developer ownership of caches and artifacts
+with rootless Podman or rootful/rootless Docker.
 `--package-only` repackages an existing successful build recorded in
 `target/ubuntu-24.04/build-info.json`.
 

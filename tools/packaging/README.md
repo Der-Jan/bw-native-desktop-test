@@ -32,7 +32,12 @@ The `.deb` installs:
 
 ELF runtime dependencies are determined by Ubuntu's `dpkg-shlibdeps`; dynamically
 loaded graphics libraries are declared separately. A Secret Service wallet is
-required. The package recommends GNOME Keyring or the KDE wallet runtime. Tray
+required. The package recommends GNOME Keyring or the KDE wallet runtime.
+Ubuntu 24.04/KWallet 5 additionally needs `libqca-qt5-2-plugins` for encrypted
+Secret Service sessions; GPG wallets need a graphical pinentry such as
+`pinentry-qt`. These are suggested, not installed for every desktop. Restart
+KWallet or log out/in after installing its QCA plugin. See the
+[real credential-store acceptance tests](../../docs/testing.md#real-credential-store-smoke-test). Tray
 support on GNOME needs an AppIndicator extension; the main window remains usable
 without it. No autostart entries or browser registrations are installed automatically.
 

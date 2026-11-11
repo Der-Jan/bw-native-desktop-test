@@ -61,7 +61,11 @@ impl Application {
                     } else {
                         "Log in to Bitwarden"
                     });
-                    ui.heading(if unlocking { title.size(18.) } else { title });
+                    ui.heading(if unlocking {
+                        title.size(super::typography::TITLE_SIZE)
+                    } else {
+                        title
+                    });
                     ui.add_space(12.);
                     if let Some(account) = self
                         .core

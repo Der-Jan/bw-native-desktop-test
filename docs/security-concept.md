@@ -97,7 +97,7 @@ Proxy/TLS diagnostics remain sanitized. See [mTLS/proxy requirements](mtls-requi
 ## Verification
 
 Current verification (including proxy authentication and HTTP/HTTPS CONNECT with mTLS/WSS): `cargo test --workspace`
-passes 315 desktop tests plus one generator test (three desktop tests ignored).
+passes 319 desktop tests plus one generator test (four desktop tests ignored, including the interactive credential-store roundtrip).
 `cargo clippy --workspace --all-targets` passes with existing warnings; the release
 workspace builds. The native Wayland settings-fit test also passes explicitly.
 Notification regressions use a disposable mandatory-mTLS WebSocket server and cover

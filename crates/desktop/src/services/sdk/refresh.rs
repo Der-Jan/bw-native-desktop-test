@@ -74,9 +74,13 @@ async fn authorized_inner(
         if record.id != id {
             return Err("Account ID mismatch".into());
         }
-        let credentials: Credentials =
-            serde_json::from_slice(&load_store.secrets.get(record.credentials)?)
-                .map_err(|_| "Invalid protected credentials")?;
+        let credentials: Credentials = serde_json::from_slice(
+            &load_store
+                .secrets
+                .get(record.credentials)
+                .map_err(|error| format!("Saved sign-in credentials: {error}"))?,
+        )
+        .map_err(|_| "Invalid protected credentials")?;
         let profile = load_store
             .get(record.profile)
             .ok_or("Server profile unavailable")?;

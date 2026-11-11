@@ -323,7 +323,9 @@ impl Application {
         // Labels must not steal row clicks or offer an unscoped copy path.
         ui.style_mut().interaction.selectable_labels = false;
         ui.horizontal(|ui| {
-            ui.heading(egui::RichText::new(self.filter_title()).size(18.));
+            ui.heading(
+                egui::RichText::new(self.filter_title()).size(super::typography::TITLE_SIZE),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_enabled_ui(true, |ui| {
                     ui.menu_button("+ New", |ui| {

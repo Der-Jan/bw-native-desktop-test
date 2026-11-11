@@ -1,4 +1,5 @@
 //! Private atomic storage and AEAD secrets protected by the OS credential store.
+use base64::{Engine, engine::general_purpose::STANDARD};
 use openssl::{
     rand::rand_bytes,
     symm::{Cipher, decrypt_aead, encrypt_aead},
@@ -16,6 +17,74 @@ use zeroize::Zeroizing;
 static KEYRING_LOCK: Mutex<()> = Mutex::new(());
 const SERVICE: &str = "com.bitwarden.desktop.next";
 
+// ASCII avoids KWallet 5 corrupting binary secrets advertised as text/plain.
+const KEY_PREFIX: &str = "bw-desktop-key:v1:";
+const INVALID_KEY: &str = "Invalid credential-store key. Sign in again for saved account credentials, or re-import the affected client certificate in server settings.";
+
+fn encode_key(key: &[u8]) -> Result<Zeroizing<String>, String> {
+    if key.len() != 32 {
+        return Err(INVALID_KEY.into());
+    }
+    let mut text = Zeroizing::new(String::from(KEY_PREFIX));
+    STANDARD.encode_string(key, &mut text);
+    Ok(text)
+}
+
+fn decode_key(bytes: Zeroizing<Vec<u8>>) -> Result<Zeroizing<Vec<u8>>, String> {
+    // Legacy entries are exactly 32 raw bytes. Never rewrite on read: a damaged
+    // legacy key must first pass the envelope's AEAD authentication.
+    if bytes.len() == 32 {
+        return Ok(bytes);
+    }
+    let encoded = bytes
+        .strip_prefix(KEY_PREFIX.as_bytes())
+        .ok_or(INVALID_KEY)?;
+    // Fixed size also bounds decoding allocations. STANDARD requires canonical padding.
+    if encoded.len() != 44 {
+        return Err(INVALID_KEY.into());
+    }
+    let decoded = Zeroizing::new(STANDARD.decode(encoded).map_err(|_| INVALID_KEY)?);
+    if decoded.len() != 32 {
+        return Err(INVALID_KEY.into());
+    }
+    Ok(decoded)
+}
+
+fn keyring_error(error: keyring::Error) -> String {
+    // Never log Debug/Display of arbitrary backend errors: BadEncoding contains
+    // secret bytes and Ambiguous contains credentials. Emit only classified causes.
+    let (cause, message) = match error {
+        keyring::Error::NoEntry => (
+            "missing",
+            "The required OS credential-store key is missing. Sign in again or re-import the affected client certificate.",
+        ),
+        keyring::Error::NoStorageAccess(_) => (
+            "access",
+            "The OS credential store is locked or access was denied. Unlock it and retry.",
+        ),
+        keyring::Error::PlatformFailure(ref source)
+            if source.to_string().contains("createDLGroup") =>
+        {
+            (
+                "qca",
+                "KWallet could not create an encrypted session. On Ubuntu 24.04/KWallet 5, install libqca-qt5-2-plugins and restart KWallet or sign out and back in.",
+            )
+        }
+        keyring::Error::PlatformFailure(_) => (
+            "platform",
+            "The OS credential-store service failed. Check the D-Bus user session and Secret Service provider, then retry.",
+        ),
+        keyring::Error::BadEncoding(_) => ("encoding", INVALID_KEY),
+        keyring::Error::Ambiguous(_) => (
+            "ambiguous",
+            "Multiple OS credential-store entries match this key. Resolve the duplicate entries before retrying.",
+        ),
+        _ => ("request", "The OS credential store rejected the request."),
+    };
+    tracing::warn!(cause, "OS credential-store operation failed");
+    message.into()
+}
+
 pub trait KeyStore: Send + Sync {
     fn put(&self, id: Uuid, key: &[u8]) -> Result<(), String>;
     fn get(&self, id: Uuid) -> Result<Zeroizing<Vec<u8>>, String>;
@@ -27,9 +96,12 @@ impl KeyStore for OsKeyStore {
         let _guard = KEYRING_LOCK
             .lock()
             .map_err(|_| "Credential store unavailable")?;
+        let text = encode_key(key)?;
         keyring::Entry::new(SERVICE, &format!("secret-{id}"))
-            .and_then(|e| e.set_secret(key))
-            .map_err(|_| "The OS credential store is locked or unavailable".into())
+            // Use the byte API symmetrically: Windows set_password encodes UTF-16.
+            // The payload itself is ASCII, so KWallet text/plain conversion is safe.
+            .and_then(|e| e.set_secret(text.as_bytes()))
+            .map_err(keyring_error)
     }
     fn get(&self, id: Uuid) -> Result<Zeroizing<Vec<u8>>, String> {
         let _guard = KEYRING_LOCK
@@ -38,7 +110,8 @@ impl KeyStore for OsKeyStore {
         keyring::Entry::new(SERVICE, &format!("secret-{id}"))
             .and_then(|e| e.get_secret())
             .map(Zeroizing::new)
-            .map_err(|_| "The OS credential store is locked or the required key is missing".into())
+            .map_err(keyring_error)
+            .and_then(decode_key)
     }
     fn delete(&self, id: Uuid) -> Result<(), String> {
         let _guard = KEYRING_LOCK
@@ -48,7 +121,7 @@ impl KeyStore for OsKeyStore {
             .and_then(|e| e.delete_credential())
         {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(_) => Err("Could not remove a key from the OS credential store".into()),
+            Err(error) => Err(keyring_error(error)),
         }
     }
 }
@@ -122,7 +195,7 @@ impl SecretStore {
         }
         let key = self.keys.get(id)?;
         if key.len() != 32 {
-            return Err("Invalid credential-store key".into());
+            return Err(INVALID_KEY.into());
         }
         decrypt_aead(
             Cipher::aes_256_gcm(),
@@ -133,7 +206,7 @@ impl SecretStore {
             &e.tag,
         )
         .map(Zeroizing::new)
-        .map_err(|_| "Encrypted secret was changed or its key is invalid".into())
+        .map_err(|_| "Encrypted secret was changed or its key is invalid. Sign in again for saved account credentials, or re-import the affected client certificate in server settings.".into())
     }
     /// Startup-only garbage collection; keys are destroyed before orphan ciphertext.
     pub fn prune(&self, keep: &std::collections::HashSet<Uuid>) -> Result<(), String> {
@@ -267,6 +340,116 @@ pub(crate) mod test_support {
             Ok(())
         }
     }
+    #[test]
+    fn text_keys_preserve_all_byte_values_and_legacy_keys() {
+        for offset in 0..=255u8 {
+            let key: Vec<u8> = (0..32u8).map(|i| offset.wrapping_add(i)).collect();
+            let encoded = encode_key(&key).unwrap();
+            assert!(encoded.is_ascii());
+            assert_eq!(
+                *decode_key(Zeroizing::new(encoded.as_bytes().to_vec())).unwrap(),
+                key
+            );
+            assert_eq!(*decode_key(Zeroizing::new(key.clone())).unwrap(), key);
+        }
+        // Even a legacy key beginning with the new marker remains readable.
+        let mut legacy = vec![0; 32];
+        legacy[..KEY_PREFIX.len()].copy_from_slice(KEY_PREFIX.as_bytes());
+        assert_eq!(*decode_key(Zeroizing::new(legacy.clone())).unwrap(), legacy);
+    }
+
+    #[test]
+    fn malformed_keys_are_rejected() {
+        for value in [
+            String::new(),
+            "raw damaged key".into(),
+            format!("bw-desktop-key:v2:{}", STANDARD.encode([0; 32])),
+            format!("{KEY_PREFIX}{}", STANDARD.encode([0; 31])),
+            format!("{KEY_PREFIX}{}", STANDARD.encode([0; 33])),
+            format!("{KEY_PREFIX}{}", "!".repeat(44)),
+            format!(
+                "{KEY_PREFIX}{}",
+                STANDARD.encode([0; 32]).trim_end_matches('=')
+            ),
+            format!("{KEY_PREFIX}{}", "A".repeat(43) + "B"),
+            format!("{KEY_PREFIX}{}B=", "A".repeat(42)),
+        ] {
+            assert!(decode_key(Zeroizing::new(value.into_bytes())).is_err());
+        }
+        assert!(encode_key(&[0; 31]).is_err());
+        assert!(encode_key(&[0; 33]).is_err());
+    }
+
+    #[test]
+    fn credential_errors_are_distinct_and_do_not_expose_backend_payloads() {
+        let missing = keyring_error(keyring::Error::NoEntry);
+        let locked = keyring_error(keyring::Error::NoStorageAccess(Box::new(io::Error::other(
+            "private payload",
+        ))));
+        let platform = keyring_error(keyring::Error::PlatformFailure(Box::new(io::Error::other(
+            "private payload",
+        ))));
+        let qca = keyring_error(keyring::Error::PlatformFailure(Box::new(io::Error::other(
+            "createDLGroup failed private payload",
+        ))));
+        assert_ne!(missing, locked);
+        assert_ne!(locked, platform);
+        assert!(qca.contains("libqca-qt5-2-plugins"));
+        for message in [
+            missing,
+            locked,
+            platform,
+            qca,
+            keyring_error(keyring::Error::BadEncoding(b"private payload".to_vec())),
+        ] {
+            assert!(!message.contains("private payload"));
+        }
+    }
+
+    /// Run separately in fresh KWallet 5 and GNOME Keyring desktop sessions.
+    /// Uses synthetic keys and a random identifier; never reads existing entries.
+    #[test]
+    #[ignore = "requires an interactive OS credential store; see docs/testing.md"]
+    fn os_key_store_roundtrip() {
+        let id = Uuid::new_v4();
+        let store = OsKeyStore;
+        let result = (|| -> Result<(), String> {
+            for key in [
+                vec![0; 32],
+                vec![255; 32],
+                (0..32).map(|i| (i * 17) as u8).collect(),
+            ] {
+                store.put(id, &key)?;
+                if *store.get(id)? != key {
+                    return Err("OS credential-store roundtrip changed the key".into());
+                }
+            }
+            Ok(())
+        })();
+        let cleanup = store.delete(id);
+        result.unwrap();
+        cleanup.unwrap();
+        assert!(store.get(id).is_err());
+    }
+
+    #[test]
+    fn damaged_legacy_key_fails_authentication_without_deleting_the_secret() {
+        let root = std::env::temp_dir().join(format!("bw-secret-test-{}", Uuid::new_v4()));
+        let keys = Arc::new(MemoryKeys::default());
+        let store = SecretStore::with_keys(&root, keys.clone());
+        let id = store.put(b"synthetic private material").unwrap();
+        let original = keys.get(id).unwrap();
+        let mut damaged = original.clone();
+        damaged[0] ^= 1;
+        keys.put(id, &damaged).unwrap();
+        assert!(store.get(id).unwrap_err().contains("Sign in again"));
+        assert!(store.root.join(format!("{id}.json")).exists());
+        keys.put(id, &original).unwrap();
+        assert_eq!(&*store.get(id).unwrap(), b"synthetic private material");
+        store.delete(id).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn secrets_are_authenticated_and_bound_to_their_identifier() {
         let root = std::env::temp_dir().join(format!("bw-secret-test-{}", Uuid::new_v4()));

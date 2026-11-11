@@ -56,7 +56,10 @@ impl Transport {
         }
         if let Some(info) = &profile.certificate {
             info.check_time()?;
-            let pem = store.secrets.get(info.secret)?;
+            let pem = store
+                .secrets
+                .get(info.secret)
+                .map_err(|error| format!("Client certificate storage: {error}"))?;
             builder = builder.identity(
                 reqwest_account::Identity::from_pem(&pem)
                     .map_err(|_| "Stored certificate identity is invalid")?,

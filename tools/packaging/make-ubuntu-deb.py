@@ -57,6 +57,8 @@ with tempfile.TemporaryDirectory(prefix='bw-deb-') as temporary:
         'Built on Ubuntu 24.04 for ' + arch + ', source revision ' + args.revision + '.\n'
         'Start from the applications menu or run bitwarden-desktop-next.\n'
         'A working Secret Service wallet (GNOME Keyring or compatible KWallet) is required.\n'
+        'KWallet 5 on Ubuntu 24.04 needs libqca-qt5-2-plugins for encrypted sessions.\n'
+        'GPG-protected wallets need a graphical pinentry, such as pinentry-qt.\n'
         'On GNOME, tray support needs an AppIndicator extension; the window works without it.\n'
         'Browser integration is enabled and registered explicitly in the app settings.\n'
         'This package does not enable autostart or modify browser profiles at installation.\n')
@@ -77,7 +79,7 @@ with tempfile.TemporaryDirectory(prefix='bw-deb-') as temporary:
         f'Maintainer: {args.maintainer}\nSection: utils\nPriority: optional\n'
         f'Installed-Size: {installed_size}\nDepends: {depends}\n'
         'Recommends: gnome-keyring | libkf5wallet-bin\n'
-        'Suggests: gnome-shell-extension-appindicator\n'
+        'Suggests: gnome-shell-extension-appindicator, libqca-qt5-2-plugins, pinentry-qt\n'
         'Homepage: https://github.com/Der-Jan/bw-native-desktop-test\n'
         'Description: Native desktop vault client (unofficial development build)\n'
         ' Native egui client for Vaultwarden and Bitwarden servers, including\n'

@@ -12,7 +12,7 @@ copyright = "Copyright © Bitwarden Inc."
 category = "Utility"
 license-file = "LICENSE.txt"
 icons = ["assets/icon.icns", "assets/icon.ico", "assets/icon.png"]
-before-packaging-command = "cargo build --release --workspace"
+before-packaging-command = "cargo build --release --workspace && cargo run --bin packager -- --prepare-deb-dependencies"
 out-dir = "dist"
 binaries-dir = "target/release"
 binaries = [
@@ -34,12 +34,10 @@ minimum-system-version = "12.0"
 #   codesign --force --sign "$IDENTITY" "$APP/Contents/PlugIns/Extension.appex"
 #   codesign --force --sign "$IDENTITY" "$APP"
 
-# Linux packagers depend on a StatusNotifierItem (SNI) host being available so
-# the system tray works. `tray-icon` falls back to no-op when there's no host;
-# pulling in the AppIndicator client library covers GNOME (with the extension),
-# KDE Plasma, and most wlroots-based DEs out of the box.
+# Resolve ELF dependencies on the target distribution, including the browser helper.
+# Wallet/QCA/pinentry requirements are desktop-specific; see README Linux notes.
 [deb]
-depends = ["libayatana-appindicator3-1"]
+depends = "target/deb-dependencies.txt"
 
 [pacman]
 depends = ["libayatana-appindicator"]

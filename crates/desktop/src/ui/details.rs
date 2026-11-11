@@ -140,7 +140,7 @@ impl Application {
                     let title_width = ui.available_width();
                     ui.allocate_ui_with_layout(egui::vec2(title_width, 0.), egui::Layout::top_down(egui::Align::Min), |ui| {
                         ui.set_min_width(title_width);
-                        ui.add(egui::Label::new(egui::RichText::new(title).size(18.)).wrap());
+                        ui.add(egui::Label::new(egui::RichText::new(title).size(super::typography::TITLE_SIZE)).wrap());
                     });
                 });
                 ui.separator();

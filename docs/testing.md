@@ -80,3 +80,39 @@ headers, lazy deduplication, blocked redirects/oversized/invalid responses,
 profile and lock revocation, and late responses after cache recreation. A compact
 PNG with excessive dimensions is rejected before full decoding. The checkpoint
 passes 185 desktop tests and one fixture test (three OS tests ignored).
+
+## Real credential-store smoke test
+
+Pure regression tests exercise all byte values, legacy 32-byte entries, strict
+versioned Base64 decoding, and redacted error classification:
+
+```sh
+cargo test -p bitwarden-desktop-next services::accounts::storage
+```
+
+In a disposable desktop user session with the intended provider selected, run:
+
+```sh
+cargo test -p bitwarden-desktop-next os_key_store_roundtrip -- --ignored --nocapture
+```
+
+Run this separately on Ubuntu 24.04/KWallet 5 (including a GPG wallet and graphical
+pinentry) and GNOME Keyring. Start with the collection locked and complete the
+unlock prompt. The test writes only synthetic keys under a random UUID using the
+production OsKeyStore path, checks exact reads after writes/updates, and deletes
+its entry even after a roundtrip failure. Cleanup success cannot mask a mismatch.
+A crash can leave a synthetic `secret-UUID` entry; never clear the whole wallet.
+
+For package acceptance, install the built DEB in a fresh session, inspect its
+Depends field, and repeat with `--no-install-recommends`. Verify the selected
+provider starts and the app can import a synthetic certificate, restart, and
+read it. Native KWallet `isOpen` alone is insufficient: the encrypted Secret
+Service session and write/read cycle must succeed. Missing QCA must produce the
+specific plugin diagnostic; locked/denied storage and a missing key must produce
+distinct errors. Do not log or inspect real credentials during testing.
+
+Title typography uses `ui::typography::TITLE_SIZE` (18 logical pixels) for pages,
+panes and standard dialogs. egui native windows supply their own close controls;
+labels wrap within the available width. Review long translated titles at narrow
+widths in both themes. The former Iced title/close-button spacing patch is
+preserved on the recovery branch rather than restoring removed Iced code.

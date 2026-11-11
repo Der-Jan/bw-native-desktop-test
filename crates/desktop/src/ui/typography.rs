@@ -1,5 +1,8 @@
 use eframe::egui::{self, FontData, FontDefinitions, FontFamily, FontId, TextStyle};
 
+/// Shared logical-pixel size for page, pane and standard dialog headings.
+pub(super) const TITLE_SIZE: f32 = 18.0;
+
 type LoadedFonts = (FontDefinitions, String, f32);
 static FONTS: std::sync::OnceLock<Result<LoadedFonts, String>> = std::sync::OnceLock::new();
 fn load() -> Result<LoadedFonts, String> {
@@ -152,7 +155,7 @@ pub fn install(ctx: &egui::Context) -> Result<String, String> {
                 .insert(TextStyle::Small, FontId::proportional(12.0));
             style
                 .text_styles
-                .insert(TextStyle::Heading, FontId::proportional(24.0));
+                .insert(TextStyle::Heading, FontId::proportional(TITLE_SIZE));
             style
                 .text_styles
                 .insert(TextStyle::Monospace, FontId::monospace(body));

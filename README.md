@@ -46,6 +46,9 @@ cargo run --bin packager                      # Package .app/.dmg/.msi/.deb/.pac
 cargo run -p i18n-unused                      # List Fluent keys with no `fl!`/`E()` callers
 ```
 
+For Ubuntu 24.04 `.deb` builds, use `python3 tools/build-ubuntu-deb.py`; see
+[Ubuntu packaging](tools/packaging/README.md) for requirements and installation.
+
 Useful dev modes:
 
 ```bash

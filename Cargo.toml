@@ -2,7 +2,7 @@
 members = ["crates/*", "bitwarden_license/*", "tools/*"]
 default-members = ["crates/*", "bitwarden_license/*"]
 resolver = "3"
-exclude = ["vendor/bitwarden-core", "vendor/bitwarden-ipc", "vendor/reqwest", "tools/egui-demo"]
+exclude = ["vendor/bitwarden-core", "vendor/bitwarden-ipc", "vendor/reqwest", "tools/egui-demo", "tools/packaging"]
 
 [workspace.dependencies]
 async-trait = "0.1.89"

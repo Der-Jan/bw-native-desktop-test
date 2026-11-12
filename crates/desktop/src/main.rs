@@ -35,6 +35,17 @@ fn main() -> eframe::Result {
         ),
         bitwarden_package_type: None,
     });
+    let _startup_guard = match services::instance_lock::startup_guard() {
+        Ok(Some(guard)) => guard,
+        Ok(None) => {
+            services::instance_lock::notify_primary_if_running();
+            return Ok(());
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
     if services::instance_lock::notify_primary_if_running() {
         return Ok(());
     }

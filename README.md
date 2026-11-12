@@ -90,7 +90,8 @@ existing nonempty directories.
 - System tray with a monochrome Linux symbolic icon, Wayland hide/restore + single-instance wake-up
 - Custom title-bar menus (Windows/Linux) and native `muda` menus (macOS)
 - Light / dark theme, persisted settings (`settings.json` in the selected profile)
-- Favicons for local/demo vaults; remote icon fetching stays disabled until account-scoped transport is wired
+- Website icons downloaded through the account server and cached encrypted locally; lazy loading, SVG support and bounded retries
+- Linux desktop autostart, controlled from Settings → Desktop
 - Packaging to `.app` / `.dmg` / `.msi` / `.deb` / `.pacman`
 
 ### Linux notes

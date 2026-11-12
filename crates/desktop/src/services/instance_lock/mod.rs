@@ -37,6 +37,52 @@ fn socket_path() -> std::path::PathBuf {
 /// misbehaving or malicious peer is holding the connection open and drop it.
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// Keep the startup lock until the event loop exits. This closes the race
+/// between session restoration and XDG autostart before the IPC socket is ready.
+pub struct StartupGuard {
+    #[cfg(target_os = "linux")]
+    _file: std::fs::File,
+}
+pub fn startup_guard() -> Result<Option<StartupGuard>, String> {
+    #[cfg(target_os = "linux")]
+    {
+        startup_guard_at(&crate::paths::data_dir())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(Some(StartupGuard {}))
+    }
+}
+#[cfg(target_os = "linux")]
+fn startup_guard_at(root: &std::path::Path) -> Result<Option<StartupGuard>, String> {
+    use std::os::{
+        fd::AsRawFd,
+        unix::fs::{MetadataExt, OpenOptionsExt},
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(root.join("instance.lock"))
+        .map_err(|_| "Cannot open the application instance lock")?;
+    let meta = file
+        .metadata()
+        .map_err(|_| "Cannot check the application instance lock")?;
+    if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } {
+        return Err("The application instance lock has an invalid owner or type".into());
+    }
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        Ok(Some(StartupGuard { _file: file }))
+    } else if std::io::Error::last_os_error().raw_os_error() == Some(libc::EWOULDBLOCK) {
+        Ok(None)
+    } else {
+        Err("Cannot lock the application instance".into())
+    }
+}
+
 /// Probe for an already-running primary. If one is listening, send the wake
 /// signal and return `true`; the caller should then exit cleanly. Returns
 /// `false` when no primary is listening.
@@ -140,5 +186,21 @@ where
         Ok(Ok(_)) => {}
         Ok(Err(e)) => tracing::debug!(error = %e, "instance wake read error"),
         Err(_) => tracing::debug!("instance wake read timed out"),
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod startup_tests {
+    use super::*;
+    #[test]
+    fn only_one_process_can_start_before_ipc_is_ready_and_stale_files_are_reusable() {
+        let root = std::env::temp_dir().join(format!("bw-instance-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let first = startup_guard_at(&root).unwrap().unwrap();
+        assert!(startup_guard_at(&root).unwrap().is_none());
+        drop(first);
+        let next = startup_guard_at(&root).unwrap().unwrap();
+        drop(next);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

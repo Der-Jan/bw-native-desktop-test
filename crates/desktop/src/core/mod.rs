@@ -175,6 +175,8 @@ pub struct Core {
     pub restore_requested: bool,
     pub magnify_requested: bool,
     pub settings_open: bool,
+    pub autostart_busy: bool,
+    pub autostart_error: Option<String>,
     pub generator_open: bool,
     pub export_open: bool,
     pub export_request: Option<uuid::Uuid>,
@@ -211,7 +213,7 @@ impl Core {
         core.active = core.manager.user_ids().first().copied();
         core
     }
-    fn build(wake: Arc<dyn Fn() + Send + Sync>, settings: Settings, boot: bool) -> Self {
+    fn build(wake: Arc<dyn Fn() + Send + Sync>, mut settings: Settings, boot: bool) -> Self {
         let (sender, receiver) = mpsc::sync_channel(128);
         let events = Dispatcher {
             sender,
@@ -222,6 +224,13 @@ impl Core {
             && let Ok(tag) = settings.language.parse()
         {
             services::i18n::set_language(tag);
+        }
+        let mut autostart_error = None;
+        if boot && services::autostart::SUPPORTED && !crate::paths::is_demo() {
+            match services::autostart::enabled() {
+                Ok(enabled) => settings.open_at_login = enabled,
+                Err(error) => autostart_error = Some(error),
+            }
         }
         let mut core = Self {
             manager: ClientManager::empty(),
@@ -272,6 +281,8 @@ impl Core {
             restore_requested: false,
             magnify_requested: false,
             settings_open: false,
+            autostart_busy: false,
+            autostart_error,
             generator_open: false,
             export_open: false,
             export_request: None,

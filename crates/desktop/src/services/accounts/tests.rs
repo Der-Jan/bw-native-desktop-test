@@ -113,6 +113,7 @@ struct Fixture {
     ca_key: PKey<Private>,
     sync_response: Arc<Mutex<(u16, serde_json::Value)>>,
     sync_delay: Arc<std::sync::atomic::AtomicU64>,
+    icon_failures: Arc<std::sync::atomic::AtomicUsize>,
     login_policy: Arc<Mutex<Option<serde_json::Value>>>,
     write_mode: Arc<std::sync::atomic::AtomicU8>,
     folder_mode: Arc<std::sync::atomic::AtomicU8>,
@@ -169,6 +170,8 @@ impl Fixture {
         let sync_payload = sync_response.clone();
         let sync_delay = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let server_delay = sync_delay.clone();
+        let icon_failures = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_icon_failures = icon_failures.clone();
         let login_policy = Arc::new(Mutex::new(None::<serde_json::Value>));
         let server_login_policy = login_policy.clone();
         // 0 reject; 1 accept; 2 apply but lose reply; 3 lose before apply;
@@ -846,6 +849,13 @@ impl Fixture {
                     continue;
                 }
                 if first.starts_with("GET /vault/icons/") {
+                    if server_icon_failures
+                        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                        .is_ok()
+                    {
+                        let _=stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        continue;
+                    }
                     if first.contains("redirect.test/") {
                         let _ = stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: https://untrusted.invalid/icon.png\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                     } else if first.contains("oversized.test/") {
@@ -862,7 +872,9 @@ impl Fixture {
                         ))
                         .write_to(&mut png, image::ImageFormat::Png)
                         .unwrap();
-                        let data = if first.contains("invalid.test/") {
+                        let data = if first.contains("vector.test/") {
+                            br##"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="#285ac8"/></svg>"##.to_vec()
+                        } else if first.contains("invalid.test/") {
                             b"not an image".to_vec()
                         } else {
                             png.into_inner()
@@ -996,6 +1008,7 @@ impl Fixture {
             ca_key: cakey,
             sync_response,
             sync_delay,
+            icon_failures,
             login_policy,
             write_mode,
             folder_mode,
@@ -8257,4 +8270,91 @@ async fn os_unlock_rejects_account_binding_changes_without_unlocking_the_sdk() {
         manager.is_unlocked(&uid),
         "missing OS-store data must preserve master-password fallback"
     );
+}
+
+#[tokio::test]
+async fn favicon_transient_failure_retries_without_losing_the_persistent_cache() {
+    use crate::services::favicon::{FaviconService, IconState};
+    let f = Fixture::new();
+    let (manager, uid) = f.account().await;
+    let service = FaviconService::new();
+    service.set_source(uid, manager.favicon_source_for(&uid));
+    let mut events = service.event_sender().subscribe();
+    f.icon_failures.store(1, Ordering::SeqCst);
+    assert!(matches!(
+        service.get(&uid, "retry-icons.test"),
+        IconState::Pending
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(3), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        service.get(&uid, "retry-icons.test"),
+        IconState::Missing
+    ));
+    assert_eq!(icon_requests(&f), 1);
+    assert_eq!(service.counts(&uid), (0, 0, 1));
+    assert!(service.failure_message(&uid).unwrap().contains("503"));
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(31)).await;
+    tokio::time::resume();
+    assert!(matches!(
+        service.get(&uid, "retry-icons.test"),
+        IconState::Pending
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while !matches!(service.get(&uid, "retry-icons.test"), IconState::Found(_)) {
+            events.recv().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(icon_requests(&f), 2);
+    service.retry_missing(&uid);
+    assert!(matches!(
+        service.get(&uid, "retry-icons.test"),
+        IconState::Found(_)
+    ));
+    assert!(matches!(
+        resolved_icon(
+            manager.favicon_source_for(&uid).unwrap(),
+            uid,
+            "retry-icons.test"
+        )
+        .await,
+        IconState::Found(_)
+    ));
+    assert_eq!(
+        icon_requests(&f),
+        2,
+        "Successful retry is cached across service recreation"
+    );
+}
+#[tokio::test]
+async fn favicon_svg_download_is_rasterized_once_and_cached_as_png() {
+    use crate::services::favicon::IconState;
+    let f = Fixture::new();
+    let (manager, uid) = f.account().await;
+    let IconState::Found(first) = resolved_icon(
+        manager.favicon_source_for(&uid).unwrap(),
+        uid,
+        "vector.test",
+    )
+    .await
+    else {
+        panic!("SVG icon was not downloaded");
+    };
+    assert!(first.pixels.iter().any(|p| p.a() > 0));
+    let IconState::Found(cached) = resolved_icon(
+        manager.favicon_source_for(&uid).unwrap(),
+        uid,
+        "vector.test",
+    )
+    .await
+    else {
+        panic!("SVG-derived cache missing");
+    };
+    assert_eq!(first.pixels, cached.pixels);
+    assert_eq!(icon_requests(&f), 1);
 }

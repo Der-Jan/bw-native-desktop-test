@@ -174,7 +174,11 @@ base subpaths, through its revocable TLS/mTLS transport. The global icon-service
 resolver and US-cloud fallback were removed. Lazy memory caching and an encrypted,
 account/profile-bound SDK-SQLite cache reuse icons after sync/restart (seven-day
 expiry, 512 entries, 2 MiB image-payload limit). Request/decoder limits,
-profile/session revocation and texture invalidation are implemented.
+profile/session revocation and texture invalidation are implemented. Downloads
+are enabled by default while preserving saved opt-outs. SVG icons are rendered to
+32×32 PNGs without resolving external/embedded image references. Failed downloads
+retry only when visible, with 30–300-second backoff; Settings shows status and a
+manual retry action. Lock/source changes cancel pending requests and retry timers.
 See [login/sync requirements](login-sync-requirements.md). Automatically adopting a
 separate cloud or server-advertised icon origin remains deferred; it must have an
 explicit transport permission instead of silently receiving website domains.
@@ -321,8 +325,11 @@ V1 ships behind `Ctrl+Shift+Space`
 
 ### OS-glue (no SDK work)
 
-- **Open at device login** `[M]` — platform autostart: registry on Windows, LaunchAgent on
-  macOS, `.desktop` file on Linux.
+- **Open at device login** — Linux XDG autostart is implemented, including an
+  asynchronous Settings toggle, external Hidden-state detection, safe executable
+  quoting and startup locking against session-restore races. It opens the normal
+  window and follows existing unlock preferences. Windows registry and macOS
+  LaunchAgent integration remain deferred.
 - **Allow screenshots — branded screenshot decoy** `[M]` `[defer]` — V1 ships
   protection-only via
   [services/screenshot_protection/](../crates/desktop/src/services/screenshot_protection/mod.rs)

@@ -78,7 +78,7 @@ impl<'de> Deserialize<'de> for ZoomFactor {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Settings {
     pub vault_filters: HashMap<UserId, crate::services::vault_navigation::VaultFilter>,
@@ -92,7 +92,7 @@ pub struct Settings {
     /// directory, no code change.
     pub language: String,
 
-    /// Stub (not wired) — shown in the Security tab.
+    /// Linux XDG desktop autostart; reconciled with the actual entry at startup.
     pub open_at_login: bool,
 
     /// Opt-in local browser key release and SSH agent integrations.
@@ -103,10 +103,8 @@ pub struct Settings {
     /// Stub — the real autotype engine hasn't been ported yet.
     pub autotype_enabled: bool,
 
-    /// Vault and magnify rows render fetched favicons (via
-    /// [`crate::services::favicon`]) when `true`; an initial-letter
-    /// circle otherwise. Read by the item-list / magnify-row renderers
-    /// straight off `RenderCtx` — no startup wiring needed.
+    /// Download website icons through the account server and reuse the encrypted
+    /// local cache. Explicitly saved false values remain an opt-out.
     pub show_favicons: bool,
 
     /// Master switch: keep the tray icon visible even when the app is in the
@@ -139,6 +137,32 @@ pub struct Settings {
     /// multiplicatively with desktop typography and OS DPI. Reset restores the
     /// desktop baseline. Stepped from the View → Zoom in / out / reset menu.
     pub zoom_factor: ZoomFactor,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            vault_filters: Default::default(),
+            collapsed_navigation_groups: Default::default(),
+            sidebar_collapsed: false,
+            vault_sort: Default::default(),
+            theme: Default::default(),
+            language: String::new(),
+            open_at_login: false,
+            browser_integration: false,
+            browser_integration_fingerprint: false,
+            ssh_agent: false,
+            autotype_enabled: false,
+            show_favicons: true,
+            show_tray_icon: false,
+            minimize_to_tray: false,
+            close_to_tray: false,
+            always_show_dock: false,
+            allow_screenshots: false,
+            user_preferences: Default::default(),
+            zoom_factor: Default::default(),
+        }
+    }
 }
 
 impl Settings {
@@ -207,6 +231,23 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icon_downloads_default_on_but_keep_an_explicit_opt_out() {
+        assert!(Settings::default().show_favicons);
+        assert!(
+            serde_json::from_str::<Settings>("{}")
+                .unwrap()
+                .show_favicons
+        );
+        let opted_out = serde_json::from_str::<Settings>(r#"{"show_favicons":false}"#).unwrap();
+        assert!(!opted_out.show_favicons);
+        assert!(
+            !serde_json::from_str::<Settings>(&serde_json::to_string(&opted_out).unwrap())
+                .unwrap()
+                .show_favicons
+        );
+    }
 
     #[test]
     fn obsolete_gpu_settings_are_ignored_without_losing_preferences() {

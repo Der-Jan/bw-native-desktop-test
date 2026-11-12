@@ -4,6 +4,7 @@
 //! may not import from `views/`, `components/`, or `app/`.
 
 pub mod accounts;
+pub mod autostart;
 pub mod broadcast_stream;
 pub mod browser_integration;
 pub mod clipboard;

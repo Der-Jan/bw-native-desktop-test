@@ -259,6 +259,19 @@ impl Application {
                                 super::labels::text("Show website icons"),
                             )
                             .changed();
+                        ui.weak("Website icons download from your configured server as entries become visible, then reuse the encrypted local cache.");
+                        if app.core.settings.show_favicons && let Some(uid) = app.core.active {
+                            let (loaded, pending, failed) = app.core.favicon.counts(&uid);
+                            ui.weak(format!("Icons loaded: {loaded} · Downloading: {pending} · Unavailable: {failed}"));
+                            if let Some(error) = app.core.favicon.failure_message(&uid) {
+                                ui.weak(error);
+                                ui.weak("Failed downloads retry automatically with backoff.");
+                            }
+                            if ui.button("Retry unavailable website icons").clicked() {
+                                app.core.favicon.retry_missing(&uid);
+                                ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                            }
+                        }
                         ui.separator();
                         ui.heading("Proxy configuration (read only)");
                         if let Some(broker)=app.core.proxy_broker() {
@@ -293,13 +306,13 @@ impl Application {
                                 super::labels::text("Close to tray"),
                             )
                             .changed();
-                        ui.add_enabled(
-                            false,
-                            egui::Checkbox::new(
-                                &mut app.core.settings.open_at_login,
-                                "Open at device login (not implemented)",
-                            ),
-                        );
+                        let mut open_at_login = app.core.settings.open_at_login;
+                        if ui.add_enabled(services::autostart::SUPPORTED && !app.core.autostart_busy && !crate::paths::is_demo(), egui::Checkbox::new(&mut open_at_login, super::labels::text("Open Bitwarden at device login"))).changed() {
+                            app.core.set_open_at_login(open_at_login);
+                        }
+                        if app.core.autostart_busy { ui.spinner(); }
+                        if let Some(error) = &app.core.autostart_error { ui.colored_label(ui.visuals().error_fg_color, error); }
+                        ui.weak("Opens the app after desktop login using your existing unlock settings. No tray support is required. Proxy settings must be available in the desktop session environment.");
                         ui.separator();
                         ui.heading(super::labels::text("Security"));
                         if let Some(uid) = app.core.active {

@@ -70,7 +70,10 @@ impl FaviconSource {
             .map_err(|_| "Could not prepare icon request")?;
         let mut response = transport.execute(request).await?;
         if !response.status().is_success() {
-            return Err("Icon unavailable".into());
+            return Err(format!(
+                "Icon server returned HTTP {}",
+                response.status().as_u16()
+            ));
         }
         const LIMIT: usize = 2 * 1024 * 1024;
         if response.content_length().is_some_and(|n| n > LIMIT as u64) {

@@ -163,6 +163,15 @@ profile revision, hostnames and fetch times: copying a cache across those bindin
 cannot reuse it. Neither hostnames nor PNG bytes are stored in plaintext. Sync,
 unlock and restart reuse valid cached icons before requesting the server.
 
+Icon downloads default to enabled for new/missing preferences; an explicit saved
+opt-out remains disabled. Visible rows load from the local cache first and request
+only missing/expired images. SVG responses are rasterized to 32×32 with filesystem,
+URL and data-image resolvers disabled; only the normalized PNG is persisted. Failed
+downloads retry lazily after 30/60/120/240/300 seconds, capped at five minutes.
+One timer wakes the UI; no timer itself sends an HTTP request. Eviction cancels
+in-flight work and retry timers. Settings shows counts, sanitized failure causes
+and a retry action that preserves successful cached icons.
+
 Persistent cache entries expire after seven days; at most 512 icons and 2 MiB of
 encoded image payload are retained, with oldest entries evicted first. Decoding
 cache PNGs is limited to 32×32 and 8 KiB; the corner mask is applied only once.
@@ -729,3 +738,30 @@ The regression fixture reproduces the server's version gate over mTLS: an explic
 SDK encryption and API `sshKey.keyFingerprint` conversion are exercised through
 snapshot installation, vault list decryption and agent identity enumeration. Private
 keys do not enter diagnostic logs or test request snapshots as plaintext.
+
+## Linux desktop autostart
+
+Settings → Desktop → Open Bitwarden at device login writes a per-user XDG entry
+at `$XDG_CONFIG_HOME/autostart/bitwarden-desktop-next.desktop` (normally
+`~/.config/autostart`). It records the current absolute executable path and
+`TryExec`; no vault, certificate or proxy credentials are written. The normal
+window opens, so a tray host is not required. Existing per-account OS-store unlock
+preferences still govern startup unlock. Proxy variables must be set in the
+desktop login environment, rather than only an interactive terminal.
+
+Disabling writes a managed `Hidden=true` override. Startup reconciles the UI with
+the actual entry, including GNOME's disable flag and system XDG entries. Changes
+run off the UI thread and persist the preference only on success. Custom entries
+and symlinks are preserved with a visible error. Special executable characters
+are escaped for Desktop Entry and Exec syntax; percent characters are refused
+because GLib cannot resolve those program paths. Use the installed app when
+enabling autostart to retain a stable executable/profile configuration. Explicit
+demo profiles cannot enable it.
+
+A per-profile kernel startup lock prevents simultaneous desktop session restore
+and autostart from opening duplicate instances before the IPC listener is ready.
+An existing instance is activated through the normal bounded IPC path. The lock
+is released on process exit; a leftover lock file does not block the next start.
+Tests use isolated config directories, validate/launch the generated entry through
+GLib, cover disablement, literal special paths, custom-entry/symlink preservation
+and startup-lock contention. Full Ubuntu desktop login testing is user-run.

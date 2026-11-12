@@ -294,6 +294,41 @@ impl Core {
             }
         }
     }
+    pub fn set_open_at_login(&mut self, enabled: bool) {
+        if self.autostart_busy || !services::autostart::SUPPORTED || crate::paths::is_demo() {
+            return;
+        }
+        self.autostart_busy = true;
+        self.autostart_error = None;
+        self.events.spawn(
+            tokio::task::spawn_blocking(move || services::autostart::configure(enabled)),
+            |core, result| {
+                core.autostart_busy = false;
+                match result {
+                    Ok(Ok(enabled)) => {
+                        core.settings.open_at_login = enabled;
+                        core.settings.save();
+                        core.notify(
+                            if enabled {
+                                "Autostart enabled for desktop login"
+                            } else {
+                                "Autostart disabled"
+                            },
+                            false,
+                        );
+                    }
+                    other => {
+                        let error = match other {
+                            Ok(Err(error)) => error,
+                            _ => "Could not update desktop autostart".into(),
+                        };
+                        core.autostart_error = Some(error.clone());
+                        core.notify(error, true);
+                    }
+                }
+            },
+        );
+    }
     pub fn save_settings(&mut self) {
         self.settings.save();
         if self.settings.wants_tray() && self.tray.is_none() {

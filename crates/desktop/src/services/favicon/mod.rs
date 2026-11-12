@@ -63,8 +63,18 @@ struct FaviconInner {
 struct UserCache {
     id: uuid::Uuid,
     active: Arc<AtomicBool>,
+    cancelled: tokio_util::sync::CancellationToken,
     source: FaviconSource,
     entries: HashMap<Hostname, IconState>,
+    failures: HashMap<Hostname, (u8, tokio::time::Instant)>,
+    last_error: Option<String>,
+}
+
+impl Drop for UserCache {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::SeqCst);
+        self.cancelled.cancel();
+    }
 }
 
 /// `Pending` deduplicates in-flight requests and renders like `Missing`.
@@ -125,7 +135,14 @@ impl FaviconService {
                 return IconState::Missing;
             };
             if let Some(state) = cache.entries.get(hostname) {
-                return state.clone();
+                let retry = matches!(state, IconState::Missing)
+                    && cache
+                        .failures
+                        .get(hostname)
+                        .is_some_and(|(_, at)| *at <= tokio::time::Instant::now());
+                if !retry {
+                    return state.clone();
+                }
             }
         }
         self.claim_and_spawn(*uid, hostname.to_string());
@@ -176,8 +193,11 @@ impl FaviconService {
                         UserCache {
                             id: uuid::Uuid::new_v4(),
                             active: Arc::new(AtomicBool::new(true)),
+                            cancelled: tokio_util::sync::CancellationToken::new(),
                             source,
                             entries: HashMap::new(),
+                            failures: HashMap::new(),
+                            last_error: None,
                         },
                     ) {
                         old.active.store(false, Ordering::SeqCst);
@@ -192,21 +212,65 @@ impl FaviconService {
             }
         }
     }
+    /// Retry failures on the next visible-row lookup; retain successful icons.
+    pub fn retry_missing(&self, uid: &UserId) {
+        if let Some(cache) = self.inner.caches.write().unwrap().get_mut(uid) {
+            cache
+                .entries
+                .retain(|_, state| !matches!(state, IconState::Missing));
+            cache.failures.clear();
+            cache.last_error = None;
+        }
+    }
+    pub fn failure_message(&self, uid: &UserId) -> Option<String> {
+        self.inner
+            .caches
+            .read()
+            .unwrap()
+            .get(uid)
+            .and_then(|cache| cache.last_error.clone())
+    }
+    pub fn counts(&self, uid: &UserId) -> (usize, usize, usize) {
+        let caches = self.inner.caches.read().unwrap();
+        let Some(cache) = caches.get(uid) else {
+            return (0, 0, 0);
+        };
+        cache.entries.values().fold((0, 0, 0), |mut counts, state| {
+            match state {
+                IconState::Found(_) => counts.0 += 1,
+                IconState::Pending => counts.1 += 1,
+                IconState::Missing => counts.2 += 1,
+            }
+            counts
+        })
+    }
     fn claim_and_spawn(&self, uid: UserId, hostname: Hostname) {
-        let (source, cache_id, active) = {
+        let (source, cache_id, active, cancelled) = {
             let mut caches = self.inner.caches.write().expect("favicon cache poisoned");
             let Some(cache) = caches.get_mut(&uid).filter(|cache| cache.source.current()) else {
                 return;
             };
-            if cache.entries.contains_key(&hostname) {
-                return;
+            if let Some(state) = cache.entries.get(&hostname) {
+                let retry = matches!(state, IconState::Missing)
+                    && cache
+                        .failures
+                        .get(&hostname)
+                        .is_some_and(|(_, at)| *at <= tokio::time::Instant::now());
+                if !retry {
+                    return;
+                }
             }
             cache.entries.insert(hostname.clone(), IconState::Pending);
-            (cache.source.clone(), cache.id, cache.active.clone())
+            (
+                cache.source.clone(),
+                cache.id,
+                cache.active.clone(),
+                cache.cancelled.clone(),
+            )
         };
         let inner = self.inner.clone();
         self.inner.runtime.spawn(async move {
-            fetch_and_commit(inner, uid, hostname, source, cache_id, active).await;
+            fetch_and_commit(inner, uid, hostname, source, cache_id, active, cancelled).await;
         });
     }
 }
@@ -248,14 +312,35 @@ async fn fetch_and_commit(
     source: FaviconSource,
     cache_id: uuid::Uuid,
     active: Arc<AtomicBool>,
+    cancelled: tokio_util::sync::CancellationToken,
 ) {
-    let state = fetch_one(&inner, &source, &hostname, active).await;
-
+    let (state, error) = tokio::select! {
+        biased;
+        _ = cancelled.cancelled() => return,
+        state = fetch_one(&inner, &source, &hostname, active.clone()) => state,
+    };
+    let mut retry_at = None;
     let committed = {
         let mut caches = inner.caches.write().expect("favicon cache lock poisoned");
         if let Some(cache) = caches.get_mut(&uid).filter(|cache| {
             cache.id == cache_id && cache.source.same_authority(&source) && source.current()
         }) {
+            if matches!(&state, IconState::Missing) {
+                cache.last_error = error;
+                let attempt = cache
+                    .failures
+                    .get(&hostname)
+                    .map_or(1, |(n, _)| n.saturating_add(1));
+                let seconds = (30u64 << attempt.saturating_sub(1).min(4)).min(300);
+                let at = tokio::time::Instant::now() + std::time::Duration::from_secs(seconds);
+                cache.failures.insert(hostname.clone(), (attempt, at));
+                retry_at = Some(at);
+            } else {
+                cache.failures.remove(&hostname);
+                if cache.failures.is_empty() {
+                    cache.last_error = None;
+                }
+            }
             cache.entries.insert(hostname.clone(), state);
             true
         } else {
@@ -264,9 +349,40 @@ async fn fetch_and_commit(
         }
     };
     if committed {
-        let _ = inner
-            .tx
-            .send(FaviconMessage::IconResolved { uid, hostname });
+        let _ = inner.tx.send(FaviconMessage::IconResolved {
+            uid,
+            hostname: hostname.clone(),
+        });
+    }
+    if let Some(at) = retry_at {
+        let weak = Arc::downgrade(&inner);
+        // One wake-up, not a polling loop. Only a visible-row get() retries HTTP.
+        inner.runtime.spawn(async move {
+            tokio::select! {
+                biased;
+                _ = cancelled.cancelled() => return,
+                _ = tokio::time::sleep_until(at) => {},
+            }
+            if !active.load(Ordering::SeqCst) {
+                return;
+            }
+            let Some(inner) = weak.upgrade() else {
+                return;
+            };
+            let current = inner.caches.read().unwrap().get(&uid).is_some_and(|cache| {
+                cache.id == cache_id
+                    && cache.source.current()
+                    && cache
+                        .failures
+                        .get(&hostname)
+                        .is_some_and(|(_, deadline)| *deadline == at)
+            });
+            if current {
+                let _ = inner
+                    .tx
+                    .send(FaviconMessage::IconResolved { uid, hostname });
+            }
+        });
     }
 }
 
@@ -275,20 +391,20 @@ async fn fetch_one(
     source: &FaviconSource,
     hostname: &Hostname,
     active: Arc<AtomicBool>,
-) -> IconState {
+) -> (IconState, Option<String>) {
     let Ok(_permit) = inner.fetch_budget.clone().acquire_owned().await else {
-        return IconState::Missing;
+        return (IconState::Missing, None);
     };
     if !active.load(Ordering::SeqCst) {
-        return IconState::Missing;
+        return (IconState::Missing, None);
     }
     if let Some(bytes) = source.cached_icon(hostname).await
         && let Ok(state) = decode_cached(bytes).await
     {
-        return state;
+        return (state, None);
     }
     if !active.load(Ordering::SeqCst) {
-        return IconState::Missing;
+        return (IconState::Missing, None);
     }
     match tokio::time::timeout(FETCH_TIMEOUT, source.fetch(hostname)).await {
         Ok(Ok(bytes)) => match decode_to_handle(bytes).await {
@@ -296,11 +412,15 @@ async fn fetch_one(
                 if active.load(Ordering::SeqCst) {
                     let _ = source.cache_icon(hostname, png, active).await;
                 }
-                state
+                (state, None)
             }
-            Err(_) => IconState::Missing,
+            Err(_) => (
+                IconState::Missing,
+                Some("The server returned an unsupported or invalid icon image.".into()),
+            ),
         },
-        _ => IconState::Missing,
+        Ok(Err(error)) => (IconState::Missing, Some(error)),
+        Err(_) => (IconState::Missing, Some("Icon download timed out.".into())),
     }
 }
 
@@ -333,6 +453,9 @@ async fn decode_cached(bytes: Vec<u8>) -> Result<IconState, DecodeError> {
         if image.dimensions() != (ICON_SIZE_PX, ICON_SIZE_PX) {
             return Err(DecodeError("Invalid cached icon dimensions".into()));
         }
+        if image.pixels().all(|pixel| pixel.0[3] == 0) {
+            return Err(DecodeError("Cached icon has no visible pixels".into()));
+        }
         // Persistent pixels already have their corner mask. Do not apply it twice.
         Ok(handle(&image))
     })
@@ -355,23 +478,69 @@ impl std::fmt::Display for DecodeError {
     }
 }
 
-fn decode_and_mask(raw: &[u8]) -> Result<::image::RgbaImage, ::image::ImageError> {
-    let mut reader = ::image::ImageReader::new(std::io::Cursor::new(raw)).with_guessed_format()?;
-    let mut limits = ::image::Limits::default();
-    limits.max_image_width = Some(4096);
-    limits.max_image_height = Some(4096);
-    limits.max_alloc = Some(32 * 1024 * 1024);
-    reader.limits(limits);
-    let img = reader.decode()?;
-    // We render at a fixed 32 px regardless of the source size so the alpha
-    // mask stays exact.
-    let resized = img.resize_exact(
-        ICON_SIZE_PX,
-        ICON_SIZE_PX,
-        ::image::imageops::FilterType::Lanczos3,
-    );
-    let mut rgba = resized.to_rgba8();
+fn decode_and_mask(raw: &[u8]) -> Result<::image::RgbaImage, DecodeError> {
+    let is_xml = std::str::from_utf8(raw).ok().is_some_and(|s| {
+        s.trim_start_matches('\u{feff}')
+            .trim_start()
+            .starts_with('<')
+    });
+    let mut rgba = if is_xml {
+        let options = resvg::usvg::Options {
+            // Untrusted icons must never read local files, URLs or embedded images.
+            image_href_resolver: resvg::usvg::ImageHrefResolver {
+                resolve_string: Box::new(|_, _| None),
+                resolve_data: Box::new(|_, _, _| None),
+            },
+            ..Default::default()
+        };
+        let tree =
+            resvg::usvg::Tree::from_data(raw, &options).map_err(|e| DecodeError(e.to_string()))?;
+        if tree.size().width() > 4096. || tree.size().height() > 4096. {
+            return Err(DecodeError("SVG icon dimensions exceed limits".into()));
+        }
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(ICON_SIZE_PX, ICON_SIZE_PX)
+            .ok_or_else(|| DecodeError("Icon allocation failed".into()))?;
+        resvg::render(
+            &tree,
+            resvg::tiny_skia::Transform::from_scale(
+                ICON_SIZE_PX as f32 / tree.size().width(),
+                ICON_SIZE_PX as f32 / tree.size().height(),
+            ),
+            &mut pixmap.as_mut(),
+        );
+        let pixels = pixmap
+            .pixels()
+            .iter()
+            .flat_map(|p| {
+                let p = p.demultiply();
+                [p.red(), p.green(), p.blue(), p.alpha()]
+            })
+            .collect();
+        image::RgbaImage::from_raw(ICON_SIZE_PX, ICON_SIZE_PX, pixels)
+            .ok_or_else(|| DecodeError("Invalid icon pixels".into()))?
+    } else {
+        let mut reader = image::ImageReader::new(std::io::Cursor::new(raw))
+            .with_guessed_format()
+            .map_err(|e| DecodeError(e.to_string()))?;
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(4096);
+        limits.max_image_height = Some(4096);
+        limits.max_alloc = Some(32 * 1024 * 1024);
+        reader.limits(limits);
+        reader
+            .decode()
+            .map_err(|e| DecodeError(e.to_string()))?
+            .resize_exact(
+                ICON_SIZE_PX,
+                ICON_SIZE_PX,
+                image::imageops::FilterType::Lanczos3,
+            )
+            .to_rgba8()
+    };
     apply_rounded_mask(&mut rgba, ICON_CORNER_RADIUS);
+    if rgba.pixels().all(|pixel| pixel.0[3] == 0) {
+        return Err(DecodeError("Icon has no visible pixels".into()));
+    }
     Ok(rgba)
 }
 
@@ -530,6 +699,44 @@ mod tests {
         assert_eq!(hostname_for_fetch(""), None);
         assert_eq!(hostname_for_fetch("   "), None);
         assert_eq!(hostname_for_fetch("not a url at all"), None);
+    }
+
+    #[test]
+    fn svg_icons_cannot_read_external_or_embedded_images() {
+        let root = std::env::temp_dir().join(format!("bw-svg-icon-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("private-image.png");
+        image::RgbaImage::from_pixel(32, 32, image::Rgba([255, 0, 0, 255]))
+            .save(&path)
+            .unwrap();
+        for href in [
+            path.to_str().unwrap().to_owned(),
+            format!("file://{}", path.display()),
+            "https://never-fetch.invalid/image.png".into(),
+            format!(
+                "data:image/png;base64,{}",
+                base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    std::fs::read(&path).unwrap()
+                )
+            ),
+        ] {
+            let svg = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="32" height="32"><image width="32" height="32" xlink:href="{href}"/></svg>"#
+            );
+            assert!(
+                decode_and_mask(svg.as_bytes()).is_err(),
+                "External-only SVGs must not render or enter the cache"
+            );
+        }
+        assert!(
+            decode_and_mask(
+                br#"<svg xmlns="http://www.w3.org/2000/svg" width="1000000" height="1000000"/>"#
+            )
+            .is_err()
+        );
+        assert!(decode_and_mask(b"<html>not an icon</html>").is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     // ── apply_rounded_mask ─────────────────────────────────────────────────

@@ -13,6 +13,7 @@ async-trait = { workspace = true }
 eframe = { version = "=0.37.0", default-features = false, features = ["glow", "wayland", "x11", "accesskit"] }
 egui_extras = { version = "=0.37.0", default-features = false, features = ["svg"] }
 fontdb = "0.23"
+resvg = { version = "=0.45.1", default-features = false }
 futures = "0.3"
 raw-window-handle = "0.6"
 arboard = { version = "3.6", default-features = false, features = [

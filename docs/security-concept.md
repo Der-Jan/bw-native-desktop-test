@@ -97,7 +97,7 @@ Proxy/TLS diagnostics remain sanitized. See [mTLS/proxy requirements](mtls-requi
 ## Verification
 
 Current verification (including proxy authentication and HTTP/HTTPS CONNECT with mTLS/WSS): `cargo test --workspace`
-passes 319 desktop tests plus one generator test (four desktop tests ignored, including the interactive credential-store roundtrip).
+passes 340 desktop tests plus one generator test (four desktop tests ignored, including the interactive credential-store roundtrip).
 `cargo clippy --workspace --all-targets` passes with existing warnings; the release
 workspace builds. The native Wayland settings-fit test also passes explicitly.
 Notification regressions use a disposable mandatory-mTLS WebSocket server and cover
@@ -507,7 +507,7 @@ Access to that OS user's unlocked credential store is sufficient to unlock this
 vault; this is an explicit per-account opt-in, disabled by default. It does not
 claim fresh biometric verification. The application attempts OS-store unlock
 once for the initial account during startup, including launches through an
-externally configured autostart entry. Switching accounts and manual, idle or
+the app-managed Linux XDG autostart entry. Switching accounts and manual, idle or
 configured system locks do not automatically retry it. After those locks, the
 user must explicitly choose **Unlock with OS credential store**, or enter the
 master password. Existing master-password reprompts remain separate and retain

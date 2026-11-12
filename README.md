@@ -47,7 +47,8 @@ cargo run -p i18n-unused                      # List Fluent keys with no `fl!`/`
 ```
 
 For Ubuntu 24.04 `.deb` builds, use `python3 tools/build-ubuntu-deb.py`; see
-[Ubuntu packaging](tools/packaging/README.md) for requirements and installation.
+[Linux packaging](tools/packaging/README.md) for requirements and installation.
+For a native Fedora/Nobara RPM, use `python3 tools/build-fedora-rpm.py`.
 
 Useful dev modes:
 

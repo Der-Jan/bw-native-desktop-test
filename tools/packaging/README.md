@@ -1,4 +1,6 @@
-# Ubuntu 24.04 packages
+# Linux packages
+
+## Ubuntu 24.04 packages
 
 Build a native **amd64** `.deb` on an amd64 Linux host with Podman (preferred) or
 Docker and a recent Rust toolchain compatible with `Cargo.lock`. The package is
@@ -72,3 +74,32 @@ a `libc6 (>= 2.39)` dependency. Validation in a separate Ubuntu 24.04 container
 passed APT installation, ELF library resolution for both binaries, visible GUI
 startup with an empty profile under Xvfb/Mesa software rendering, and removal.
 The login screen was also visually inspected. No real vault data was used.
+
+## Fedora / Nobara RPM
+
+Build on the target Fedora/Nobara x86-64 system so RPM's ELF dependency generator
+uses that distribution's library versions:
+
+```sh
+python3 tools/build-fedora-rpm.py
+```
+
+Requirements: a compatible Rust toolchain, `rpm-build`, `desktop-file-utils`, a C
+toolchain, and the native development libraries used by the application (GTK 3,
+D-Bus, OpenSSL, xdotool/libxdo, X11, xkbcommon and Wayland). `--cargo` selects a
+Cargo executable. The local task toolchain under `target/build-tools` is also
+recognized if present; no shell startup files are changed.
+
+The default command rebuilds the locked workspace before packaging.
+`--skip-build` is only for binaries just built from this working tree. Output is
+written to `dist/fedora-N/` with a SHA-256 checksum and build metadata. Development
+releases sort by UTC source timestamp, followed by the Git revision. The RPM
+contains the app, browser helper, desktop launcher, icon and license notices.
+Runtime-loaded graphics libraries are declared in addition to generated ELF
+requirements; the selected Secret Service wallet remains a desktop requirement.
+
+Install the exact filename printed by the builder with `sudo dnf install`, then
+fully quit any previous app instance and launch `/usr/bin/bitwarden-desktop-next`.
+A per-user launcher in `~/.local/share/applications` can override the packaged
+system entry, especially when a development preview has been registered before.
+The RPM does not modify vault data, register browser hosts or enable autostart.

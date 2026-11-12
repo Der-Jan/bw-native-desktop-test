@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Package binaries built on Ubuntu 24.04; run inside the build container."""
 import argparse
+from datetime import datetime, timezone
 import hashlib
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -19,7 +21,13 @@ if 'VERSION_ID="24.04"' not in Path('/etc/os-release').read_text():
     parser.error('Run this packager on Ubuntu 24.04')
 app = 'bitwarden-desktop-next'
 version = tomllib.loads((args.source / 'crates/desktop/Cargo.toml').read_text())['package']['version']
-version += '+git' + args.revision + '-1ubuntu24.04'
+# A hash is an identity, not a version ordering: git625... sorted above git07...
+# despite containing older source. The separator also sorts above legacy hashes.
+try:
+    timestamp = datetime.fromtimestamp(int(os.environ['SOURCE_DATE_EPOCH']), timezone.utc)
+except (KeyError, ValueError, OverflowError, OSError):
+    parser.error('SOURCE_DATE_EPOCH must contain the source commit timestamp')
+version += f"+git.{timestamp:%Y%m%d%H%M%S}.{args.revision}-1ubuntu24.04"
 arch = subprocess.check_output(['dpkg', '--print-architecture'], text=True).strip()
 args.output.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='bw-deb-') as temporary:

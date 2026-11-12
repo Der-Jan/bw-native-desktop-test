@@ -15,6 +15,11 @@ Use `--toolchain /path/to/toolchain` to select a directory containing `bin/cargo
 and `bin/rustc`, or `--engine docker` to select Docker. The host toolchain must
 itself run on Ubuntu 24.04. Build output/caches live in `target/ubuntu-24.04`;
 packages and SHA-256 checksums are written to `dist/ubuntu-24.04`.
+Development versions use `+git.<UTC commit timestamp>.<revision>` so Debian sorts
+by source date rather than the hexadecimal commit hash. The separator sorts
+above the previous hash-only development versions. Install a specific package
+filename when the directory contains builds from several branches; avoid a
+wildcard that gives APT multiple versions of the same package.
 Container user mapping preserves developer ownership of caches and artifacts
 with rootless Podman or rootful/rootless Docker.
 `--package-only` repackages an existing successful build recorded in

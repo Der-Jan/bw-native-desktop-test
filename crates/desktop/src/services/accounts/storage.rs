@@ -50,7 +50,69 @@ fn decode_key(bytes: Zeroizing<Vec<u8>>) -> Result<Zeroizing<Vec<u8>>, String> {
     Ok(decoded)
 }
 
-fn keyring_error(error: keyring::Error) -> String {
+// Match only known diagnostic markers; never emit arbitrary backend payloads.
+fn platform_failure(
+    source: &(dyn std::error::Error + Send + Sync),
+) -> (&'static str, &'static str) {
+    let detail = source.to_string();
+    for (marker, cause, message) in [
+        (
+            "org.freedesktop.DBus.Error.NoReply",
+            "dbus_no_reply",
+            "The credential-store service did not reply. Check whether a wallet prompt is waiting, then retry.",
+        ),
+        (
+            "org.freedesktop.DBus.Error.Timeout",
+            "dbus_timeout",
+            "The credential-store request timed out. Complete any wallet prompt and retry.",
+        ),
+        (
+            "org.freedesktop.DBus.Error.ServiceUnknown",
+            "dbus_service_missing",
+            "The Secret Service provider is not running in this desktop session.",
+        ),
+        (
+            "org.freedesktop.DBus.Error.Disconnected",
+            "dbus_disconnected",
+            "The credential store lost its D-Bus session connection. Restart the app in the desktop session.",
+        ),
+        (
+            "org.freedesktop.DBus.Error.AccessDenied",
+            "dbus_denied",
+            "The desktop session denied access to the credential-store service.",
+        ),
+        (
+            "org.freedesktop.DBus.Error.UnknownObject",
+            "dbus_stale_object",
+            "The credential-store object disappeared. Retry after the wallet service is available.",
+        ),
+        (
+            "org.freedesktop.DBus.Error.InvalidArgs",
+            "dbus_invalid_args",
+            "The credential-store service rejected the Secret Service request.",
+        ),
+        (
+            "No DBus session or Secret Service provider found",
+            "service_unavailable",
+            "No D-Bus user session or Secret Service provider is available.",
+        ),
+        (
+            "Crypto error:",
+            "session_crypto",
+            "The encrypted credential-store session could not be decoded.",
+        ),
+    ] {
+        if detail.contains(marker) {
+            return (cause, message);
+        }
+    }
+    (
+        "platform_unknown",
+        "The OS credential-store service failed with an unclassified backend error.",
+    )
+}
+
+fn keyring_error(operation: &str, error: keyring::Error) -> String {
     // Never log Debug/Display of arbitrary backend errors: BadEncoding contains
     // secret bytes and Ambiguous contains credentials. Emit only classified causes.
     let (cause, message) = match error {
@@ -70,10 +132,7 @@ fn keyring_error(error: keyring::Error) -> String {
                 "KWallet could not create an encrypted session. On Ubuntu 24.04/KWallet 5, install libqca-qt5-2-plugins and restart KWallet or sign out and back in.",
             )
         }
-        keyring::Error::PlatformFailure(_) => (
-            "platform",
-            "The OS credential-store service failed. Check the D-Bus user session and Secret Service provider, then retry.",
-        ),
+        keyring::Error::PlatformFailure(ref source) => platform_failure(source.as_ref()),
         keyring::Error::BadEncoding(_) => ("encoding", INVALID_KEY),
         keyring::Error::Ambiguous(_) => (
             "ambiguous",
@@ -81,8 +140,8 @@ fn keyring_error(error: keyring::Error) -> String {
         ),
         _ => ("request", "The OS credential store rejected the request."),
     };
-    tracing::warn!(cause, "OS credential-store operation failed");
-    message.into()
+    tracing::warn!(operation, cause, "OS credential-store operation failed");
+    format!("{message} [{operation}/{cause}]")
 }
 
 pub trait KeyStore: Send + Sync {
@@ -101,7 +160,7 @@ impl KeyStore for OsKeyStore {
             // Use the byte API symmetrically: Windows set_password encodes UTF-16.
             // The payload itself is ASCII, so KWallet text/plain conversion is safe.
             .and_then(|e| e.set_secret(text.as_bytes()))
-            .map_err(keyring_error)
+            .map_err(|error| keyring_error("write", error))
     }
     fn get(&self, id: Uuid) -> Result<Zeroizing<Vec<u8>>, String> {
         let _guard = KEYRING_LOCK
@@ -110,7 +169,7 @@ impl KeyStore for OsKeyStore {
         keyring::Entry::new(SERVICE, &format!("secret-{id}"))
             .and_then(|e| e.get_secret())
             .map(Zeroizing::new)
-            .map_err(keyring_error)
+            .map_err(|error| keyring_error("read", error))
             .and_then(decode_key)
     }
     fn delete(&self, id: Uuid) -> Result<(), String> {
@@ -121,7 +180,7 @@ impl KeyStore for OsKeyStore {
             .and_then(|e| e.delete_credential())
         {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(keyring_error(error)),
+            Err(error) => Err(keyring_error("delete", error)),
         }
     }
 }
@@ -382,16 +441,21 @@ pub(crate) mod test_support {
 
     #[test]
     fn credential_errors_are_distinct_and_do_not_expose_backend_payloads() {
-        let missing = keyring_error(keyring::Error::NoEntry);
-        let locked = keyring_error(keyring::Error::NoStorageAccess(Box::new(io::Error::other(
-            "private payload",
-        ))));
-        let platform = keyring_error(keyring::Error::PlatformFailure(Box::new(io::Error::other(
-            "private payload",
-        ))));
-        let qca = keyring_error(keyring::Error::PlatformFailure(Box::new(io::Error::other(
-            "createDLGroup failed private payload",
-        ))));
+        let missing = keyring_error("test", keyring::Error::NoEntry);
+        let locked = keyring_error(
+            "test",
+            keyring::Error::NoStorageAccess(Box::new(io::Error::other("private payload"))),
+        );
+        let platform = keyring_error(
+            "test",
+            keyring::Error::PlatformFailure(Box::new(io::Error::other("private payload"))),
+        );
+        let qca = keyring_error(
+            "test",
+            keyring::Error::PlatformFailure(Box::new(io::Error::other(
+                "createDLGroup failed private payload",
+            ))),
+        );
         assert_ne!(missing, locked);
         assert_ne!(locked, platform);
         assert!(qca.contains("libqca-qt5-2-plugins"));
@@ -400,7 +464,10 @@ pub(crate) mod test_support {
             locked,
             platform,
             qca,
-            keyring_error(keyring::Error::BadEncoding(b"private payload".to_vec())),
+            keyring_error(
+                "test",
+                keyring::Error::BadEncoding(b"private payload".to_vec()),
+            ),
         ] {
             assert!(!message.contains("private payload"));
         }

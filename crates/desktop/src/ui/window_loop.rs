@@ -124,7 +124,6 @@ pub fn run() -> eframe::Result {
                     app.icon_textures.clear();
                     app.ssh_seen = None;
                     app.browser_seen = None;
-                    app.browser_viewport_open = false;
                 }
                 let mut app_ref = shared.borrow_mut();
                 let app = app_ref.as_mut().unwrap();

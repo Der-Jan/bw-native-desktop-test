@@ -97,6 +97,54 @@ The newer `SharedUnlockSync` state propagation and OS user-verification RPCs
 are not implemented. An extension rollout that requires those exclusively needs
 additional integration; no successful biometric verification is fabricated.
 
+## Webtop approval-window finding and temporary workaround (2026-11-12)
+
+The separate native browser-approval window was intentional: it could request
+focus and attention above the browser while the main vault window remained
+behind it. An approval rendered only inside the main window does not provide
+the same visibility. Desktop focus-stealing prevention can leave the request
+behind Chrome until it expires. Restoring reliable foreground attention is
+pending; the current modal is a temporary stability workaround, not the final
+approval-window design.
+
+In the Ubuntu 24.04 Webtop KDE session, two stale **Allow browser unlock**
+windows were observed alongside the main Bitwarden window, all belonging to the
+same app process. The app used X11 in that session. The original deferred
+viewport callback returned on an expired request without explicitly closing its
+window. A subsequent immediate-viewport implementation with per-request IDs
+crashed when native window initialization failed with `GLXBadWindow`. eframe
+reported the failed immediate viewport, then egui panicked because the viewport
+callback had never run. The `org.a11y.Bus` warning and clipboard worker shutdown
+message were not the cause of this panic.
+
+The current implementation renders browser approval as a request-specific egui
+modal in the existing main window/GL context. It removes the browser child
+viewport and retains UUID-bound decisions, expiry/session checks, Escape denial
+and permission-duration choices. The existing standalone approval surface used
+while the main window is hidden remains a separate path. Other native auxiliary
+windows have not been converted by this workaround.
+
+A future solution must recover the original foreground-attention behavior,
+clean up expired/replaced approvals, and handle native renderer/window creation
+failure without a panic or key release. Validate it with Chrome in front of the
+vault on real X11/GLX and Wayland/EGL sessions, including repeated requests,
+timeout, disconnect, close, lock and hidden-main-window cases. A successful
+EGL/Xvfb run alone does not cover the observed GLX failure.
+
+During the same investigation, KWallet was unlocked, shared the app's D-Bus
+session, and had the QCA plugin and graphical pinentry installed. A synthetic
+text write/read/delete succeeded; raw binary values still failed exact readback.
+Existing secrets were not inspected. The reported generic credential-store
+`cause="platform"` failure was not reproduced and remains undiagnosed. Errors
+now include read/write/delete and allowlisted backend cause codes without
+logging arbitrary backend messages or secret values.
+
+The replacement Ubuntu 24.04 release build and package assembly succeeded.
+The keyboard regression was updated to exercise the modal and assert that it
+creates no child viewport. Tests and installed-app runtime validation were not
+run for this replacement at the user's request; the workaround has not yet
+passed an interactive acceptance check.
+
 ## Validation
 
 Workspace tests cover actual SDK Noise interoperation, legacy SDK encryption

@@ -6,47 +6,14 @@ use crate::{
 impl Application {
     pub(super) fn auxiliary_windows(&mut self, ctx: &egui::Context) {
         if let Some(approval) = self.core.browser_approval.clone().filter(|a| a.current()) {
-            let id = egui::ViewportId::from_hash_of("browser-approval");
             let fresh = self.browser_seen != Some(approval.id);
             self.browser_seen = Some(approval.id);
-            self.browser_viewport_open = true;
-            let mut viewport = egui::ViewportBuilder::default()
-                .with_title("Allow browser unlock")
-                .with_app_id(crate::assets::DESKTOP_APP_ID)
-                .with_icon(crate::assets::window_icon().unwrap_or_default())
-                .with_min_inner_size([580., 420.])
-                .with_always_on_top()
-                .with_active(fresh);
-            if fresh {
-                viewport = viewport.with_inner_size([580., 420.]);
+            if let Some(decision) = browser_dialog(ctx, &approval, fresh) {
+                self.core.decide_browser(approval.id, decision);
+                self.browser_seen = None;
+                ctx.request_repaint();
             }
-            ctx.show_viewport_deferred(id, viewport, move |ui, class| {
-                let ctx = ui.ctx().clone();
-                if !approval.current() {
-                    ctx.request_repaint_of(egui::ViewportId::ROOT);
-                    return;
-                }
-                let focus_id = Id::unique(("browser-approval-focused", approval.id));
-                let fresh = !ctx.data(|data| data.get_temp::<bool>(focus_id).unwrap_or(false));
-                ctx.data_mut(|data| data.insert_temp(focus_id, true));
-                let mut decision = None;
-                if class == egui::ViewportClass::EmbeddedWindow {
-                    decision = browser_content(ui, &approval, fresh);
-                } else {
-                    egui::CentralPanel::default()
-                        .show(ui, |ui| decision = browser_content(ui, &approval, fresh));
-                }
-                if let Some(decision) = decision {
-                    approval.respond(decision);
-                    ctx.request_repaint_of(egui::ViewportId::ROOT);
-                }
-            });
-        } else if self.browser_viewport_open {
-            ctx.send_viewport_cmd_to(
-                egui::ViewportId::from_hash_of("browser-approval"),
-                egui::ViewportCommand::Close,
-            );
-            self.browser_viewport_open = false;
+        } else {
             self.browser_seen = None;
         }
         if let Some(approval) = self.core.ssh_approval.clone().filter(|a| a.current()) {
@@ -332,6 +299,29 @@ fn browser_shield(ui: &mut egui::Ui) {
     }
 }
 
+// Keep approval in the existing GL context. eframe's immediate native
+// viewport path panics if GLX window creation fails before invoking its callback.
+fn browser_dialog(
+    ctx: &egui::Context,
+    approval: &services::browser_integration::Approval,
+    fresh: bool,
+) -> Option<services::browser_integration::Decision> {
+    use services::browser_integration::Decision;
+    if !approval.current() {
+        return Some(Decision::Deny);
+    }
+    let mut decision = None;
+    let response =
+        egui::Modal::new(Id::unique(("browser-approval", approval.id))).show(ctx, |ui| {
+            ui.set_width(540.);
+            decision = browser_content(ui, approval, fresh);
+        });
+    if response.should_close() && decision.is_none() {
+        decision = Some(Decision::Deny);
+    }
+    decision
+}
+
 fn browser_content(
     ui: &mut egui::Ui,
     approval: &services::browser_integration::Approval,
@@ -517,9 +507,13 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    egui::CentralPanel::default()
-                        .show(ui, |ui| decision = browser_content(ui, &approval, fresh));
+                    decision = browser_dialog(ui.ctx(), &approval, fresh);
                 },
+            );
+            assert_eq!(
+                output.viewport_output.len(),
+                1,
+                "browser approval must not create a native GLX viewport"
             );
             output.textures_delta.clear();
             decision

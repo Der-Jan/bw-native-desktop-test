@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import time
 
 ROOT = Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser(description=__doc__)
@@ -78,7 +79,7 @@ if not args.package_only:
          image, 'cargo', 'build', '--release', '--workspace', '--locked'])
     revision = git('rev-parse', '--short=12', 'HEAD')
     if subprocess.run(['git', 'diff', '--quiet', 'HEAD'], cwd=ROOT).returncode:
-        revision += '.dirty'
+        revision += '.dirty.' + time.strftime('%Y%m%d%H%M%S', time.gmtime())
     information = {'revision': revision,
                    'maintainer': git('log', '-1', '--format=%an <%ae>'), 'epoch': epoch}
     metadata.write_text(json.dumps(information, indent=2) + '\n')

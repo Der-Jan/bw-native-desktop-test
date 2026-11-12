@@ -19,6 +19,18 @@ Use workspace checks for consistent SDK feature unification. Normal startup
 loads only the private OS application profile. Synthetic data requires an
 explicit `--demo` directory. Never use a real profile in tests or screenshots.
 
+## Local build and validation preference
+
+The user prefers building the Ubuntu 24.04 app binaries/package directly with
+`python3 tools/build-ubuntu-deb.py --engine docker`, retaining its build caches.
+Use those actual binaries for any needed runtime validation, with synthetic data
+and a separate profile. Do not compile separate test binaries or start additional
+Cargo test/Clippy build profiles by default; run those only when requested.
+Lightweight formatting/diff checks are still appropriate. The test commands above
+and the detailed test documentation remain available for explicitly requested
+regression runs. This preference was supplied on 2026-11-12 to avoid duplicate
+compilation and lengthy local validation cycles.
+
 ## Architecture and security
 
 - `core/` owns application state and dispatches asynchronous work. It has no

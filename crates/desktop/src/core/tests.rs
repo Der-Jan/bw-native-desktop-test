@@ -362,3 +362,64 @@ async fn duplicate_view_keeps_reprompt_gates_and_cancels_when_leaving_the_view()
     assert!(core.current_cache().unwrap().duplicate_report.is_none());
     assert_eq!(core.current_cache().unwrap().visible.len(), 2);
 }
+
+#[tokio::test]
+async fn duplicate_merge_secondary_trash_requires_its_own_reprompt_and_cancel_discards_merge() {
+    let mut core = core();
+    let id = install(&mut core, true);
+    let revision = core.current_cache().unwrap().all[0].revision_date;
+    core.merge = Some(super::merge::Merge {
+        request: uuid::Uuid::new_v4(),
+        ids: vec![CipherId::new_v4(), id],
+        phase: super::merge::Phase::Trashing,
+        error: None,
+        loaded: vec![],
+        preview: None,
+        revisions: vec![revision, revision],
+        next: 1,
+        primary_revision: Some(revision),
+    });
+    core.request(Request::MergeTrash(id, revision));
+    let prompt = core
+        .prompt
+        .as_ref()
+        .expect("secondary reprompt must be shown");
+    assert_eq!(prompt.target.cipher, Some(id));
+    assert_eq!(prompt.target.action, services::sdk::Action::Delete);
+    assert_eq!(prompt.target.revision, Some(revision));
+    core.cancel_prompt();
+    assert!(core.merge.is_none());
+    assert!(core.prompt.is_none());
+}
+
+#[tokio::test]
+async fn duplicate_merge_does_not_trash_a_secondary_changed_since_review() {
+    let mut core = core();
+    let id = install(&mut core, false);
+    let revision = core.current_cache().unwrap().all[0].revision_date;
+    let old = revision - chrono::Duration::seconds(1);
+    core.merge = Some(super::merge::Merge {
+        request: uuid::Uuid::new_v4(),
+        ids: vec![CipherId::new_v4(), id],
+        phase: super::merge::Phase::Trash,
+        error: None,
+        loaded: vec![],
+        preview: None,
+        revisions: vec![revision, old],
+        next: 1,
+        primary_revision: Some(revision),
+    });
+    core.poll_merge();
+    assert!(core.merge.as_ref().unwrap().phase == super::merge::Phase::Stopped);
+    assert!(
+        core.merge
+            .as_ref()
+            .unwrap()
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("changed")
+    );
+    core.clear_presentation();
+    assert!(core.merge.is_none());
+}

@@ -359,6 +359,24 @@ impl Application {
             }
         });
         if self.core.filter.section == VaultSection::Duplicates {
+            ui.horizontal(|ui| {
+                ui.label(format!(
+                    "{} selected for merging",
+                    self.core.duplicate_selection.len()
+                ));
+                if ui
+                    .add_enabled(
+                        self.core.duplicate_selection.len() >= 2 && self.core.merge.is_none(),
+                        egui::Button::new("Merge selected…"),
+                    )
+                    .clicked()
+                {
+                    self.core.begin_merge(self.core.duplicate_selection.clone());
+                }
+                if ui.button("Clear selection").clicked() {
+                    self.core.duplicate_selection.clear();
+                }
+            });
             ui.weak("Saved URL matching rules are compared within the selected vault and folder filters. Usernames and passwords may differ.");
             if let Some(cache) = self.core.current_cache() {
                 if cache.duplicate_report.is_none() && cache.duplicate_error.is_none() {
@@ -573,6 +591,11 @@ impl Application {
         let favicon = self.core.favicon.clone();
         let textures = &mut self.icon_textures;
         // Borrow the cached projection: no vault-sized clone or sorting during drawing.
+        let duplicates = self.core.filter.section == VaultSection::Duplicates;
+        let mut merge_selection = std::mem::take(&mut self.core.duplicate_selection);
+        if !duplicates {
+            merge_selection.clear();
+        }
         let items = self
             .core
             .current_cache()
@@ -639,6 +662,20 @@ impl Application {
                             row.set_selected(chosen);
                             row.col(|ui| {
                                 ui.horizontal(|ui| {
+                                    if duplicates && let Some(id) = item.id {
+                                        let mut checked = merge_selection.contains(&id);
+                                        if ui
+                                            .checkbox(&mut checked, "")
+                                            .on_hover_text("Select for merge")
+                                            .changed()
+                                        {
+                                            if checked {
+                                                merge_selection.push(id);
+                                            } else {
+                                                merge_selection.retain(|v| *v != id);
+                                            }
+                                        }
+                                    }
                                     let mark = match kind(&item.r#type) {
                                         CipherType::Login => "L",
                                         CipherType::SshKey => "SSH",
@@ -722,6 +759,7 @@ impl Application {
         if let Some(column) = sort {
             self.core.sort_by(column);
         }
+        self.core.duplicate_selection = merge_selection;
         if let Some(id) = clicked {
             self.core.request(Request::Read(id));
             focus.request_focus();

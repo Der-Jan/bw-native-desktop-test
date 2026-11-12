@@ -8,7 +8,9 @@ mod duplicates;
 mod folders;
 pub mod generator;
 mod incoming;
+pub mod merge;
 pub mod model;
+mod os_unlock;
 mod placement;
 mod profile;
 mod proxy;
@@ -138,6 +140,8 @@ pub struct Core {
     pub detail: Option<bitwarden_vault::CipherView>,
     pub detail_open: bool,
     pub detail_request: Option<uuid::Uuid>,
+    pub merge: Option<merge::Merge>,
+    pub duplicate_selection: Vec<bitwarden_vault::CipherId>,
     pub detail_save: Option<uuid::Uuid>,
     pub placement_editor: Option<model::PlacementEditor>,
     pub proxy_auth: Option<model::ProxyAuth>,
@@ -161,6 +165,8 @@ pub struct Core {
     notifications_enabled: bool,
     pub notice: Option<Notice>,
     pub loading: bool,
+    pub os_unlock_busy: bool,
+    startup_account_restored: bool,
     pub locking: HashSet<UserId>,
     pub removing: HashSet<UserId>,
     pub quit_requested: bool,
@@ -231,6 +237,8 @@ impl Core {
             detail: None,
             detail_open: false,
             detail_request: None,
+            merge: None,
+            duplicate_selection: Vec::new(),
             detail_save: None,
             placement_editor: None,
             proxy_auth: None,
@@ -254,6 +262,8 @@ impl Core {
             notifications_enabled: boot,
             notice: None,
             loading: true,
+            os_unlock_busy: false,
+            startup_account_restored: false,
             locking: HashSet::new(),
             removing: HashSet::new(),
             quit_requested: false,
@@ -301,7 +311,7 @@ impl Core {
                     core.loading = false;
                     core.screen = Screen::Login;
                     if let Some(uid) = core.manager.user_ids().first().copied() {
-                        core.switch_user(uid);
+                        core.restore_startup_account(uid);
                     }
                     core.refresh_agent();
                 });
@@ -325,6 +335,7 @@ impl Core {
         }
         self.poll_proxy();
         self.flush_saved_uploads();
+        self.poll_merge();
         self.poll_incoming();
         self.refresh_agent();
     }
@@ -386,6 +397,20 @@ impl Core {
         } else {
             self.reset_list_scroll();
         }
+        if !preserve_list
+            || self.merge.as_ref().is_some_and(|m| {
+                !matches!(
+                    m.phase,
+                    merge::Phase::Uploading
+                        | merge::Phase::Trash
+                        | merge::Phase::Trashing
+                        | merge::Phase::Stopped
+                )
+            })
+        {
+            self.merge = None;
+        }
+        self.duplicate_selection.clear();
         self.cancel_duplicate_scan();
         if let Some(approval) = self.browser_approval.take() {
             approval.respond(services::browser_integration::Decision::Deny);
@@ -404,6 +429,7 @@ impl Core {
         self.detail_open = false;
         self.detail_request = None;
         self.detail_save = None;
+        self.os_unlock_busy = false;
         self.placement_editor = None;
         self.editor = None;
         self.generator.clear();
@@ -421,6 +447,19 @@ impl Core {
         self.magnify_requested = false;
     }
     pub fn cancel_prompt(&mut self) {
+        if self
+            .prompt
+            .as_ref()
+            .and_then(|p| p.request.as_ref())
+            .is_some_and(|r| {
+                matches!(
+                    r,
+                    Request::MergeRead(_) | Request::MergeSave(_) | Request::MergeTrash(..)
+                )
+            })
+        {
+            self.merge = None;
+        }
         self.prompt = None;
         self.manager.clear_grants();
     }

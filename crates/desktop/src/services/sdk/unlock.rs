@@ -38,6 +38,13 @@ impl UnlockData {
     /// Initialize the SDK crypto state with the user's master password. On
     /// success the keystore is unlocked in memory.
     pub async fn unlock(self, password: String) -> Result<(), String> {
+        let method = InitUserCryptoMethod::MasterPasswordUnlock {
+            password,
+            master_password_unlock: self.master_unlock.clone(),
+        };
+        self.unlock_method(method).await
+    }
+    pub(super) async fn unlock_method(self, method: InitUserCryptoMethod) -> Result<(), String> {
         let _exclusive = self.session.state.gate.write().await;
         self.session.ensure_unlocking()?;
         let client = self.session.state.client()?;
@@ -52,10 +59,7 @@ impl UnlockData {
             kdf_params: self.master_unlock.kdf.clone(),
             email: self.email.clone(),
             account_cryptographic_state: self.crypto_state,
-            method: InitUserCryptoMethod::MasterPasswordUnlock {
-                password,
-                master_password_unlock: self.master_unlock,
-            },
+            method,
             upgrade_token: None,
         };
 

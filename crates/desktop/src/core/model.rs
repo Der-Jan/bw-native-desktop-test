@@ -70,6 +70,10 @@ pub enum CopyField {
 }
 pub enum Request {
     Read(CipherId),
+    ConfigureOsUnlock(bool),
+    MergeRead(CipherId),
+    MergeSave(Box<CipherView>),
+    MergeTrash(CipherId, chrono::DateTime<chrono::Utc>),
     CopyText(CipherId, Zeroizing<String>),
     Copy(CipherId, CopyField),
     Edit(CipherId),
@@ -100,7 +104,9 @@ pub enum Request {
 impl Request {
     pub fn id(&self) -> Option<CipherId> {
         match self {
-            Self::Read(id)
+            Self::MergeRead(id)
+            | Self::MergeTrash(id, _)
+            | Self::Read(id)
             | Self::CopyText(id, _)
             | Self::Copy(id, _)
             | Self::Edit(id)
@@ -108,24 +114,27 @@ impl Request {
             | Self::DiscardLocal(id)
             | Self::Delete(id)
             | Self::Restore(id) => Some(*id),
-            Self::Save(v) => v.id,
+            Self::Save(v) | Self::MergeSave(v) => v.id,
             Self::Placement { cipher, .. }
             | Self::Attachment { cipher, .. }
             | Self::Archive { cipher, .. } => Some(*cipher),
-            Self::Export { .. } => None,
+            Self::Export { .. } | Self::ConfigureOsUnlock(_) => None,
         }
     }
     pub fn action(&self) -> crate::services::sdk::Action {
         use crate::services::sdk::Action;
         match self {
-            Self::Read(_) => Action::Read,
+            Self::Read(_) | Self::MergeRead(_) => Action::Read,
             Self::Copy(..) | Self::CopyText(..) => Action::Copy,
             Self::Edit(_) | Self::ReviewLocal(_) => Action::Edit,
-            Self::Save(_) | Self::DiscardLocal(_) | Self::Placement { .. } => Action::Write,
-            Self::Delete(_) => Action::Delete,
+            Self::MergeSave(_) | Self::Save(_) | Self::DiscardLocal(_) | Self::Placement { .. } => {
+                Action::Write
+            }
+            Self::Delete(_) | Self::MergeTrash(..) => Action::Delete,
             Self::Restore(_) => Action::Restore,
             Self::Archive { .. } => Action::Archive,
             Self::Export { .. } => Action::Export,
+            Self::ConfigureOsUnlock(_) => Action::OsUnlock,
             Self::Attachment {
                 operation: crate::services::sdk::attachments::Operation::Download { .. },
                 ..

@@ -102,6 +102,37 @@ pub async fn change_state(
     root: PathBuf,
     store: ProfileStore,
 ) -> Result<Outcome, String> {
+    change_state_checked(handle, id, change, root, store, None, None).await
+}
+pub async fn change_state_expected(
+    handle: SessionClient,
+    id: CipherId,
+    change: Change,
+    root: PathBuf,
+    store: ProfileStore,
+    expected: chrono::DateTime<chrono::Utc>,
+    primary: (CipherId, chrono::DateTime<chrono::Utc>),
+) -> Result<Outcome, String> {
+    change_state_checked(
+        handle,
+        id,
+        change,
+        root,
+        store,
+        Some(expected),
+        Some(primary),
+    )
+    .await
+}
+async fn change_state_checked(
+    handle: SessionClient,
+    id: CipherId,
+    change: Change,
+    root: PathBuf,
+    store: ProfileStore,
+    expected: Option<chrono::DateTime<chrono::Utc>>,
+    primary: Option<(CipherId, chrono::DateTime<chrono::Utc>)>,
+) -> Result<Outcome, String> {
     let session = handle.session();
     let _coordinator = session.state.sync_gate.lock().await;
     let _lease = session.state.gate.write().await;
@@ -129,9 +160,27 @@ pub async fn change_state(
         .get(&id.to_string())
         .cloned()
         .ok_or("Item no longer exists")?;
+    if expected.is_some_and(|revision| revision != original.revision_date) {
+        return Err("The secondary changed since merge review; it was not trashed".into());
+    }
     let (fresh, record, transport) =
         vault_sync::fetch(&session, root.clone(), store.clone()).await?;
     vault_sync::apply(&session, &client, fresh, &record, &transport).await?;
+    if let Some((primary, revision)) = primary {
+        if primary == id {
+            return Err("The primary must not be moved to trash during a merge".into());
+        }
+        if session.state.snapshot.current().is_none_or(|s| {
+            s.ciphers
+                .get(&primary.to_string())
+                .is_none_or(|v| v.revision_date != revision || v.deleted_date.is_some())
+                || s.persisted.local_edits.contains_key(&primary.to_string())
+        }) {
+            return Err(
+                "The merged primary changed or is unconfirmed; secondary was not trashed".into(),
+            );
+        }
+    }
     let result = dispatch(
         &session,
         &client,

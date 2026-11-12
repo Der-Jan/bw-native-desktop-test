@@ -149,6 +149,7 @@ async fn build_user_entry(mu: MockUserMeta, data_dir: &Path) -> Result<UserEntry
         .map_err(|e| e.to_string())?;
 
     Ok(UserEntry {
+        os_unlock: None,
         session: super::session::SessionState::new(mu.user_id, client),
         email: mu.email.clone(),
         display_name: mu.display_name,

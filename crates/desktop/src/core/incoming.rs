@@ -115,7 +115,8 @@ impl Core {
                 continue;
             }
             if self.active == Some(uid)
-                && (self.editor.is_some()
+                && (self.merge.is_some()
+                    || self.editor.is_some()
                     || self.detail_save.is_some()
                     || self.attachment_busy.is_some()
                     || (self.folder_editor.is_some() || self.placement_editor.is_some())

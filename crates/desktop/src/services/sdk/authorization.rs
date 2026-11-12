@@ -18,6 +18,7 @@ pub enum Action {
     Restore,
     Export,
     Archive,
+    OsUnlock,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Authorization {

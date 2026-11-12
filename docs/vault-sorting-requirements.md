@@ -81,3 +81,37 @@ Add Unicode/IDNA, locale and unknown-setting cases on Rust. Assert section/group
 positions, selection after reorder, preference after restart and refresh, and
 clearing derived keys on lock. Exact locale collation across operating systems
 may differ; deterministic ties and domain extraction must remain consistent.
+
+## Merge selected duplicate logins
+
+In Duplicates, check two or more login rows and choose **Merge selected…**.
+The review dialog selects one primary (the first checked by default). Its ID,
+username, password and URI rules remain in place. Alternate usernames (including
+email-style logins), passwords, names, notes, URI rules and password history are
+retained as custom fields; passwords, notes and password history use hidden
+fields. Existing custom field types/values are retained; colliding names get a
+source-ID suffix instead of overwriting a field. Equal preserved values are not
+added repeatedly. Primary ownership, placement and attachments remain unchanged.
+
+TOTP and passkeys stay usable in the normal login schema. If exactly one selected
+entry contains TOTP, or exactly one contains passkeys, that value/list is carried
+to the primary. Two or more source entries containing either kind block merging,
+even if the values happen to match. Multiple passkeys already belonging to the
+single source entry stay together. The strongest master-password reprompt among
+the selected entries is retained. Each protected read, primary write and secondary
+trash operation still uses its own existing scoped authorization.
+
+Only complete active editable logins in the same vault are accepted. Secondary
+attachments and linked custom fields currently block merging; files need a
+separate transfer, and linked fields must first be converted to explicit values.
+Selected entries with pending local edits must synchronize first.
+
+The primary is saved before any trash operation. For server accounts its upload
+must be confirmed before cleanup begins. Secondary entries are then moved to
+Trash individually, with fresh permissions and revision checks for both the
+primary and the secondary. Save/upload/conflict failures keep the secondaries;
+unconfirmed trash operations stop cleanup rather than replaying writes. A later
+failure or cancellation may leave some secondaries already in Trash and the
+others active. No permanent delete is performed. Canceling the dialog, locking or switching
+accounts cancels the transient merge workflow; restart does not silently resume
+trashing. Existing encrypted drafts and lifecycle-intent recovery remain in use.

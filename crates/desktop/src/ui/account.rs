@@ -139,6 +139,22 @@ impl Application {
                             submit = true;
                         }
                     });
+                    let os_unlock_available = unlocking
+                        && !challenge
+                        && self
+                            .core
+                            .active
+                            .is_some_and(|uid| self.core.manager.os_unlock_ref(&uid).is_some());
+                    if os_unlock_available
+                        && ui
+                            .add_enabled(
+                                !self.core.login.busy,
+                                egui::Button::new("Unlock with OS credential store"),
+                            )
+                            .clicked()
+                    {
+                        self.core.unlock_os_store();
+                    }
                     if self.core.login.busy {
                         ui.spinner();
                     }

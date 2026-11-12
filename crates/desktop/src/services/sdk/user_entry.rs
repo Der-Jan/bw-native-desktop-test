@@ -17,6 +17,7 @@ use super::types::{Collection, Organization};
 pub(super) struct UserEntry {
     pub(super) session: std::sync::Arc<super::session::SessionState>,
     // App-side stand-in for SDK profile methods that don't exist yet.
+    pub(super) os_unlock: Option<uuid::Uuid>,
     pub(super) email: String,
     pub(super) display_name: String,
     pub(super) server_url: String,

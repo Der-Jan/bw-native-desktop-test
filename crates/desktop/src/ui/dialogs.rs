@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    core::generator::Generate,
+    core::{generator::Generate, model::Request},
     services::{menu::MenuAction, preferences::*},
 };
 use bitwarden_generators::{
@@ -8,7 +8,8 @@ use bitwarden_generators::{
 };
 impl Application {
     pub(super) fn any_modal(&self) -> bool {
-        self.core.prompt.is_some()
+        self.core.merge.is_some()
+            || self.core.prompt.is_some()
             || self.core.browser_approval.is_some()
             || self.core.settings_open
             || self.profile_open
@@ -18,6 +19,7 @@ impl Application {
             || self.core.about_open
             || self.core.fingerprint_open
             || self.core.folder_editor.is_some()
+            || self.core.placement_editor.is_some()
     }
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
         if !self.core.settings_open {
@@ -26,6 +28,7 @@ impl Application {
                 data.remove::<(f32, Option<egui::Vec2>, u8)>(Id::unique("settings-resize-state"));
             });
         }
+        self.merge_dialog(ctx);
         self.profile_dialog(ctx);
         if self.core.settings_open {
             self.settings(ctx);
@@ -149,6 +152,7 @@ impl Application {
     }
     fn settings(&mut self, ctx: &egui::Context) {
         let mut changed = false;
+        let mut close_for_os_unlock = false;
         let monitor = ctx
             .input_for(
                 egui::ViewportId::from_hash_of(("tool-window", "settings")),
@@ -322,6 +326,18 @@ impl Application {
                                 &mut prefs.minimize_on_copy,
                                 super::labels::text("Hide to tray after copy"),
                             );
+                            let os_enabled=app.core.manager.os_unlock_ref(&uid).is_some();
+                            ui.label(if os_enabled {"OS credential-store unlock: enabled"} else {"OS credential-store unlock: disabled"});
+                            if ui.add_enabled(!app.core.os_unlock_busy && app.core.manager.is_remote(&uid),egui::Button::new(if os_enabled {"Disable OS credential-store unlock"} else {"Enable OS credential-store unlock…"})).clicked() {
+                                if !os_enabled {
+                                    close_for_os_unlock=true;
+                                    if ui.ctx().viewport_id()!=egui::ViewportId::ROOT {ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);}
+                                    ui.ctx().send_viewport_cmd_to(egui::ViewportId::ROOT,egui::ViewportCommand::Focus);
+                                }
+                                app.core.request(Request::ConfigureOsUnlock(!os_enabled));
+                            }
+                            if app.core.os_unlock_busy {ui.spinner();}
+                            ui.weak("For the account selected at startup, unlock automatically using this OS user's credential store. Later locks require an explicit Unlock click. Anyone with access to that unlocked credential store can unlock this vault. Enabling requires your master password; the password itself is never stored.");
                             let pin_disabled = app.core.manager.policy_rules_for(&uid).pin_disabled;
                             if pin_disabled {prefs.pin_unlock = false;}
                             ui.add_enabled(
@@ -456,7 +472,7 @@ impl Application {
                 });
             },
         );
-        self.core.settings_open = open && !self.profile_open;
+        self.core.settings_open = open && !self.profile_open && !close_for_os_unlock;
         if changed {
             self.core.save_settings();
             ctx.request_repaint();
@@ -813,13 +829,13 @@ impl Application {
 
 impl Application {
     fn placement_dialog(&mut self, ctx: &egui::Context) {
+        // Use the existing GL context: creating an immediate native viewport can
+        // fail with GLXBadWindow and panic before egui invokes its callback.
+        if self.core.prompt.is_some() {
+            return;
+        }
         let Some(editor) = self.core.placement_editor.as_ref() else {
-            if let Some(id) = self.placement_seen.take() {
-                ctx.send_viewport_cmd_to(
-                    egui::ViewportId::from_hash_of(("placement", id)),
-                    egui::ViewportCommand::Close,
-                );
-            }
+            self.placement_seen = None;
             return;
         };
         let id = editor.id;
@@ -835,19 +851,14 @@ impl Application {
             .current_cache()
             .map(|c| c.collections.clone())
             .unwrap_or_default();
-        let prompt_open = self.core.prompt.is_some();
         let mut submit = false;
         let mut cancel = false;
-        ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(("placement",id)),egui::ViewportBuilder::default()
-            .with_title("Vault and collections").with_app_id(crate::assets::DESKTOP_APP_ID)
-            .with_icon(crate::assets::window_icon().unwrap_or_default()).with_inner_size([560.,500.]).with_min_inner_size([420.,360.]).with_active(fresh),|ui,_| {
-            if fresh {ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);}
-            cancel=ui.input(|i|i.viewport().close_requested()||i.key_pressed(Key::Escape));
-            egui::CentralPanel::default().show(ui,|ui|{
-                egui::ScrollArea::vertical().show(ui,|ui|{
+        let response = egui::Modal::new(Id::unique(("placement", id))).show(ctx, |ui| {
+                ui.set_width(520.);
+                egui::ScrollArea::vertical().id_salt("placement-content").max_height((ctx.content_rect().height()-120.).clamp(160., 600.)).show(ui,|ui|{
                 let Some(editor)=self.core.placement_editor.as_mut() else{return;};
                 ui.heading("Vault and collections");
-                ui.add_enabled_ui(!editor.busy && !prompt_open,|ui|{
+                ui.add_enabled_ui(!editor.busy,|ui|{
                     if let Some(org)=editor.original_organization {
                         ui.label(format!("Organization: {}",organizations.iter().find(|o|o.id==org).map_or("Unavailable organization",|o|o.name.as_str())));
                         ui.weak("Organization-owned items stay in their organization.");
@@ -859,7 +870,7 @@ impl Application {
                         ui.label("Moving this item transfers ownership to the organization. Other members may gain access. You cannot move it back to My vault using this app.");
                     }
                     ui.label("Collections");
-                    egui::ScrollArea::vertical().max_height(180.).show(ui,|ui|{
+                    egui::ScrollArea::vertical().id_salt("placement-collections").max_height(180.).show(ui,|ui|{
                         let mut found=false;
                         for collection in collections.iter().filter(|c|Some(c.organization_id)==editor.organization) {
                             found=true;
@@ -881,8 +892,8 @@ impl Application {
                 });
                 if editor.busy {ui.horizontal(|ui|{ui.spinner();ui.label("Synchronizing vault and collections…");});}
                 });
-            });
         });
+        cancel |= response.should_close();
         if cancel {
             self.core.placement_editor = None;
             self.core.cancel_prompt();

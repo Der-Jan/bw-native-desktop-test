@@ -32,6 +32,7 @@ pub fn unlocked_manager(uid: UserId) -> ClientManager {
     manager.users.insert(
         uid,
         Box::new(UserEntry {
+            os_unlock: None,
             session,
             email: "test@example.invalid".into(),
             display_name: "Test".into(),
@@ -253,4 +254,13 @@ pub fn age_sync_snapshot(manager: &ClientManager, uid: UserId) -> i64 {
     persisted.downloaded_at -= chrono::Duration::minutes(6);
     state.install(snapshot.rebuild(persisted).unwrap());
     revision
+}
+
+pub async fn encrypt_merge_fixture(
+    manager: &ClientManager,
+    uid: UserId,
+    view: bitwarden_vault::CipherView,
+) -> serde_json::Value {
+    let client = manager.users.get(&uid).unwrap().session.client().unwrap();
+    serde_json::to_value(client.vault().ciphers().encrypt(view).await.unwrap().cipher).unwrap()
 }

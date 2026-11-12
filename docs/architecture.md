@@ -97,3 +97,15 @@ changes; logout deliberately removes the local account and its unsent changes.
 The UI states these limits. Server creation/deletion and ownership changes remain
 disabled. A future write-sync must add server revision/conflict checks and server
 permission revalidation before releasing this download pause.
+
+## Collection dialog GLX workaround (2026-11-12)
+
+The Ubuntu 24.04 Webtop X11 session also reproduced `GLXBadWindow` when opening
+the native **Vault and collections** selector. eframe failed to initialize its
+immediate viewport, then egui panicked because its callback had not run. The
+selector now uses a request-specific modal in the existing main window and GL
+context, with bounded scrolling. It yields to master-password confirmation and
+retains the existing collection permissions, ownership acknowledgement and
+backend submission checks. No child viewport or native close command is used
+for this dialog. Other immediate native tool windows remain susceptible to the
+same renderer failure and need separate follow-up.

@@ -5,6 +5,7 @@ mod auxiliary;
 mod details;
 mod dialogs;
 mod labels;
+mod merge;
 mod sends;
 #[cfg(test)]
 mod tests;

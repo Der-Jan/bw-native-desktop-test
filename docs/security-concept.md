@@ -490,3 +490,40 @@ bindings, exclusion of reprompt/hidden/archived/deleted keys and post-approval c
 are documented in [SSH agent requirements](ssh-agent-requirements.md). Sidebar
 filters do not grant signing authority. Cached grants are memory-only and invalidated
 with the active session generation; Windows and protected-item reprompt are pending.
+
+## Optional OS credential-store unlock
+
+Saved server accounts can explicitly enable **OS credential-store unlock** under
+Settings → Security. Enrollment requires a fresh, single-use master-password
+confirmation scoped to this action and session. The master password is not saved.
+The SDK's user encryption key is stored through the existing authenticated
+SecretStore envelope and OS-protected, ASCII-encoded wrapping key. The account
+record contains only the secret reference; ordinary preferences contain no key.
+The protected payload binds the key to the local account UUID, server account
+UUID, exact API/Identity endpoints and encrypted account/master-unlock state.
+Token rotation does not change this binding.
+
+Access to that OS user's unlocked credential store is sufficient to unlock this
+vault; this is an explicit per-account opt-in, disabled by default. It does not
+claim fresh biometric verification. The application attempts OS-store unlock
+once for the initial account during startup, including launches through an
+externally configured autostart entry. Switching accounts and manual, idle or
+configured system locks do not automatically retry it. After those locks, the
+user must explicitly choose **Unlock with OS credential store**, or enter the
+master password. Existing master-password reprompts remain separate and retain
+their item/revision/action/session scope.
+
+Unlock uses the SDK's DecryptedKey initialization and the same exclusive unlock
+reservation, cleanup guard, organization-key initialization and session fences as
+master-password unlock. Missing, unavailable, corrupt or mismatched stored data
+leaves the vault locked and retains the master-password fallback. No plaintext
+fallback or token-only vault decryption is provided. Normal login/session tokens
+continue to use their existing protected storage independently.
+
+Disabling deletes the stored key before clearing its account reference. Account
+removal/logout cleanup deletes this key as well as the session credential key;
+failed cleanup remains subject to the existing durable logout marker and retry
+rules. Startup orphan pruning retains referenced unlock secrets. Cancellation
+before enrollment publication destroys the newly created secret; an interrupted
+cleanup can leave an unreferenced encrypted object for startup pruning. No real
+vault or OS-store entries are used by the automated unlock tests.

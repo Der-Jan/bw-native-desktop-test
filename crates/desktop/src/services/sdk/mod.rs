@@ -39,6 +39,7 @@ pub mod incoming;
 mod loader;
 mod local_edits;
 pub mod notifications;
+pub mod os_unlock;
 pub mod placement;
 pub mod policies;
 pub mod production;
@@ -264,6 +265,18 @@ impl ClientManager {
         ))
     }
 
+    pub fn os_unlock_ref(&self, uid: &UserId) -> Option<uuid::Uuid> {
+        self.users.get(uid).and_then(|e| e.os_unlock)
+    }
+    pub fn set_os_unlock_ref(&mut self, session: &SessionToken, reference: Option<uuid::Uuid>) {
+        // This is durable configuration metadata, not an unlock result. It may
+        // finish after lock, but must never update a replacement account runtime.
+        if let Some(entry) = self.users.get_mut(&session.user_id())
+            && session.belongs_to(&entry.session)
+        {
+            entry.os_unlock = reference;
+        }
+    }
     pub fn is_remote(&self, uid: &UserId) -> bool {
         self.users.get(uid).is_some_and(|e| e.profile.is_some())
     }

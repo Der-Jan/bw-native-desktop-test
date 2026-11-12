@@ -120,6 +120,8 @@ pub struct AccountRecord {
     pub master_unlock: MasterPasswordUnlockData,
     pub crypto_state: WrappedAccountCryptographicState,
     pub credentials: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os_unlock: Option<Uuid>,
 }
 pub struct LoginSuccess {
     pub transport: Transport,

@@ -18,6 +18,7 @@ impl Core {
     }
     pub fn set_filter(&mut self, filter: VaultFilter) {
         self.cancel_prompt();
+        self.duplicate_selection.clear();
         self.filter = filter;
         if let Some(uid) = self.active {
             self.settings.vault_filters.insert(uid, filter);
@@ -142,6 +143,17 @@ impl Core {
     }
     fn authorization(&self, request: &Request) -> Option<(Authorization, bool, bool)> {
         let action = request.action();
+        if let Request::ConfigureOsUnlock(enabled) = request {
+            return Some((
+                Authorization {
+                    cipher: None,
+                    revision: None,
+                    action: Action::OsUnlock,
+                },
+                *enabled,
+                false,
+            ));
+        }
         if matches!(request, Request::Export { .. }) {
             return Some((Authorization::export(), true, false));
         }
@@ -198,6 +210,15 @@ impl Core {
         ))
     }
     pub(super) fn request_action(&mut self, request: Request) {
+        if self.merge.is_some()
+            && !matches!(
+                request,
+                Request::MergeRead(_) | Request::MergeSave(_) | Request::MergeTrash(..)
+            )
+        {
+            self.notify("Finish or cancel the merge first", false);
+            return;
+        }
         let Some(scope) = self.scope() else {
             return;
         };
@@ -216,10 +237,12 @@ impl Core {
         }
         self.cancel_prompt();
         let Some((target, protected, denied)) = self.authorization(&request) else {
+            self.stop_merge("A selected entry is no longer available".into());
             self.notify("This item is no longer available.", true);
             return;
         };
         if denied {
+            self.stop_merge("Permission denied; remaining entries were kept".into());
             self.notify("You do not have permission for this action.", true);
             return;
         }
@@ -296,6 +319,27 @@ impl Core {
             return;
         };
         match request {
+            Request::ConfigureOsUnlock(enabled) => self.configure_os_unlock(scope, client, enabled),
+            Request::MergeRead(id) => self.merge_read(scope, client, id),
+            Request::MergeSave(view) => self.merge_save(scope, client, *view),
+            Request::MergeTrash(id, revision) => {
+                if self.current_cache().is_none_or(|c| {
+                    !c.all
+                        .iter()
+                        .any(|v| v.id == Some(id) && v.revision_date == revision)
+                }) {
+                    self.stop_merge("Secondary changed; merge cleanup stopped".into());
+                    return;
+                }
+                if self.remote() {
+                    self.execute_merge_trash(scope, client, id, revision);
+                } else {
+                    self.spawn_scoped(scope, client.soft_delete_cipher(id), move |core, result| {
+                        core.merge_trash_done(id, result.is_ok());
+                        core.load_vault();
+                    });
+                }
+            }
             Request::Read(id) | Request::Edit(id) | Request::ReviewLocal(id) => {
                 let reviewing = matches!(request, Request::ReviewLocal(_));
                 let editing = matches!(request, Request::Edit(_) | Request::ReviewLocal(_));

@@ -366,7 +366,7 @@ impl Core {
     pub fn check_folder_outcome(&mut self) {
         self.download();
     }
-    fn download(&mut self) {
+    pub(super) fn download(&mut self) {
         if let Some(uid) = self.active {
             self.sync_account(uid, false);
         }
@@ -378,7 +378,14 @@ impl Core {
             }
             if self.sync.get(&uid).is_some_and(|s| s.busy)
                 || (self.active == Some(uid)
-                    && (self.editor.is_some()
+                    && (self.merge.as_ref().is_some_and(|m| {
+                        matches!(
+                            m.phase,
+                            super::merge::Phase::Loading
+                                | super::merge::Phase::Review
+                                | super::merge::Phase::Saving
+                        )
+                    }) || self.editor.is_some()
                         || self.detail_save.is_some()
                         || (self.folder_editor.is_some() || self.placement_editor.is_some())))
             {
@@ -441,7 +448,14 @@ impl Core {
         }
 
         if self.active == Some(uid)
-            && (self.editor.is_some()
+            && (self.merge.as_ref().is_some_and(|m| {
+                matches!(
+                    m.phase,
+                    super::merge::Phase::Loading
+                        | super::merge::Phase::Review
+                        | super::merge::Phase::Saving
+                )
+            }) || self.editor.is_some()
                 || (self.folder_editor.is_some() || self.placement_editor.is_some()))
         {
             if !quiet {

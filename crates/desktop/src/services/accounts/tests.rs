@@ -7749,3 +7749,512 @@ async fn https_proxy_tunnels_mtls_websockets_without_receiving_vault_identity() 
             .all(|r| !r.to_ascii_lowercase().contains("authorization: bearer"))
     );
 }
+
+#[tokio::test]
+async fn duplicate_merge_cleanup_does_not_trash_stale_secondary_or_unconfirmed_primary() {
+    use crate::services::sdk::{
+        ClientExt,
+        archive::{self, Change},
+    };
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    let revision = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap()
+        .revision_date;
+    let missing_primary = bitwarden_vault::CipherId::new_v4();
+    assert!(
+        archive::change_state_expected(
+            manager.client_for(&uid).unwrap(),
+            id,
+            Change::Trash(true),
+            f.root.clone(),
+            f.store.clone(),
+            revision - chrono::Duration::seconds(1),
+            (missing_primary, revision)
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(trash_requests(&f), 0);
+    assert!(
+        archive::change_state_expected(
+            manager.client_for(&uid).unwrap(),
+            id,
+            Change::Trash(true),
+            f.root.clone(),
+            f.store.clone(),
+            revision,
+            (missing_primary, revision)
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(trash_requests(&f), 0);
+    assert!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .full_cipher(id)
+            .await
+            .unwrap()
+            .deleted_date
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn duplicate_merge_passkeys_and_totp_survive_encrypted_primary_save() {
+    use crate::services::{duplicate_merge, sdk::ClientExt};
+    let (_f, manager, uid, id) = clean_remote_fixture().await;
+    let primary = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    let mut secondary = primary.clone();
+    secondary.id = Some(bitwarden_vault::CipherId::new_v4());
+    secondary.login.as_mut().unwrap().totp = Some("synthetic-totp-secret".into());
+    secondary.login.as_mut().unwrap().fido2_credentials=Some(vec![serde_json::from_value(serde_json::json!({
+        "credentialId":"synthetic-credential","keyType":"public-key","keyAlgorithm":"ECDSA","keyCurve":"P-256",
+        "keyValue":"synthetic-private-key","rpId":"example.invalid","counter":"0","discoverable":"true","creationDate":"2026-01-01T00:00:00Z"
+    })).unwrap()]);
+    let merged = duplicate_merge::plan(&primary, &[secondary.clone()]).unwrap();
+    manager
+        .client_for(&uid)
+        .unwrap()
+        .save_cipher(merged)
+        .await
+        .unwrap();
+    let saved = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    assert!(saved.login.as_ref().unwrap().totp == secondary.login.as_ref().unwrap().totp);
+    assert!(
+        saved.login.as_ref().unwrap().fido2_credentials
+            == secondary.login.as_ref().unwrap().fido2_credentials
+    );
+    assert!(saved.login.as_ref().unwrap().username == primary.login.as_ref().unwrap().username);
+    assert!(saved.login.as_ref().unwrap().password == primary.login.as_ref().unwrap().password);
+}
+
+async fn exercise_duplicate_merge_three_records(confirm_primary: bool) {
+    use crate::{
+        core::merge::Phase,
+        services::{
+            sdk::{ClientExt, test_support::encrypt_merge_fixture, vault_sync},
+            vault_navigation::VaultSection,
+        },
+    };
+    let (f, manager, uid, id) = clean_remote_fixture().await;
+    f.write_mode
+        .store(if confirm_primary { 1 } else { 0 }, Ordering::SeqCst);
+    let mut primary = manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    primary.login.as_mut().unwrap().uris = Some(vec![
+        serde_json::from_value(serde_json::json!({"uri":"https://example.invalid","match":0}))
+            .unwrap(),
+    ]);
+    primary.login.as_mut().unwrap().generate_checksums();
+    let mut second = primary.clone();
+    second.id = Some(bitwarden_vault::CipherId::new_v4());
+    second.login.as_mut().unwrap().username = Some("email@example.invalid".into());
+    let mut third = primary.clone();
+    third.id = Some(bitwarden_vault::CipherId::new_v4());
+    third.login.as_mut().unwrap().username = Some("alternate-user".into());
+    third.login.as_mut().unwrap().password = Some("alternate-password".into());
+    let ids = vec![id, second.id.unwrap(), third.id.unwrap()];
+    let encrypted = vec![
+        encrypt_merge_fixture(&manager, uid, primary.clone()).await,
+        encrypt_merge_fixture(&manager, uid, second).await,
+        encrypt_merge_fixture(&manager, uid, third).await,
+    ];
+    f.sync_response.lock().unwrap().1["ciphers"] = serde_json::Value::Array(encrypted);
+    vault_sync::download(
+        manager.client_for(&uid).unwrap(),
+        f.root.clone(),
+        f.store.clone(),
+    )
+    .await
+    .unwrap();
+    let mut core = core_for_automatic_save(manager).await;
+    core.set_filter(core.filter.with_section(VaultSection::Duplicates));
+    for _ in 0..600 {
+        core.poll();
+        if core
+            .current_cache()
+            .is_some_and(|c| c.duplicate_report.is_some())
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    core.begin_merge(ids.clone());
+    for _ in 0..600 {
+        core.poll();
+        if core
+            .merge
+            .as_ref()
+            .is_some_and(|m| m.phase == Phase::Review)
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(
+        core.merge
+            .as_ref()
+            .is_some_and(|m| m.phase == Phase::Review)
+    );
+    core.confirm_merge();
+    for _ in 0..6000 {
+        core.poll();
+        if core.merge.is_none() {
+            break;
+        }
+        if let Some(m) = core.merge.as_ref().filter(|m| m.phase == Phase::Stopped) {
+            if !confirm_primary {
+                assert_eq!(trash_requests(&f), 0);
+                for secondary in &ids[1..] {
+                    assert!(
+                        core.manager
+                            .client_for(&uid)
+                            .unwrap()
+                            .full_cipher(*secondary)
+                            .await
+                            .unwrap()
+                            .deleted_date
+                            .is_none()
+                    );
+                }
+                assert!(core.manager.has_local_edit(&uid, id));
+                return;
+            }
+            panic!("Merge stopped: {}", m.error.as_deref().unwrap_or("unknown"));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(
+        confirm_primary,
+        "Rejected primary upload must stop the merge"
+    );
+    assert!(core.merge.is_none(), "merge must finish");
+    let saved = core
+        .manager
+        .client_for(&uid)
+        .unwrap()
+        .full_cipher(id)
+        .await
+        .unwrap();
+    assert!(saved.deleted_date.is_none());
+    assert_eq!(saved.login, primary.login);
+    for value in [
+        "email@example.invalid",
+        "alternate-user",
+        "alternate-password",
+    ] {
+        assert!(
+            saved
+                .fields
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|f| f.value.as_deref() == Some(value))
+        );
+    }
+    for id in &ids[1..] {
+        assert!(
+            core.manager
+                .client_for(&uid)
+                .unwrap()
+                .full_cipher(*id)
+                .await
+                .unwrap()
+                .deleted_date
+                .is_some()
+        );
+    }
+    let requests = f.requests.lock().unwrap();
+    let saved = requests
+        .iter()
+        .position(|(r, _)| r.starts_with(&format!("PUT /vault/api/ciphers/{id} HTTP")))
+        .unwrap();
+    let trashed = requests
+        .iter()
+        .position(|(r, _)| r.contains("/delete HTTP"))
+        .unwrap();
+    assert!(saved < trashed);
+    assert_eq!(trash_requests_after_unlock(&requests), 2);
+}
+#[tokio::test]
+async fn duplicate_merge_three_records_confirms_primary_before_trashing_secondaries() {
+    exercise_duplicate_merge_three_records(true).await;
+}
+#[tokio::test]
+async fn duplicate_merge_rejected_primary_upload_keeps_both_secondary_records() {
+    exercise_duplicate_merge_three_records(false).await;
+}
+fn trash_requests_after_unlock(requests: &[(String, String)]) -> usize {
+    requests
+        .iter()
+        .filter(|(r, _)| r.contains("/delete HTTP"))
+        .count()
+}
+
+async fn authorize_os_unlock(
+    manager: &crate::services::sdk::ClientManager,
+    uid: crate::domain::UserId,
+) {
+    use crate::services::sdk::{Action, Authorization};
+    let (client, envelope) = manager.validation_data_for(&uid).unwrap();
+    client
+        .authorize_password(
+            envelope,
+            "synthetic-password".into(),
+            Authorization {
+                cipher: None,
+                revision: None,
+                action: Action::OsUnlock,
+            },
+        )
+        .await
+        .unwrap();
+}
+#[tokio::test]
+async fn os_unlock_requires_fresh_authorization_preserves_keys_and_respects_manual_lock() {
+    use crate::services::sdk::{ClientExt, production};
+    let (f, mut manager, uid, id) = clean_remote_fixture().await;
+    assert!(manager.os_unlock_ref(&uid).is_none());
+    assert!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .configure_os_unlock(f.store.clone(), true)
+            .await
+            .is_err()
+    );
+    authorize_os_unlock(&manager, uid).await;
+    let reference = manager
+        .client_for(&uid)
+        .unwrap()
+        .configure_os_unlock(f.store.clone(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    let session = manager.client_for(&uid).unwrap().session();
+    manager.set_os_unlock_ref(&session, Some(reference));
+    production::prune_orphans(&f.root, &f.store).unwrap();
+    let payload = f.store.secrets.get(reference).unwrap();
+    assert!(!String::from_utf8_lossy(&payload).contains("synthetic-password"));
+    let data: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+    let raw =
+        std::fs::read_to_string(f.root.join("secrets").join(format!("{reference}.json"))).unwrap();
+    assert!(!raw.contains(data["key"].as_str().unwrap()));
+    manager.lock(&uid).unwrap().finish().await;
+    manager
+        .unlock_data_for(&uid)
+        .unwrap()
+        .unlock_from_os_store(f.store.clone(), reference)
+        .await
+        .unwrap();
+    assert!(manager.is_unlocked(&uid));
+    assert!(
+        manager
+            .client_for(&uid)
+            .unwrap()
+            .full_cipher(id)
+            .await
+            .unwrap()
+            .login
+            .is_some()
+    );
+    // Master-password confirmation remains functional after key-based unlock.
+    let (client, envelope) = manager.validation_data_for(&uid).unwrap();
+    assert!(
+        client
+            .authorize_password(
+                envelope,
+                "incorrect".into(),
+                crate::services::sdk::Authorization {
+                    cipher: None,
+                    revision: None,
+                    action: crate::services::sdk::Action::OsUnlock
+                }
+            )
+            .await
+            .is_err()
+    );
+    authorize_os_unlock(&manager, uid).await;
+    let mut core = core_for_automatic_save(manager).await;
+    core.lock_user(uid);
+    for _ in 0..200 {
+        core.poll();
+        if !core.locking.contains(&uid) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    for _ in 0..10 {
+        core.poll();
+        tokio::task::yield_now().await;
+    }
+    assert!(!core.manager.is_unlocked(&uid));
+    assert!(
+        !core.login.busy,
+        "manual lock must not automatically consult the OS store"
+    );
+    core.unlock_os_store();
+    for _ in 0..600 {
+        core.poll();
+        if !core.login.busy {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(
+        core.manager.is_unlocked(&uid),
+        "explicit OS-store unlock should succeed"
+    );
+    let result = core
+        .manager
+        .client_for(&uid)
+        .unwrap()
+        .configure_os_unlock(f.store.clone(), false)
+        .await
+        .unwrap();
+    assert!(result.is_none());
+    assert!(f.store.secrets.get(reference).is_err());
+    core.manager.lock(&uid).unwrap().finish().await;
+    assert!(
+        core.manager
+            .unlock_data_for(&uid)
+            .unwrap()
+            .unlock_from_os_store(f.store.clone(), reference)
+            .await
+            .is_err()
+    );
+    assert!(!core.manager.is_unlocked(&uid));
+}
+
+#[tokio::test]
+async fn os_unlock_survives_restart_and_is_removed_with_the_account() {
+    use crate::services::sdk::production;
+    let (f, mut manager, uid, _) = clean_remote_fixture().await;
+    authorize_os_unlock(&manager, uid).await;
+    let reference = manager
+        .client_for(&uid)
+        .unwrap()
+        .configure_os_unlock(f.store.clone(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    manager.log_out(&uid).unwrap().finish().await.unwrap();
+    drop(manager);
+    let restored = production::test_load(&f.root, &f.store).await;
+    assert_eq!(restored.os_unlock_ref(&uid), Some(reference));
+    let mut core = crate::core::Core::test(restored);
+    core.settings.ssh_agent = false;
+    core.settings.browser_integration = false;
+    core.settings.show_favicons = false;
+    core.restore_startup_account(uid);
+    for _ in 0..2000 {
+        core.poll();
+        if !core.login.busy {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(
+        core.manager.is_unlocked(&uid),
+        "the initial account must unlock at startup when enrolled"
+    );
+    core.lock_user(uid);
+    for _ in 0..2000 {
+        core.poll();
+        if !core.locking.contains(&uid) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(!core.locking.contains(&uid));
+    core.restore_startup_account(uid);
+    core.poll();
+    assert!(!core.manager.is_unlocked(&uid));
+    assert!(!core.login.busy, "startup restoration must be one-shot");
+    core.manager.log_out(&uid).unwrap().finish().await.unwrap();
+    production::remove_record_with_secrets(&f.root, uid, &f.store.secrets).unwrap();
+    assert!(f.store.secrets.get(reference).is_err());
+    assert!(!f.root.join("accounts").join(format!("{uid}.json")).exists());
+}
+
+#[tokio::test]
+async fn os_unlock_rejects_account_binding_changes_without_unlocking_the_sdk() {
+    use crate::services::accounts::{login::AccountRecord, storage::atomic_write};
+    let (f, mut manager, uid, _) = clean_remote_fixture().await;
+    authorize_os_unlock(&manager, uid).await;
+    let reference = manager
+        .client_for(&uid)
+        .unwrap()
+        .configure_os_unlock(f.store.clone(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    manager.lock(&uid).unwrap().finish().await;
+    let path = f.root.join("accounts").join(format!("{uid}.json"));
+    let mut record: AccountRecord = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let original_api = record.api.clone();
+    record.api = "https://different.example.invalid/api/".into();
+    atomic_write(
+        &f.root.join("accounts"),
+        &format!("{uid}.json"),
+        &serde_json::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        manager
+            .unlock_data_for(&uid)
+            .unwrap()
+            .unlock_from_os_store(f.store.clone(), reference)
+            .await
+            .is_err()
+    );
+    assert!(!manager.is_unlocked(&uid));
+    assert!(!manager.is_unlocking(&uid));
+    record.api = original_api;
+    atomic_write(
+        &f.root.join("accounts"),
+        &format!("{uid}.json"),
+        &serde_json::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+    f.store.secrets.delete(reference).unwrap();
+    assert!(
+        manager
+            .unlock_data_for(&uid)
+            .unwrap()
+            .unlock_from_os_store(f.store.clone(), reference)
+            .await
+            .is_err()
+    );
+    assert!(!manager.is_unlocking(&uid));
+    manager
+        .unlock_data_for(&uid)
+        .unwrap()
+        .unlock("synthetic-password".into())
+        .await
+        .unwrap();
+    assert!(
+        manager.is_unlocked(&uid),
+        "missing OS-store data must preserve master-password fallback"
+    );
+}

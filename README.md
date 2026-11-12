@@ -61,7 +61,7 @@ import a PKCS#12 identity under Server / mTLS settings. Import a private server 
 separately if needed. Additional API/Identity origins require explicit permission.
 Enter account credentials only in the app. Linux requires a working Secret Service
 (e.g. KWallet/gnome-keyring); there is no plaintext fallback. After login/unlock the app downloads a complete encrypted snapshot and opens the
-read-only vault. If initial sync fails, the vault displays the error and File → Sync now retries;
+vault. If initial sync fails, the vault displays the error and File → Sync now retries;
 a previous committed cache stays usable offline. File → Sync now refreshes the full snapshot. The server-settings connection test checks the selected TLS/mTLS configuration without downloading vault data.
 CAPTCHA, SSO, WebAuthn/security-key 2FA and new-device verification are not implemented.
 For synthetic vault interaction, use the demo commands above. The generator refuses
@@ -80,6 +80,8 @@ existing nonempty directories.
 ## Supported
 
 - Multi-user vault unlock against a local SDK-backed SQLite store
+- Optional per-account OS credential-store unlock at startup, with explicit unlock after later locks; master passwords are not stored ([security details](docs/security-concept.md#optional-os-credential-store-unlock))
+- Merge two or more selected duplicate logins into a chosen primary, preserving differing fields and trashing secondaries only after the primary save is confirmed ([merge rules](docs/vault-sorting-requirements.md#merge-selected-duplicate-logins))
 - Cipher list / detail / edit / delete
 - Send list / detail / create (in-memory)
 - Password generator

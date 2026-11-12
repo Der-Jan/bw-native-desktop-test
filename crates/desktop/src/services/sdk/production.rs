@@ -129,6 +129,7 @@ pub async fn prepare(
         master_unlock: success.master_unlock,
         crypto_state: success.crypto_state,
         credentials: credential_ref,
+        os_unlock: None,
     };
     let mut candidate = Candidate {
         record,
@@ -252,6 +253,7 @@ async fn build_entry(
         .store(false, std::sync::atomic::Ordering::SeqCst);
     Ok(UserEntry {
         session,
+        os_unlock: record.os_unlock,
         server_user_id: record.server_user_id,
         email: record.email,
         display_name: record.display_name,
@@ -341,6 +343,9 @@ pub(crate) fn remove_record_with_secrets(
     if record.id != id {
         return Err("Account removal ID mismatch".into());
     }
+    if let Some(unlock) = record.os_unlock {
+        secrets.delete(unlock)?;
+    }
     secrets.delete(record.credentials)?;
     std::fs::remove_file(&path).map_err(|_| "Could not remove account metadata")?;
     sync_dir(&root.join("accounts")).map_err(|_| "Could not commit account removal".into())
@@ -406,6 +411,9 @@ pub fn prune_orphans(root: &Path, store: &ProfileStore) -> Result<(), String> {
                     .map_err(|_| "Invalid account record")?;
             profiles.insert(record.profile);
             secrets.insert(record.credentials);
+            if let Some(unlock) = record.os_unlock {
+                secrets.insert(unlock);
+            }
         }
     }
     for profile in store.list() {

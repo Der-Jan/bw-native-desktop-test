@@ -9,7 +9,13 @@ impl Core {
         cipher: CipherId,
         archived: bool,
     ) {
-        self.execute_item_change(scope, client, cipher, archive::Change::Archive(archived));
+        self.execute_item_change(
+            scope,
+            client,
+            cipher,
+            archive::Change::Archive(archived),
+            None,
+        );
     }
     pub(super) fn execute_trash(
         &mut self,
@@ -18,7 +24,22 @@ impl Core {
         cipher: CipherId,
         trashed: bool,
     ) {
-        self.execute_item_change(scope, client, cipher, archive::Change::Trash(trashed));
+        self.execute_item_change(scope, client, cipher, archive::Change::Trash(trashed), None);
+    }
+    pub(super) fn execute_merge_trash(
+        &mut self,
+        scope: Scope,
+        client: SessionClient,
+        cipher: CipherId,
+        revision: chrono::DateTime<chrono::Utc>,
+    ) {
+        self.execute_item_change(
+            scope,
+            client,
+            cipher,
+            archive::Change::Trash(true),
+            Some(revision),
+        );
     }
     fn execute_item_change(
         &mut self,
@@ -26,6 +47,7 @@ impl Core {
         client: SessionClient,
         cipher: CipherId,
         change: archive::Change,
+        expected: Option<chrono::DateTime<chrono::Utc>>,
     ) {
         let Some(store) = self.manager.profiles() else {
             self.notify("This action requires a server account", true);
@@ -42,12 +64,19 @@ impl Core {
                 busy: true,
             },
         );
-        self.events.spawn(archive::change_state(client,cipher,change,root,store),move |core,result| {
+        let merge_request = expected.and_then(|_| self.merge.as_ref().map(|m| m.request));
+        let primary = expected.and_then(|_| {
+            self.merge
+                .as_ref()
+                .and_then(|m| m.primary_revision.map(|r| (m.ids[0], r)))
+        });
+        self.events.spawn(async move { if let Some(expected)=expected { archive::change_state_expected(client,cipher,change,root,store,expected,primary.ok_or("Merge primary is not confirmed")?).await } else {archive::change_state(client,cipher,change,root,store).await} },move |core,result| {
             let Some(state)=core.sync.get_mut(&uid) else {return;};
             if state.request!=id {return;}
             state.busy=false;
             match result {
                 Ok(outcome) if core.manager.accepts_session(&outcome.report.session)=> {
+                    if merge_request.is_some() && core.merge.as_ref().map(|m|m.request)==merge_request {core.merge_trash_done(cipher,outcome.applied && outcome.report.problems.is_empty());}
                     core.caches.remove(&uid);
                     let error=outcome.report.problems.first().cloned();
                     core.sync.get_mut(&uid).unwrap().error=error.clone();
@@ -60,6 +89,7 @@ impl Core {
                 }
                 Ok(_)=>{},
                 Err(error)=> {
+                    if merge_request.is_some() && core.merge.as_ref().map(|m|m.request)==merge_request {core.merge_trash_done(cipher,false);}
                     core.sync.get_mut(&uid).unwrap().error=Some(error.clone());
                     if core.active==Some(uid) {core.notify(error,true);}
                 }

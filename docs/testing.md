@@ -1,8 +1,17 @@
 # Validation
 
-Run `cargo test --workspace` and `cargo clippy --workspace --all-targets`.
-The workspace is intentional: SDK feature unification differs for a single
-package invocation. `cargo fmt --all --check` checks formatting.
+For interactive work in this repository, the user's default is to build the
+Ubuntu 24.04 binaries/package directly with `python3 tools/build-ubuntu-deb.py
+--engine docker` and use those binaries for needed runtime validation. Reuse the
+Ubuntu build cache; do not build separate test binaries or additional Cargo
+check/Clippy profiles by default. Use a fresh synthetic profile for runtime tests.
+`cargo fmt --all --check` and `git diff --check` are lightweight checks.
+
+When the user requests the automated regression suite, run `cargo test
+--workspace` and `cargo clippy --workspace --all-targets`. The workspace is
+intentional: SDK feature unification differs for a single package invocation.
+The sections below document those available tests, rather than a requirement to
+run them on every local change.
 
 Backend tests cover mTLS login/sync against disposable TLS servers, invalid and
 expired certificates, origin permissions, encrypted SQLite snapshot commit and
@@ -116,3 +125,22 @@ panes and standard dialogs. egui native windows supply their own close controls;
 labels wrap within the available width. Review long translated titles at narrow
 widths in both themes. The former Iced title/close-button spacing patch is
 preserved on the recovery branch rather than restoring removed Iced code.
+
+## Duplicate merge and OS credential-store unlock
+
+`cargo test --workspace duplicate_merge` covers multi-record login merge planning,
+primary credential/URI preservation, hidden password fields, custom-name
+collisions, retry deduplication, strongest reprompt, single-source TOTP/passkey
+transfer and multi-source rejection. Real encrypted SDK snapshot tests round-trip
+transferred keys, enforce secondary reprompt/revision guards, confirm the primary
+upload before trashing two secondaries, and keep both active after a rejected
+primary upload.
+
+`cargo test --workspace os_unlock` uses synthetic TLS accounts, the real SDK and
+an in-memory KeyStore. It covers explicit enrollment authorization, encrypted
+persistence without the master password, orphan pruning, restart, explicit unlock
+after manual lock, post-unlock master-password confirmation, disable/removal,
+account-binding changes, unavailable data/password fallback, and cleanup of a
+cancelled unpublished registration. It does not attest native OS biometric
+verification or exercise a real user's credential store. The existing ignored
+real OS-store roundtrip test remains the separate backend acceptance check.
